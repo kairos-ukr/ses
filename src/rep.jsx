@@ -42,6 +42,16 @@ const getMountTypeName = (type) => {
   return map[type] || type || 'Не вказано';
 };
 
+// Змінено тут: прибрано 'solar'
+const getStationTypeName = (type) => {
+  const map = {
+    'hybrid': 'Гібридна',
+    'grid_tied': 'Мережева',
+    'off_grid': 'Автономна',
+  };
+  return map[type] || type || 'Не вказано';
+};
+
 
 // --- Main Component ---
 
