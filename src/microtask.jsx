@@ -161,7 +161,7 @@ export default function MicrotasksPage() {
   };
 
   const handleDeleteTask = async (taskId) => {
-    if (!confirm('Ви впевнені, що хочете видалити цю задачу?')) return;
+    if (!window.confirm('Ви впевнені, що хочете видалити цю задачу?')) return;
     
     try {
       const { error } = await supabase
