@@ -8,7 +8,7 @@ import ProjectPage from "./inst2";
 import ClientsPage from "./cli1";
 import EmployeesPage from "./empNORM";
 import MicrotasksPage from "./microtask";
-import Das from "./rep"
+import Reports from "./rep"
 import Equimpment from "./eq2"
 import Payments from "./pay"
 export default function App() {
@@ -23,7 +23,7 @@ export default function App() {
         <Route path="/clients" element={<ClientsPage />} />
         <Route path="/employ" element={<EmployeesPage />} />
         <Route path="/tasks" element={<MicrotasksPage />} />
-        <Route path="/dash" element={<Das />} />
+        <Route path="/reports" element={<Reports />} />
         <Route path="/equipment" element={<Equimpment />} />
         <Route path="/payments" element={<Payments />} />
       </Routes>
