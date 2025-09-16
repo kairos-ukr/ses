@@ -11,6 +11,7 @@ import MicrotasksPage from "./microtask";
 import Reports from "./rep"
 import Equimpment from "./eq2"
 import Payments from "./pay"
+import Calculate from "./calc"
 export default function App() {
   return (
     <Router>
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/reports" element={<Reports />} />
         <Route path="/equipment" element={<Equimpment />} />
         <Route path="/payments" element={<Payments />} />
+        <Route path="/calculate" element={<Calculate />} />
       </Routes>
     </Router>
   );
