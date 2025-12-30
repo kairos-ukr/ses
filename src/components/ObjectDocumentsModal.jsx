@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FaCloudUploadAlt, FaFilePdf, FaFileImage, FaFileAlt, FaEye, FaTimes, FaDownload, FaCheck, FaExclamationTriangle } from "react-icons/fa";
 
 // --- КОНФІГУРАЦІЯ ---
-const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev/'; // Твоя адреса
+const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev'; // Твоя адреса
 
 const DOC_TYPES = ["Комерційна пропозиція", "Технічний проєкт", "Фотозвіт", "Чек", "Накладна", "Акт", "Інше"];
 
