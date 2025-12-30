@@ -10,7 +10,7 @@ import { createClient } from '@supabase/supabase-js';
 
 // --- КОНФІГУРАЦІЯ ---
 // Заміни на URL твого Python бекенду (напр. 'https://your-bot-host.net' або локальний IP)
-const SERVER_URL = 'http://prem-eu4.bot-hosting.net:20112'; 
+const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev/'; 
 
 const supabaseUrl = 'https://logxutaepqzmvgsvscle.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE';
