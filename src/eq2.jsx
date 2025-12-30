@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-// --- ЗМІНА: Імпортуємо useNavigate для навігації ---
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Fa from "react-icons/fa";
@@ -20,7 +19,7 @@ const getCategoryProps = (category) => ({
 
 // --- UI Components --- //
 
-const Modal = ({ children, closeModal, size = "md" }) => {
+const Modal = React.memo(({ children, closeModal, size = "md" }) => {
     const sizeClasses = { sm: "max-w-md", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl" };
     return (
         <AnimatePresence>
@@ -38,9 +37,8 @@ const Modal = ({ children, closeModal, size = "md" }) => {
             </motion.div>
         </AnimatePresence>
     );
-};
+});
 
-// --- ЗМІНА: Компонент обгорнуто в React.memo для оптимізації ---
 const InputField = React.memo(React.forwardRef(({ icon, label, error, showPassword, onTogglePassword, ...props }, ref) => (
     <div>
         {label && <label className="block text-sm font-semibold text-gray-700 mb-2">{label}</label>}
@@ -61,7 +59,6 @@ const InputField = React.memo(React.forwardRef(({ icon, label, error, showPasswo
     </div>
 )));
 
-// --- ЗМІНА: Компонент обгорнуто в React.memo для оптимізації ---
 const SelectField = React.memo(({ icon, label, children, error, ...props }) => (
     <div>
         <label className="block text-sm font-semibold text-gray-700 mb-2">{label}</label>
@@ -79,7 +76,7 @@ const SelectField = React.memo(({ icon, label, children, error, ...props }) => (
 ));
 
 
-const SearchableSelect = ({ options, value, onChange, icon, label, placeholder = "Оберіть..." }) => {
+const SearchableSelect = React.memo(({ options, value, onChange, icon, label, placeholder = "Оберіть..." }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const selectRef = useRef(null);
@@ -92,11 +89,11 @@ const SearchableSelect = ({ options, value, onChange, icon, label, placeholder =
             opt.label.toLowerCase().includes(searchTerm.toLowerCase())
         ), [options, searchTerm]);
 
-    const handleSelect = (optionValue) => {
+    const handleSelect = useCallback((optionValue) => {
         onChange({ target: { name: 'equipment_id', value: optionValue } });
         setIsOpen(false);
         setSearchTerm('');
-    };
+    }, [onChange]);
     
     useEffect(() => {
         if (isOpen && inputRef.current) {
@@ -162,25 +159,46 @@ const SearchableSelect = ({ options, value, onChange, icon, label, placeholder =
             </div>
         </div>
     );
-};
+});
 
 
-const Notification = ({ message, type, onDismiss }) => {
-    if (!message) return null;
+const NotificationSystem = ({ notification, onDismiss }) => {
+    useEffect(() => {
+        if (notification.message) {
+            const timer = setTimeout(() => {
+                onDismiss();
+            }, notification.duration || 4000);
+            return () => clearTimeout(timer);
+        }
+    }, [notification, onDismiss]);
+
     return (
-        <motion.div
-            initial={{ opacity: 0, y: -50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -50 }}
-            className={`fixed top-5 right-5 z-[200] p-4 rounded-xl shadow-lg text-white max-w-sm ${type === 'error' ? 'bg-red-500' : 'bg-green-500'}`}
-        >
-            <div className="flex items-center justify-between">
-                <span>{message}</span>
-                <button onClick={onDismiss} className="ml-4 font-bold">×</button>
-            </div>
-        </motion.div>
+        <div className="fixed top-6 right-6 z-[200]">
+            <AnimatePresence>
+                {notification.message && (
+                    <motion.div
+                        layout
+                        initial={{ opacity: 0, y: -20, scale: 0.9 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, x: 50, scale: 0.9 }}
+                        transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                        className={`max-w-sm w-full ${notification.type === 'error' ? 'bg-red-500' : 'bg-green-500'} text-white rounded-xl p-4 shadow-2xl flex items-center gap-4`}
+                    >
+                        <div className="flex-shrink-0">
+                            {notification.type === 'error' ? <Fa.FaTimesCircle /> : <Fa.FaCheckCircle />}
+                        </div>
+                        <div className="flex-1">
+                            <p className="font-semibold text-sm">{notification.message}</p>
+                        </div>
+                        <button onClick={onDismiss} className="text-white/80 hover:text-white transition-opacity"><Fa.FaTimes /></button>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
     );
 };
 
-// --- ЗМІНА: Новий компонент для підтвердження дій ---
+
 const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, children }) => {
     if (!isOpen) return null;
     return (
@@ -204,14 +222,60 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, children }) => {
     );
 };
 
+const Sidebar = React.memo(({ isOpen, onClose, onNavigate }) => {
+    const navLinks = [
+        { path: "/home", icon: Fa.FaHome, label: "Головна" },
+        { path: "/installations", icon: Fa.FaIndustry, label: "Об'єкти" },
+        { path: "/clients", icon: Fa.FaUserFriends, label: "Клієнти" },
+        { path: "/employees", icon: Fa.FaUserTie, label: "Працівники" },
+        { path: "/tasks", icon: Fa.FaTasks, label: "Мікрозадачі" },
+        { path: "/equipment", icon: Fa.FaBolt, label: "Обладнання" },
+        { path: "/payments", icon: Fa.FaCreditCard, label: "Платежі" },
+        { id: 'documents', label: 'Документи', icon: Fa.FaFolderOpen, path: '/documents' },
+    ];
+
+    return (
+        <AnimatePresence>
+            {isOpen && (
+                <>
+                    <motion.div
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        onClick={onClose} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[110]"
+                    />
+                    <motion.div
+                        initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+                        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                        className="fixed top-0 right-0 h-full w-72 bg-white/95 backdrop-blur-xl shadow-2xl z-[120] flex flex-col"
+                    >
+                        <div className="p-5 border-b border-gray-200/80 flex items-center justify-between">
+                            <h2 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">Навігація</h2>
+                            <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><Fa.FaTimes /></button>
+                        </div>
+                        <nav className="flex-1 p-4 space-y-2">
+                            {navLinks.map(link => (
+                                <button key={link.path} onClick={() => onNavigate(link.path)} className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-indigo-50 text-gray-700 font-semibold transition-colors">
+                                    <link.icon className="text-indigo-500 text-lg" />
+                                    <span>{link.label}</span>
+                                </button>
+                            ))}
+                        </nav>
+                    </motion.div>
+                </>
+            )}
+        </AnimatePresence>
+    );
+});
+
+
 // --- Main Page Component --- //
 export default function EquipmentPage() {
-    const navigate = useNavigate(); // --- ЗМІНА: Ініціалізація useNavigate ---
+    const navigate = useNavigate();
+    const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [activeTab, setActiveTab] = useState('installations');
     const [modal, setModal] = useState({ type: null, data: null });
     const [loading, setLoading] = useState(true);
     const [notification, setNotification] = useState({ message: null, type: 'success' });
-    const [confirmDialog, setConfirmDialog] = useState({ isOpen: false }); // --- ЗМІНА: Стан для модального вікна підтвердження
+    const [confirmDialog, setConfirmDialog] = useState({ isOpen: false });
     
     // Data State
     const [equipment, setEquipment] = useState([]);
@@ -224,10 +288,9 @@ export default function EquipmentPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const ITEMS_PER_PAGE = 9;
     
-    const showNotification = (message, type = 'success', duration = 4000) => {
-        setNotification({ message, type });
-        setTimeout(() => setNotification({ message: null, type: 'success' }), duration);
-    };
+    const showNotification = useCallback((message, type = 'success', duration = 4000) => {
+        setNotification({ message, type, duration });
+    }, []);
 
     const fetchData = useCallback(async () => {
         setLoading(true);
@@ -253,7 +316,7 @@ export default function EquipmentPage() {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [showNotification]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -287,7 +350,7 @@ export default function EquipmentPage() {
 
     const totalPages = Math.ceil(filteredInstallations.length / ITEMS_PER_PAGE);
 
-    const handleCrudSubmit = async (promise, successMsg) => {
+    const handleCrudSubmit = useCallback(async (promise, successMsg) => {
         setLoading(true);
         const { error } = await promise;
         if (error) {
@@ -298,18 +361,17 @@ export default function EquipmentPage() {
             await fetchData();
         }
         setLoading(false);
-    };
+    }, [fetchData, showNotification]);
 
-    const handleTypeSubmit = (typeForm) => {
+    const handleTypeSubmit = useCallback((typeForm) => {
         const payload = { ...typeForm, power_kw: typeForm.power_kw ? parseFloat(typeForm.power_kw) : null };
         const promise = modal.data?.id
             ? supabase.from('equipment').update(payload).eq('id', modal.data.id)
             : supabase.from('equipment').insert([payload]);
         handleCrudSubmit(promise, modal.data?.id ? 'Тип оновлено!' : 'Тип додано!');
-    };
+    }, [handleCrudSubmit, modal.data]);
     
-    // --- ЗМІНА: Функція тепер відкриває модальне вікно підтвердження ---
-    const deleteType = (id) => {
+    const deleteType = useCallback((id) => {
         setConfirmDialog({
             isOpen: true,
             title: "Підтвердити видалення",
@@ -319,20 +381,26 @@ export default function EquipmentPage() {
                 handleCrudSubmit(supabase.from('equipment').delete().eq('id', id), 'Тип видалено.');
             }
         });
-    };
+    }, [handleCrudSubmit]);
     
-    const handleAssignSubmit = (formData) => {
+    const handleAssignSubmit = useCallback((formData) => {
         const payload = { ...formData };
         payload.equipment_id = parseInt(payload.equipment_id, 10);
         payload.quantity = parseInt(payload.quantity, 10);
-        payload.employee_custom_id = payload.employee_custom_id ? parseInt(payload.employee_custom_id, 10) : null;
-
+        
         const promise = supabase.from('installed_equipment').insert([payload]);
         handleCrudSubmit(promise, 'Обладнання призначено!');
-    };
+    }, [handleCrudSubmit]);
+    
+    const handleUpdateDetailsSubmit = useCallback((detailsData) => {
+        const { id, ...payload } = detailsData;
+        payload.employee_custom_id = payload.employee_custom_id ? parseInt(payload.employee_custom_id, 10) : null;
+        
+        const promise = supabase.from('installed_equipment').update(payload).eq('id', id);
+        handleCrudSubmit(promise, 'Деталі оновлено!');
+    }, [handleCrudSubmit]);
 
-    // --- ЗМІНА: Функція тепер відкриває модальне вікно підтвердження ---
-    const removeEquipmentFromInstallation = (id) => {
+    const removeEquipmentFromInstallation = useCallback((id) => {
         setConfirmDialog({
             isOpen: true,
             title: "Підтвердити видалення",
@@ -342,18 +410,17 @@ export default function EquipmentPage() {
                 handleCrudSubmit(supabase.from('installed_equipment').delete().eq('id', id), 'Обладнання знято.');
             }
         });
-    };
+    }, [handleCrudSubmit]);
+
+    const handleNavigate = useCallback((path) => {
+        setIsMenuOpen(false);
+        navigate(path);
+    }, [navigate]);
     
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 relative overflow-hidden">
-             <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute -top-40 -right-40 w-80 h-80 bg-gradient-to-br from-indigo-400/20 to-purple-600/20 rounded-full blur-3xl animate-pulse"></div>
-                <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-gradient-to-tr from-emerald-400/20 to-blue-600/20 rounded-full blur-3xl animate-pulse delay-1000"></div>
-            </div>
-            
-            <Notification message={notification.message} type={notification.type} onDismiss={() => setNotification({ message: null })} />
-
-            {/* --- ЗМІНА: Додано рендер модального вікна підтвердження --- */}
+        <div className="min-h-screen bg-slate-50">
+            <NotificationSystem notification={notification} onDismiss={() => setNotification({ message: null })} />
+            <Sidebar isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} onNavigate={handleNavigate} />
             <ConfirmationModal
                 isOpen={confirmDialog.isOpen}
                 onClose={() => setConfirmDialog({ isOpen: false })}
@@ -363,27 +430,25 @@ export default function EquipmentPage() {
                 {confirmDialog.message}
             </ConfirmationModal>
 
-            <header className="relative bg-white/80 backdrop-blur-xl border-b border-gray-200/50 shadow-sm">
-                <div className="px-6 py-4 flex justify-between items-center">
-                    <div className="flex items-center space-x-4">
-                         {/* --- ЗМІНА: Тег 'a' замінено на 'button' з onClick --- */}
-                         <button onClick={() => navigate(-1)} className="w-12 h-12 bg-white border border-gray-200 hover:bg-gray-100 text-gray-600 rounded-xl flex items-center justify-center shadow-sm hover:shadow-md transition-all">
-                            <Fa.FaArrowLeft className="text-lg" />
+            <header className="sticky top-0 bg-white/80 backdrop-blur-xl border-b border-gray-200/50 z-50">
+                <div className="px-4 sm:px-6 py-4 flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                         <button onClick={() => navigate(-1)} className="w-10 h-10 bg-white border border-gray-200 hover:bg-gray-100 text-gray-600 rounded-full flex items-center justify-center shadow-sm hover:shadow-md transition-all">
+                            <Fa.FaArrowLeft />
                         </button>
-                        <div className="flex items-center space-x-3">
-                           <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg"><Fa.FaBolt className="text-white text-xl" /></div>
-                            <div><h1 className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">SES Tracker</h1><p className="text-sm text-gray-500">Управління обладнанням</p></div>
-                        </div>
+                        <h1 className="text-xl font-bold text-gray-800">Управління обладнанням</h1>
                     </div>
-                    <div className="flex items-center space-x-2 bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-2 rounded-full"><div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-full flex items-center justify-center"><span className="text-white text-sm font-bold">A</span></div><span className="text-gray-700 font-medium">Admin</span></div>
+                    <button onClick={() => setIsMenuOpen(true)} className="w-10 h-10 bg-white border border-gray-200 hover:bg-gray-100 text-gray-600 rounded-full flex items-center justify-center shadow-sm hover:shadow-md transition-all">
+                        <Fa.FaBars />
+                    </button>
                 </div>
             </header>
             
-            <main className="relative p-4 md:p-8">
-                <div className="mb-8">
-                    <div className="flex space-x-1 bg-white/60 backdrop-blur-xl p-1 rounded-xl shadow-lg border border-gray-200/50 w-full md:w-auto">
-                        <button onClick={() => setActiveTab('installations')} className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-lg font-medium transition-all ${activeTab === 'installations' ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md' : 'text-gray-600 hover:text-gray-800'}`}><Fa.FaBuilding /> <span>Об'єкти</span></button>
-                        <button onClick={() => setActiveTab('catalog')} className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-lg font-medium transition-all ${activeTab === 'catalog' ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md' : 'text-gray-600 hover:text-gray-800'}`}><Fa.FaBook /> <span>Довідник</span></button>
+            <main className="p-4 sm:p-6 lg:p-8">
+                <div className="mb-8 max-w-md mx-auto">
+                    <div className="flex space-x-1 bg-white/60 backdrop-blur-xl p-1 rounded-full shadow-lg border border-gray-200/50">
+                        <button onClick={() => setActiveTab('installations')} className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-full font-medium text-sm transition-all ${activeTab === 'installations' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:text-gray-800'}`}><Fa.FaBuilding /> <span>Об'єкти</span></button>
+                        <button onClick={() => setActiveTab('catalog')} className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-full font-medium text-sm transition-all ${activeTab === 'catalog' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:text-gray-800'}`}><Fa.FaBook /> <span>Довідник</span></button>
                     </div>
                 </div>
 
@@ -391,38 +456,43 @@ export default function EquipmentPage() {
                     <motion.div key={activeTab} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
                         {activeTab === 'installations' && (
                             <div>
-                                <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6 bg-white/90 backdrop-blur-xl rounded-2xl p-6 shadow-xl border border-gray-200/50">
-                                    <h2 className="text-xl font-bold text-gray-800">Об'єкти та встановлене обладнання</h2>
-                                    <InputField icon={<Fa.FaSearch />} type="text" placeholder="Пошук..." value={installationSearch} onChange={e => {setInstallationSearch(e.target.value); setCurrentPage(1);}} />
+                                <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6 bg-white/90 backdrop-blur-xl rounded-2xl p-4 sm:p-6 shadow-xl border border-gray-200/50">
+                                    <h2 className="text-xl font-bold text-gray-800 whitespace-nowrap">Список об'єктів</h2>
+                                    <div className="w-full md:max-w-xs">
+                                        <InputField icon={<Fa.FaSearch />} type="text" placeholder="Пошук за назвою, клієнтом, ID..." value={installationSearch} onChange={e => {setInstallationSearch(e.target.value); setCurrentPage(1);}} />
+                                    </div>
                                 </div>
-                                <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
-                                    {paginatedInstallations.map((inst, index) => (
-                                        <motion.div key={inst.custom_id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.05 }} className="bg-white/90 backdrop-blur-xl rounded-2xl p-6 shadow-xl border border-gray-200/50 flex flex-col justify-between">
-                                            <div>
-                                                <h3 className="text-lg font-bold text-gray-900">{inst.name || 'Об\'єкт без назви'}</h3>
-                                                <p className="text-gray-600">{inst.clients?.name}</p>
-                                                <span className="text-sm text-gray-500 font-mono">ID: {inst.custom_id}</span>
-                                                <div className="border-t my-4"></div>
-                                                <div className="space-y-3 max-h-48 overflow-y-auto pr-2">
-                                                    {inst.equipment.length > 0 ? inst.equipment.map(item => {
-                                                        const { icon: Icon } = getCategoryProps(item.equipment?.category);
-                                                        return (
-                                                            <div key={item.id} className="flex items-center justify-between text-sm p-2 rounded-lg bg-gray-50/70">
-                                                                <div className="flex items-center gap-3"><Icon className="text-indigo-500 text-base"/> <div><span className="font-medium">{item.equipment?.name}</span><p className="text-xs text-gray-500 font-mono">{item.serial_number || 'S/N не вказано'}</p></div></div>
-                                                                <div className="flex items-center gap-2">
-                                                                    <span className="font-bold text-gray-600 mr-2">x{item.quantity}</span>
-                                                                    <button onClick={() => setModal({ type: 'viewDetails', data: item })} className="text-sky-500 hover:text-sky-700"><Fa.FaEye /></button>
-                                                                    <button onClick={() => removeEquipmentFromInstallation(item.id)} className="text-red-400 hover:text-red-600"><Fa.FaTrash /></button>
+                                {loading ? <div className="text-center p-10">Завантаження...</div> : (
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
+                                        {paginatedInstallations.map((inst, index) => (
+                                            <motion.div key={inst.custom_id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.05 }} className="bg-white/90 backdrop-blur-xl rounded-2xl p-6 shadow-xl border border-gray-200/50 flex flex-col justify-between">
+                                                <div>
+                                                    <h3 className="text-lg font-bold text-gray-900">{inst.name || 'Об\'єкт без назви'}</h3>
+                                                    <p className="text-gray-600 text-sm">{inst.clients?.name}</p>
+                                                    <span className="text-xs text-gray-500 font-mono bg-gray-100 px-2 py-1 rounded">ID: {inst.custom_id}</span>
+                                                    <div className="border-t my-4"></div>
+                                                    <div className="space-y-3 max-h-48 overflow-y-auto pr-2">
+                                                        {inst.equipment.length > 0 ? inst.equipment.map(item => {
+                                                            const { icon: Icon } = getCategoryProps(item.equipment?.category);
+                                                            return (
+                                                                <div key={item.id} className="flex items-center justify-between text-sm p-2 rounded-lg bg-gray-50/70">
+                                                                    <div className="flex items-center gap-3"><Icon className="text-indigo-500 text-base"/> <div><span className="font-medium">{item.equipment?.name}</span><p className="text-xs text-gray-500 font-mono">{item.serial_number || 'S/N не вказано'}</p></div></div>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className="font-bold text-gray-600 mr-2">x{item.quantity}</span>
+                                                                        <button onClick={() => setModal({ type: 'viewDetails', data: item })} className="text-sky-500 hover:text-sky-700"><Fa.FaEye /></button>
+                                                                        <button onClick={() => setModal({ type: 'editDetails', data: item })} className="text-amber-500 hover:text-amber-700"><Fa.FaPencilAlt /></button>
+                                                                        <button onClick={() => removeEquipmentFromInstallation(item.id)} className="text-red-400 hover:text-red-600"><Fa.FaTrash /></button>
+                                                                    </div>
                                                                 </div>
-                                                            </div>
-                                                        );
-                                                    }) : <p className="text-sm text-gray-500 italic text-center py-4">Немає обладнання</p>}
+                                                            );
+                                                        }) : <p className="text-sm text-gray-500 italic text-center py-4">Немає обладнання</p>}
+                                                    </div>
                                                 </div>
-                                            </div>
-                                            <button onClick={() => setModal({type: 'assign', data: inst})} className="mt-4 w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:shadow-lg font-semibold transition-shadow"><Fa.FaPlus/> Додати обладнання</button>
-                                        </motion.div>
-                                    ))}
-                                </div>
+                                                <button onClick={() => setModal({type: 'assign', data: inst})} className="mt-4 w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:shadow-lg font-semibold transition-shadow"><Fa.FaPlus/> Додати обладнання</button>
+                                            </motion.div>
+                                        ))}
+                                    </div>
+                                )}
                                 {totalPages > 1 && (
                                     <div className="flex justify-center items-center gap-4 mt-8">
                                         <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-4 py-2 bg-white rounded-lg shadow border disabled:opacity-50 disabled:cursor-not-allowed"> <Fa.FaChevronLeft/> </button>
@@ -435,9 +505,9 @@ export default function EquipmentPage() {
 
                         {activeTab === 'catalog' && (
                            <div>
-                                <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6 bg-white/90 backdrop-blur-xl rounded-2xl p-6 shadow-xl border border-gray-200/50">
-                                    <h2 className="text-xl font-bold text-gray-800">Довідник типів обладнання</h2>
-                                     <button onClick={() => setModal({type: 'addType', data: null})} className="flex items-center justify-center gap-2 py-3 px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl"><Fa.FaPlus /> Додати тип</button>
+                                <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6 bg-white/90 backdrop-blur-xl rounded-2xl p-4 sm:p-6 shadow-xl border border-gray-200/50">
+                                    <h2 className="text-xl font-bold text-gray-800">Довідник обладнання</h2>
+                                     <button onClick={() => setModal({type: 'addType', data: null})} className="w-full md:w-auto flex items-center justify-center gap-2 py-3 px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl"><Fa.FaPlus /> Додати тип</button>
                                 </div>
                                 <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200/50 overflow-x-auto">
                                     <table className="w-full text-left min-w-[700px]">
@@ -475,7 +545,6 @@ export default function EquipmentPage() {
                                 installation={modal.data} 
                                 onAssign={handleAssignSubmit} 
                                 equipmentCatalog={equipment}
-                                employees={employees}
                                 showNotification={showNotification} 
                             />
                         }
@@ -493,6 +562,15 @@ export default function EquipmentPage() {
                                 item={modal.data}
                             />
                         }
+                        {modal.type === 'editDetails' &&
+                            <EditDetailsModal
+                                closeModal={() => setModal({ type: null })}
+                                onSubmit={handleUpdateDetailsSubmit}
+                                initialData={modal.data}
+                                employees={employees}
+                                loading={loading}
+                            />
+                        }
                     </>
                 )}
             </AnimatePresence>
@@ -500,39 +578,33 @@ export default function EquipmentPage() {
     );
 }
 
-// --- Assign Equipment Modal Component --- //
-function AssignEquipmentModal({ closeModal, installation, onAssign, equipmentCatalog, employees, showNotification }) {
+// --- Assign Equipment Modal Component (Simplified) --- //
+function AssignEquipmentModal({ closeModal, installation, onAssign, equipmentCatalog, showNotification }) {
     const [formData, setFormData] = useState({
         installation_custom_id: installation.custom_id,
         equipment_id: '',
-        employee_custom_id: '',
         serial_number: '',
-        login: '',
-        password: '',
         quantity: 1,
     });
-    const [showPassword, setShowPassword] = useState(false);
-    
-    const selectedEquipmentModel = useMemo(() => equipmentCatalog.find(e => e.id === formData.equipment_id), [formData.equipment_id, equipmentCatalog]);
     
     const equipmentOptions = useMemo(() => 
         equipmentCatalog.map(e => ({ value: e.id, label: e.name })),
         [equipmentCatalog]
     );
 
-    const handleChange = (e) => {
+    const handleChange = useCallback((e) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
-    };
+    }, []);
 
-    const handleSubmit = (e) => {
+    const handleSubmit = useCallback((e) => {
         e.preventDefault();
         if (!formData.equipment_id) {
             showNotification('Будь ласка, виберіть тип обладнання', 'error');
             return;
         }
         onAssign(formData);
-    };
+    }, [formData, onAssign, showNotification]);
 
     return (
         <Modal closeModal={closeModal} size="lg">
@@ -550,15 +622,56 @@ function AssignEquipmentModal({ closeModal, installation, onAssign, equipmentCat
                         value={formData.equipment_id}
                         onChange={handleChange}
                     />
-                    
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <InputField name="serial_number" label="Серійний номер" icon={<Fa.FaTag/>} value={formData.serial_number} onChange={handleChange} />
                         <InputField name="quantity" label="Кількість" type="number" min="1" icon={<Fa.FaHashtag/>} value={formData.quantity} onChange={handleChange} required />
                     </div>
+                </div>
+                
+                <div className="flex justify-end gap-3 p-6 bg-gray-50/50 rounded-b-2xl mt-auto border-t">
+                    <button type="button" onClick={closeModal} className="py-2 px-5 bg-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-300">Скасувати</button>
+                    <button type="submit" className="py-2 px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg">Додати на об'єкт</button>
+                </div>
+            </form>
+        </Modal>
+    );
+}
 
-                    {(selectedEquipmentModel?.category === 'inverter' || selectedEquipmentModel?.category === 'logger') && (
+// --- NEW: Edit Details Modal Component --- //
+function EditDetailsModal({ closeModal, onSubmit, initialData, employees, loading }) {
+    const [formData, setFormData] = useState({
+        id: initialData.id,
+        login: initialData.login || '',
+        password: initialData.password || '',
+        employee_custom_id: initialData.employee_custom_id || '',
+    });
+    const [showPassword, setShowPassword] = useState(false);
+    
+    const equipment = initialData.equipment;
+    const isCredentialsApplicable = equipment?.category === 'inverter' || equipment?.category === 'logger';
+    
+    const handleChange = useCallback((e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    }, []);
+
+    const handleSubmit = useCallback((e) => {
+        e.preventDefault();
+        onSubmit(formData);
+    }, [formData, onSubmit]);
+
+    return (
+        <Modal closeModal={closeModal} size="lg">
+            <form onSubmit={handleSubmit} className="flex flex-col h-full">
+                <div className="p-6 md:p-8">
+                    <h3 className="text-2xl font-bold text-gray-800 mb-2">Редагувати деталі обладнання</h3>
+                    <p className="text-indigo-600 font-medium">{equipment?.name}</p>
+                </div>
+                
+                <div className="flex-grow overflow-y-auto border-t border-b py-6 px-6 md:px-8 space-y-4">
+                    {isCredentialsApplicable && (
                         <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-200 space-y-4">
-                            <p className="font-semibold text-blue-800 text-sm">Облікові дані (опціонально)</p>
+                            <p className="font-semibold text-blue-800 text-sm">Облікові дані</p>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <InputField name="login" label="Логін" icon={<Fa.FaUserCircle/>} value={formData.login} onChange={handleChange} />
                                 <InputField name="password" label="Пароль" icon={<Fa.FaKey/>} type={showPassword ? "text" : "password"} value={formData.password} onChange={handleChange} showPassword={showPassword} onTogglePassword={() => setShowPassword(!showPassword)} />
@@ -572,15 +685,15 @@ function AssignEquipmentModal({ closeModal, installation, onAssign, equipmentCat
                     </SelectField>
                 </div>
                 
-                {/* --- ЗМІНА: Додано клас 'mt-auto' для притискання футера донизу --- */}
-                <div className="flex justify-end gap-3 p-6 bg-gray-50/50 rounded-b-2xl mt-auto border-t">
+                <div className="flex justify-end gap-3 p-6 mt-auto bg-gray-50/50 rounded-b-2xl">
                     <button type="button" onClick={closeModal} className="py-2 px-5 bg-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-300">Скасувати</button>
-                    <button type="submit" className="py-2 px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg">Додати на об'єкт</button>
+                    <button type="submit" disabled={loading} className="py-2 px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg flex items-center gap-2">{loading ? 'Збереження...' : 'Зберегти деталі'}</button>
                 </div>
             </form>
         </Modal>
     );
 }
+
 
 // --- Type (Catalog) Form Modal --- //
 function TypeFormModal({ closeModal, onSubmit, initialData, loading }) {
@@ -588,15 +701,15 @@ function TypeFormModal({ closeModal, onSubmit, initialData, loading }) {
         initialData || { name: '', category: '', power_kw: '', manufacturer: '', notes: '' }
     );
 
-    const handleChange = (e) => {
+    const handleChange = useCallback((e) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
-    };
+    }, []);
 
-    const handleSubmit = (e) => {
+    const handleSubmit = useCallback((e) => {
         e.preventDefault();
         onSubmit(formData);
-    };
+    }, [formData, onSubmit]);
 
     return (
         <Modal closeModal={closeModal} size="lg">

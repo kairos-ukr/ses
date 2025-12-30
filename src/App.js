@@ -12,6 +12,8 @@ import Reports from "./rep"
 import Equimpment from "./eq2"
 import Payments from "./pay"
 import Calculate from "./calc"
+import DocMen from "./DocumentManager"
+
 export default function App() {
   return (
     <Router>
@@ -22,12 +24,13 @@ export default function App() {
         <Route path="/vis" element={<PhotoUploadSite />} />
         <Route path="/installations" element={<ProjectPage />} />
         <Route path="/clients" element={<ClientsPage />} />
-        <Route path="/employ" element={<EmployeesPage />} />
+        <Route path="/employees" element={<EmployeesPage />} />
         <Route path="/tasks" element={<MicrotasksPage />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/equipment" element={<Equimpment />} />
         <Route path="/payments" element={<Payments />} />
         <Route path="/calculate" element={<Calculate />} />
+        <Route path="/documents" element={<DocMen />} />
       </Routes>
     </Router>
   );
