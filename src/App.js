@@ -6,13 +6,15 @@ import SolCalc from "./sol_calc";
 import PhotoUploadSite from "./Ocr";
 import ProjectPage from "./inst2";
 import ClientsPage from "./cli1";
-import EmployeesPage from "./empNORM";
+import EmployeesPage from "./MainEmployeesPage";
 import MicrotasksPage from "./microtask";
 import Reports from "./rep"
 import Equimpment from "./eq2"
 import Payments from "./pay"
 import Calculate from "./calc"
 import DocMen from "./DocumentManager"
+import ProjectDetailsPage from './ProjectDetailsPage';
+
 
 export default function App() {
   return (
@@ -31,6 +33,7 @@ export default function App() {
         <Route path="/payments" element={<Payments />} />
         <Route path="/calculate" element={<Calculate />} />
         <Route path="/documents" element={<DocMen />} />
+        <Route path="/project/:id" element={<ProjectDetailsPage />} />
       </Routes>
     </Router>
   );

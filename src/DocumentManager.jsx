@@ -1,25 +1,24 @@
-import React, { useState, useEffect, useCallback, memo } from "react";
+import React, { useState, useEffect, useCallback, memo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaCloudUploadAlt, FaSearch, FaFilePdf, FaFileImage, FaFileAlt, FaFilter,
   FaDownload, FaEye, FaTimes, FaBars, FaSignOutAlt, FaBuilding, FaUsers,
-  FaUserTie, FaCog, FaCreditCard, FaTasks, FaFolderOpen, FaCheck, FaExclamationTriangle
+  FaUserTie, FaCog, FaCreditCard, FaTasks, FaFolderOpen, FaCheck, FaExclamationTriangle, FaTrash
 } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
 import { createClient } from '@supabase/supabase-js';
 
 // --- КОНФІГУРАЦІЯ ---
-// Заміни на URL твого Python бекенду (напр. 'https://your-bot-host.net' або локальний IP)
 const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev'; 
-
 const supabaseUrl = 'https://logxutaepqzmvgsvscle.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- TIPO DOCUMENTS ---
 const DOC_TYPES = [
     "Комерційна пропозиція",
     "Технічний проєкт",
+    "Фото об'єкта",
+    "3D-візуалізація",
     "Фотозвіт",
     "Чек",
     "Накладна",
@@ -29,7 +28,7 @@ const DOC_TYPES = [
 
 // --- COMPONENTS ---
 
-// 1. Sidebar (Такий же як на інших сторінках)
+// Оновлений компонент Sidebar
 const Sidebar = memo(({ onNavigate, onLogout }) => {
     const [isOpen, setIsOpen] = useState(false);
     const menuItems = [
@@ -39,7 +38,7 @@ const Sidebar = memo(({ onNavigate, onLogout }) => {
       { id: 'employees', label: 'Працівники', icon: FaUserTie },
       { id: 'equipment', label: 'Обладнання', icon: FaCog },
       { id: 'payments', label: 'Платежі', icon: FaCreditCard },
-      { id: 'documents', label: 'Документи', icon: FaFolderOpen }, // Активний пункт
+      { id: 'documents', label: 'Документи', icon: FaFolderOpen },
       { id: 'tasks', label: 'Мікрозадачі', icon: FaTasks },
     ];
     
@@ -56,24 +55,34 @@ const Sidebar = memo(({ onNavigate, onLogout }) => {
         <AnimatePresence>
             {isOpen && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsOpen(false)} className="fixed inset-0 bg-black/30 z-[99] lg:hidden"/>}
         </AnimatePresence>
-        <aside className={`fixed top-0 right-0 h-full bg-white/95 backdrop-blur-xl text-slate-800 z-[100] shadow-2xl border-l border-slate-200/50 w-64 transform transition-transform duration-300 ease-in-out flex flex-col
-                       ${isOpen ? 'translate-x-0' : 'translate-x-full'} lg:sticky lg:h-screen lg:translate-x-0`}>
-            <div className="p-5 border-b border-slate-200/80 flex items-center justify-between">
-                <h2 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">SES Tracker</h2>
+        
+        {/* Додано overflow-x-hidden, щоб прибрати горизонтальний скрол */}
+        <aside className={`fixed top-0 right-0 h-full bg-white/95 backdrop-blur-xl text-slate-800 z-[100] shadow-2xl border-l border-slate-200/50 w-64 transform transition-transform duration-300 ease-in-out flex flex-col overflow-x-hidden
+                        ${isOpen ? 'translate-x-0' : 'translate-x-full'} lg:sticky lg:h-screen lg:translate-x-0`}>
+            
+            <div className="p-5 border-b border-slate-200/80 flex items-center justify-between shrink-0">
+                <h2 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">K-Core</h2>
                 <button onClick={() => setIsOpen(false)} className="text-slate-400 hover:text-slate-600 lg:hidden"><FaTimes/></button>
             </div>
-            <nav className="flex-1 py-4 overflow-y-auto">
+
+            {/* Змінено overflow-y-auto та додано pr-2 для відступу від скролбару */}
+            <nav className="flex-1 py-4 overflow-y-auto overflow-x-hidden custom-scrollbar">
                 {menuItems.map((item) => (
-                    <button key={item.id} onClick={() => handleNavigation(item.id)} className={`w-full flex items-center space-x-4 px-6 py-3.5 text-left transition-all duration-200 group rounded-lg mx-2 my-1
-                        ${item.id === 'documents' ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-indigo-50 text-slate-700'}`}>
-                        <item.icon className={`text-lg ${item.id === 'documents' ? 'text-indigo-600' : 'text-slate-500 group-hover:text-indigo-600'}`} />
-                        <span className="font-semibold">{item.label}</span>
+                    <button 
+                        key={item.id} 
+                        onClick={() => handleNavigation(item.id)} 
+                        className={`flex items-center space-x-4 px-6 py-3.5 text-left transition-all duration-200 group rounded-xl mx-3 my-1 block-size-auto
+                        ${item.id === 'documents' ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-slate-50 text-slate-700'}`}
+                    >
+                        <item.icon className={`text-lg shrink-0 ${item.id === 'documents' ? 'text-indigo-600' : 'text-slate-500 group-hover:text-indigo-600'}`} />
+                        <span className="font-semibold whitespace-nowrap">{item.label}</span>
                     </button>
                 ))}
             </nav>
-            <div className="p-4 border-t border-slate-200/80">
-                <button onClick={onLogout} className="w-full flex items-center justify-center space-x-3 px-4 py-3 bg-slate-100 hover:bg-red-100 text-slate-600 hover:text-red-700 rounded-lg font-medium transition-all duration-200">
-                    <FaSignOutAlt /><span>Вийти</span>
+
+            <div className="p-4 border-t border-slate-200/80 shrink-0">
+                <button onClick={onLogout} className="w-full flex items-center justify-center space-x-3 px-4 py-3 bg-slate-100 hover:bg-red-100 text-slate-600 hover:text-red-700 rounded-xl font-medium transition-all duration-200">
+                    <FaSignOutAlt className="shrink-0"/><span>Вийти</span>
                 </button>
             </div>
         </aside>
@@ -81,7 +90,6 @@ const Sidebar = memo(({ onNavigate, onLogout }) => {
     );
 });
 
-// 2. Notification Toast
 const Toast = memo(({ message, type, isVisible, onClose }) => {
     useEffect(() => {
         if (isVisible) {
@@ -105,7 +113,6 @@ const Toast = memo(({ message, type, isVisible, onClose }) => {
     );
 });
 
-// 3. Document Card Component
 const DocumentCard = memo(({ doc, onPreview }) => {
     const getIcon = (mimeType) => {
         if (mimeType.includes('pdf')) return <FaFilePdf className="text-red-500 text-3xl"/>;
@@ -158,44 +165,40 @@ const DocumentCard = memo(({ doc, onPreview }) => {
 
 export default function DocumentsPage() {
     const navigate = useNavigate();
+    const fileInputRef = useRef(null);
     
     // --- STATE ---
-    // Object Selection
     const [searchTerm, setSearchTerm] = useState("");
     const [searchResults, setSearchResults] = useState([]);
-    const [selectedObject, setSelectedObject] = useState(null); // { custom_id, name }
+    const [selectedObject, setSelectedObject] = useState(null);
     const [isSearching, setIsSearching] = useState(false);
 
-    // Documents Data
     const [documents, setDocuments] = useState([]);
     const [loadingDocs, setLoadingDocs] = useState(false);
     const [docFilter, setDocFilter] = useState("Всі");
 
-    // Upload
-    const [uploadFiles, setUploadFiles] = useState([]);
+    const [uploadFiles, setUploadFiles] = useState([]); // Array of File objects
     const [docType, setDocType] = useState(DOC_TYPES[0]);
+    const [customDocType, setCustomDocType] = useState("");
     const [isUploading, setIsUploading] = useState(false);
 
-    // UI
     const [previewUrl, setPreviewUrl] = useState(null);
     const [notification, setNotification] = useState({ isVisible: false, message: '', type: 'success' });
     const [showFilters, setShowFilters] = useState(false);
 
-    // --- EFFECT: Search Objects in Supabase ---
+    // --- SEARCH ---
     useEffect(() => {
         const searchObjects = async () => {
             if (!searchTerm || searchTerm.length < 2) {
                 setSearchResults([]);
                 return;
             }
-            
             setIsSearching(true);
             try {
                 let query = supabase.from('installations')
                     .select('custom_id, name, client:clients(name)')
                     .limit(5);
 
-                // Check if search term is a number (ID) or string (Name)
                 if (/^\d+$/.test(searchTerm)) {
                     query = query.eq('custom_id', parseInt(searchTerm));
                 } else {
@@ -215,46 +218,54 @@ export default function DocumentsPage() {
         return () => clearTimeout(timer);
     }, [searchTerm]);
 
-    // --- FUNCTION: Fetch Documents from Python Backend ---
     const fetchDocuments = useCallback(async (customId) => {
         setLoadingDocs(true);
         try {
             const response = await fetch(`${SERVER_URL}/documents/${customId}`);
             if (!response.ok) throw new Error("Server error");
             const data = await response.json();
-            
             if (data.status === 'error') throw new Error(data.message);
-            
             setDocuments(data.documents || []);
         } catch (error) {
             console.error("Error fetching docs:", error);
             setDocuments([]);
-            // Don't show error toast on simple fetch fail (folder might not exist yet)
         } finally {
             setLoadingDocs(false);
         }
     }, []);
 
-    // --- HANDLE: Select Object ---
     const handleSelectObject = (obj) => {
         setSelectedObject(obj);
-        setSearchTerm(""); // Clear search input
-        setSearchResults([]); // Close dropdown
-        fetchDocuments(obj.custom_id); // Load docs immediately
+        setSearchTerm("");
+        setSearchResults([]);
+        fetchDocuments(obj.custom_id);
     };
 
-    // --- HANDLE: Upload ---
+    // --- FILE HANDLERS ---
+    const handleFileChange = (e) => {
+        const selected = Array.from(e.target.files);
+        setUploadFiles(prev => [...prev, ...selected]);
+        if (fileInputRef.current) fileInputRef.current.value = ""; // Reset input to allow re-selection
+    };
+
+    const removeFile = (indexToRemove) => {
+        setUploadFiles(prev => prev.filter((_, index) => index !== indexToRemove));
+    };
+
     const handleUpload = async (e) => {
         e.preventDefault();
         if (!selectedObject) return showToast("Оберіть об'єкт!", "error");
         if (uploadFiles.length === 0) return showToast("Виберіть файли!", "error");
 
+        const finalDocType = docType === "Інше" ? customDocType : docType;
+        if (!finalDocType) return showToast("Вкажіть тип документа!", "error");
+
         setIsUploading(true);
         const formData = new FormData();
         formData.append('object_number', selectedObject.custom_id);
-        formData.append('doc_type', docType);
+        formData.append('doc_type', finalDocType);
         
-        Array.from(uploadFiles).forEach((file) => {
+        uploadFiles.forEach((file) => {
             formData.append('files', file);
         });
 
@@ -267,29 +278,25 @@ export default function DocumentsPage() {
 
             if (result.status === 'success') {
                 showToast(`Завантажено файлів: ${result.count}`, "success");
-                setUploadFiles([]); // Clear files
-                // Reload documents list
+                setUploadFiles([]);
+                setCustomDocType("");
                 fetchDocuments(selectedObject.custom_id);
-            } else if (result.status === 'warning') {
-                 showToast(result.message, "error");
             } else {
                 throw new Error(result.message);
             }
         } catch (error) {
-            showToast("Помилка завантаження: " + error.message, "error");
+            showToast("Помилка: " + error.message, "error");
         } finally {
             setIsUploading(false);
         }
     };
 
-    // --- HELPERS ---
     const showToast = (message, type) => {
         setNotification({ isVisible: true, message, type });
     };
 
     const filteredDocuments = documents.filter(doc => {
         if (docFilter === "Всі") return true;
-        // Simple filtering based on filename convention: "Type_Date_Name"
         return doc.name.startsWith(docFilter);
     });
 
@@ -300,12 +307,8 @@ export default function DocumentsPage() {
 
     return (
         <div className="min-h-screen bg-slate-50 flex flex-row-reverse font-sans">
-            
-            {/* --- MAIN CONTENT --- */}
             <main className="flex-1 flex flex-col h-screen overflow-hidden">
                 <div className="flex-1 p-4 sm:p-8 overflow-y-auto">
-                    
-                    {/* Header */}
                     <header className="mb-8">
                          <div className="flex items-center gap-3 mb-2">
                             <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center shadow-lg">
@@ -313,22 +316,20 @@ export default function DocumentsPage() {
                             </div>
                             <h1 className="text-2xl sm:text-3xl font-bold text-slate-800">Документи</h1>
                         </div>
-                        <p className="text-slate-500">Архів файлів та завантаження на Google Drive</p>
+                        <p className="text-slate-500">Керування файлами об'єктів</p>
                     </header>
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        
-                        {/* --- LEFT COLUMN: Object Search & Upload Form --- */}
                         <div className="lg:col-span-1 space-y-6">
                             
-                            {/* 1. Object Search Card */}
+                            {/* 1. Пошук */}
                             <div className="bg-white rounded-2xl p-6 shadow-lg border border-slate-200/60 relative z-30">
                                 <h3 className="font-bold text-slate-800 mb-4">1. Пошук об'єкта</h3>
                                 <div className="relative">
                                     <FaSearch className="absolute left-4 top-3.5 text-slate-400" />
                                     <input 
                                         type="text" 
-                                        placeholder="Назва або ID (напр. 5086)..." 
+                                        placeholder="Назва або ID..." 
                                         value={searchTerm}
                                         onChange={(e) => setSearchTerm(e.target.value)}
                                         className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 transition outline-none"
@@ -336,7 +337,6 @@ export default function DocumentsPage() {
                                     {isSearching && <div className="absolute right-4 top-3.5 w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>}
                                 </div>
 
-                                {/* Dropdown Results */}
                                 <AnimatePresence>
                                     {searchResults.length > 0 && (
                                         <motion.div 
@@ -360,7 +360,6 @@ export default function DocumentsPage() {
                                     )}
                                 </AnimatePresence>
 
-                                {/* Selected Object Display */}
                                 {selectedObject && (
                                     <motion.div 
                                         initial={{ opacity: 0 }} animate={{ opacity: 1 }}
@@ -369,66 +368,86 @@ export default function DocumentsPage() {
                                         <div>
                                             <div className="text-xs text-indigo-500 font-bold uppercase tracking-wide">Обрано</div>
                                             <div className="font-bold text-slate-800">{selectedObject.name}</div>
-                                            <div className="text-xs text-slate-500">#{selectedObject.custom_id}</div>
                                         </div>
                                         <button onClick={() => {setSelectedObject(null); setDocuments([]);}} className="p-2 text-slate-400 hover:text-red-500"><FaTimes/></button>
                                     </motion.div>
                                 )}
                             </div>
 
-                            {/* 2. Upload Form Card */}
+                            {/* 2. Завантаження */}
                             <div className={`bg-white rounded-2xl p-6 shadow-lg border border-slate-200/60 transition-all ${!selectedObject ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
                                 <h3 className="font-bold text-slate-800 mb-4">2. Завантаження</h3>
                                 <form onSubmit={handleUpload} className="space-y-4">
                                     <div>
                                         <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">Тип документа</label>
-                                        <div className="relative">
-                                            <select 
-                                                value={docType} 
-                                                onChange={(e) => setDocType(e.target.value)}
-                                                className="w-full pl-4 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl appearance-none focus:ring-2 focus:ring-indigo-500 outline-none"
-                                            >
-                                                {DOC_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
-                                            </select>
-                                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▼</div>
-                                        </div>
+                                        <select 
+                                            value={docType} 
+                                            onChange={(e) => setDocType(e.target.value)}
+                                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl appearance-none focus:ring-2 focus:ring-indigo-500 outline-none"
+                                        >
+                                            {DOC_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                                        </select>
+                                        
+                                        {docType === "Інше" && (
+                                            <motion.input 
+                                                initial={{ opacity: 0, height: 0 }}
+                                                animate={{ opacity: 1, height: 'auto' }}
+                                                type="text"
+                                                placeholder="Введіть тип документа..."
+                                                value={customDocType}
+                                                onChange={(e) => setCustomDocType(e.target.value)}
+                                                className="w-full mt-2 px-4 py-2 bg-white border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                                            />
+                                        )}
                                     </div>
                                     
                                     <div>
                                         <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">Файли</label>
-                                        <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 hover:border-indigo-400 transition-colors bg-slate-50/50">
-                                            <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                                                <FaCloudUploadAlt className="w-8 h-8 text-slate-400 mb-2" />
-                                                <p className="text-sm text-slate-500"><span className="font-semibold text-indigo-600">Натисніть</span> або перетягніть</p>
-                                                <p className="text-xs text-slate-400 mt-1">
-                                                    {uploadFiles.length > 0 ? `Обрано файлів: ${uploadFiles.length}` : 'PDF, JPG, PNG'}
-                                                </p>
+                                        <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 hover:border-indigo-400 transition-colors bg-slate-50/50">
+                                            <div className="flex flex-col items-center justify-center">
+                                                <FaCloudUploadAlt className="w-6 h-6 text-slate-400 mb-1" />
+                                                <p className="text-xs text-slate-500">Додати файли</p>
                                             </div>
-                                            <input type="file" multiple className="hidden" onChange={(e) => setUploadFiles(e.target.files)} />
+                                            <input 
+                                                ref={fileInputRef}
+                                                type="file" 
+                                                multiple 
+                                                className="hidden" 
+                                                onChange={handleFileChange} 
+                                            />
                                         </label>
+                                    </div>
+
+                                    {/* Список обраних файлів */}
+                                    <div className="max-h-40 overflow-y-auto space-y-2">
+                                        {uploadFiles.map((file, idx) => (
+                                            <div key={idx} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100 text-xs">
+                                                <span className="truncate flex-1 mr-2 text-slate-700">{file.name}</span>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => removeFile(idx)}
+                                                    className="text-red-400 hover:text-red-600 p-1"
+                                                >
+                                                    <FaTrash />
+                                                </button>
+                                            </div>
+                                        ))}
                                     </div>
 
                                     <button 
                                         type="submit" 
                                         disabled={isUploading || uploadFiles.length === 0}
-                                        className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+                                        className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold rounded-xl shadow-lg disabled:opacity-50 flex justify-center items-center gap-2"
                                     >
-                                        {isUploading ? (
-                                            <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Завантаження...</>
-                                        ) : (
-                                            <><FaCloudUploadAlt /> Завантажити</>
-                                        )}
+                                        {isUploading ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : "Завантажити"}
                                     </button>
                                 </form>
                             </div>
-
                         </div>
 
-                        {/* --- RIGHT COLUMN: Documents List --- */}
+                        {/* 3. Список документів */}
                         <div className="lg:col-span-2">
                              <div className="bg-white/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-slate-200/50 h-full flex flex-col min-h-[500px]">
-                                
-                                {/* List Header & Filters */}
                                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 border-b border-slate-100 pb-4">
                                     <div>
                                         <h3 className="font-bold text-slate-800 text-lg">Архів документів</h3>
@@ -443,7 +462,7 @@ export default function DocumentsPage() {
                                                 onClick={() => setShowFilters(!showFilters)} 
                                                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition ${showFilters ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                                             >
-                                                <FaFilter /> Фільтр: {docFilter}
+                                                <FaFilter /> Фільтр
                                             </button>
                                             <AnimatePresence>
                                                 {showFilters && (
@@ -462,7 +481,6 @@ export default function DocumentsPage() {
                                     )}
                                 </div>
 
-                                {/* Content */}
                                 <div className="flex-1 overflow-y-auto pr-1">
                                     {!selectedObject ? (
                                         <div className="h-full flex flex-col items-center justify-center text-slate-400">
@@ -471,15 +489,12 @@ export default function DocumentsPage() {
                                         </div>
                                     ) : loadingDocs ? (
                                         <div className="space-y-4">
-                                            {Array.from({ length: 4 }).map((_, i) => (
-                                                <div key={i} className="h-16 bg-slate-100 rounded-xl animate-pulse"></div>
-                                            ))}
+                                            {[1,2,3].map(i => <div key={i} className="h-16 bg-slate-100 rounded-xl animate-pulse"></div>)}
                                         </div>
                                     ) : filteredDocuments.length === 0 ? (
                                         <div className="h-full flex flex-col items-center justify-center text-slate-400 py-10">
                                             <FaFolderOpen className="text-5xl mb-3 opacity-20" />
-                                            <p>Папка порожня або файли не знайдено</p>
-                                            {docFilter !== "Всі" && <button onClick={() => setDocFilter("Всі")} className="text-indigo-500 text-sm mt-2 hover:underline">Скинути фільтр</button>}
+                                            <p>Файлів не знайдено</p>
                                         </div>
                                     ) : (
                                         <div className="grid grid-cols-1 gap-3">
@@ -491,13 +506,11 @@ export default function DocumentsPage() {
                                 </div>
                             </div>
                         </div>
-
                     </div>
                 </div>
             </main>
 
             <Sidebar onNavigate={(p) => navigate(p === 'home' ? '/home' : `/${p}`)} onLogout={handleLogout} />
-            
             <Toast {...notification} onClose={() => setNotification(prev => ({ ...prev, isVisible: false }))} />
 
             {/* PREVIEW MODAL */}
@@ -522,7 +535,6 @@ export default function DocumentsPage() {
                     </motion.div>
                 )}
             </AnimatePresence>
-
         </div>
     );
 }

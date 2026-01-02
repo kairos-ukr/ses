@@ -78,7 +78,7 @@ const Sidebar = memo(({ onNavigate, onLogout, isOpen, setIsOpen }) => {
             `}
         >
             <div className="p-5 border-b border-slate-200/80 flex items-center justify-between">
-                <h2 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent" translate="no">SES Tracker</h2>
+                <h2 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent" translate="no">K-Core</h2>
                 <button onClick={() => setIsOpen(false)} className="text-slate-400 hover:text-slate-600" aria-label="Close menu"><FaTimes/></button>
             </div>
             <nav className="flex-1 py-4 overflow-y-auto">

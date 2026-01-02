@@ -63,7 +63,7 @@ const Sidebar = memo(({ onNavigate, onLogout }) => {
         <aside className={`fixed top-0 right-0 h-full bg-white/95 backdrop-blur-xl text-slate-800 z-[100] shadow-2xl border-l border-slate-200/50 w-64 transform transition-transform duration-300 ease-in-out flex flex-col
                        ${isOpen ? 'translate-x-0' : 'translate-x-full'} lg:sticky lg:h-screen lg:translate-x-0`}>
             <div className="p-5 border-b border-slate-200/80 flex items-center justify-between">
-                <h2 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent" translate="no">SES Tracker</h2>
+                <h2 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent" translate="no">K-Core</h2>
                 <button onClick={() => setIsOpen(false)} className="text-slate-400 hover:text-slate-600 lg:hidden"><FaTimes/></button>
             </div>
             <nav className="flex-1 py-4 overflow-y-auto">

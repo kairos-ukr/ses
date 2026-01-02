@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { FaBolt, FaEye, FaEyeSlash, FaUser, FaLock, FaEnvelope, FaSignInAlt, FaUserPlus, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
+import { FaEye, FaEyeSlash, FaUser, FaLock, FaEnvelope, FaSignInAlt, FaUserPlus, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
 import { createClient } from "@supabase/supabase-js";
+import logoImg from './logo.png'; // ІМПОРТ ЛОГОТИПУ
 
 // Ініціалізація клієнта Supabase
 const supabaseUrl = 'https://logxutaepqzmvgsvscle.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Покращений компонент для полів вводу
+// Компонент поля вводу
 const InputField = ({ name, type, placeholder, value, onChange, icon, disabled, required = true, minLength }) => (
   <div className="relative group">
-    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors duration-300">
+    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors duration-300">
       {icon}
     </span>
     <input
@@ -24,12 +25,12 @@ const InputField = ({ name, type, placeholder, value, onChange, icon, disabled, 
       required={required}
       disabled={disabled}
       minLength={minLength}
-      className="w-full pl-12 pr-4 py-3 bg-slate-50 border-2 border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-300 shadow-sm text-slate-800 placeholder-slate-400"
+      className="w-full pl-12 pr-4 py-3 bg-slate-50 border-2 border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-300 shadow-sm text-slate-800 placeholder-slate-400"
     />
   </div>
 );
 
-// Компонент для відображення вимог до пароля
+// Компонент перевірки пароля
 const PasswordPolicy = ({ password }) => {
     const checks = {
         length: password.length >= 8,
@@ -38,7 +39,7 @@ const PasswordPolicy = ({ password }) => {
     };
 
     const Requirement = ({ text, met }) => (
-        <div className={`flex items-center text-xs transition-colors duration-300 ${met ? 'text-green-600' : 'text-slate-500'}`}>
+        <div className={`flex items-center text-xs transition-colors duration-300 ${met ? 'text-emerald-600' : 'text-slate-500'}`}>
             {met ? <FaCheckCircle className="mr-2" /> : <FaExclamationTriangle className="mr-2" />}
             <span>{text}</span>
         </div>
@@ -71,21 +72,17 @@ export default function AuthPage() {
   
   const navigate = useNavigate();
 
-  // Перевірка наявності активної сесії при завантаженні компонента
   useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      
       if (session) {
         navigate("/home");
       } else {
         setIsLoading(false);
       }
     };
-
     checkSession();
     
-    // Слухач змін стану автентифікації
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_IN' && session) {
         navigate("/home");
@@ -100,7 +97,6 @@ export default function AuthPage() {
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
-    
     if (error) setError("");
     if (successMessage) setSuccessMessage("");
   };
@@ -110,7 +106,6 @@ export default function AuthPage() {
     setError("");
     setSuccessMessage("");
     
-    // Валідація для реєстрації
     if (!isSignIn) {
       if (formData.password !== formData.confirmPassword) {
         setError("Паролі не співпадають.");
@@ -126,7 +121,7 @@ export default function AuthPage() {
     setIsLoading(true);
 
     try {
-      if (!isSignIn) { // РЕЄСТРАЦІЯ
+      if (!isSignIn) {
         const { data: authData, error: authError } = await supabase.auth.signUp({
           email: formData.email,
           password: formData.password,
@@ -143,18 +138,15 @@ export default function AuthPage() {
         });
 
         if (profileError) throw profileError;
-        
         setSuccessMessage("Реєстрація успішна! Підтвердіть свою пошту та увійдіть в акаунт.");
         toggleMode();
 
-      } else { // ВХІД
+      } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email: formData.email,
           password: formData.password,
         });
-
         if (signInError) throw signInError;
-        // Навігація відбудеться автоматично завдяки onAuthStateChange
       }
     } catch (err) {
       const errorMessage = err.message || "Сталася невідома помилка.";
@@ -162,8 +154,6 @@ export default function AuthPage() {
         setError("Користувач з такою поштою вже існує.");
       } else if (errorMessage.includes("Invalid login credentials")) {
         setError("Невірна пошта або пароль.");
-      } else if (errorMessage.includes("Email rate limit exceeded")) {
-        setError("Ліміт відправки листів перевищено. Спробуйте пізніше.");
       } else {
         setError(errorMessage);
       }
@@ -181,11 +171,10 @@ export default function AuthPage() {
     setShowConfirmPassword(false);
   };
   
-  // Екран завантаження
   if (isLoading && !error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100">
-        <FaBolt className="animate-pulse text-indigo-500 text-6xl" />
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+         <img src={logoImg} alt="Loading..." className="w-16 h-16 object-contain animate-pulse drop-shadow-lg" />
       </div>
     );
   }
@@ -193,11 +182,24 @@ export default function AuthPage() {
   return (
     <div className="min-h-screen bg-slate-100 font-sans flex items-center justify-center p-4">
       
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+      {/* --- ВИПРАВЛЕННЯ ТУТ --- */}
+      {/* Додано overflow-visible, щоб логотип міг виступати за межі */}
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 relative overflow-visible">
         
-        <div className="h-40 bg-gradient-to-br from-indigo-600 to-purple-700 flex items-center justify-center relative">
-            <div className="w-24 h-24 bg-white/95 backdrop-blur-sm rounded-full flex items-center justify-center shadow-2xl absolute -bottom-12 border-4 border-white">
-                <FaBolt className="text-5xl text-indigo-600" />
+        {/* ХЕДЕР: ПРИБРАНО клас 'overflow-hidden', додано rounded-t-2xl */}
+        <div className="h-40 bg-gradient-to-br from-slate-800 to-blue-900 flex items-center justify-center relative rounded-t-2xl">
+            {/* Декоративні елементи тепер всередині свого контейнера з overflow-hidden, щоб не вилазили */}
+            <div className="absolute top-0 left-0 w-full h-full overflow-hidden rounded-t-2xl">
+                <div className="absolute top-0 left-0 w-full h-full opacity-10 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-white via-transparent to-transparent"></div>
+            </div>
+            
+            {/* ЛОГОТИП: Тепер він не буде обрізатися */}
+            <div className="w-24 h-24 bg-white rounded-2xl flex items-center justify-center shadow-2xl absolute -bottom-12 border-4 border-white z-10 transform rotate-3 transition-transform hover:rotate-0">
+                <img 
+                    src={logoImg} 
+                    alt="K-Core Logo" 
+                    className="w-16 h-16 object-contain filter drop-shadow-md" 
+                />
             </div>
         </div>
         
@@ -211,18 +213,17 @@ export default function AuthPage() {
               transition={{ duration: 0.5, ease: "easeInOut" }}
               className="w-full"
             >
-              <h2 className="text-4xl font-bold text-slate-800 mb-2 text-center tracking-tight">
-                {isSignIn ? "З поверненням!" : "Створити акаунт"}
+              <h2 className="text-3xl font-bold text-slate-800 mb-2 text-center tracking-tight">
+                {isSignIn ? "Kairos-Core System" : "Реєстрація"}
               </h2>
-              <p className="text-md text-slate-500 mb-8 text-center">
-                {isSignIn ? "Раді бачити вас знову" : "Заповніть форму для початку"}
+              <p className="text-sm text-slate-500 mb-8 text-center">
+                {isSignIn ? "Увійдіть, щоб керувати енергією" : "Приєднуйтесь до платформи майбутнього"}
               </p>
 
               {error && (
                 <motion.div
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="bg-red-50 border-l-4 border-red-400 text-red-700 px-4 py-3 rounded-r-lg mb-6 text-sm font-medium"
+                  initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+                  className="bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-r-lg mb-6 text-sm font-medium shadow-sm"
                 >
                   {error}
                 </motion.div>
@@ -230,9 +231,8 @@ export default function AuthPage() {
               
               {successMessage && (
                 <motion.div
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="bg-green-50 border-l-4 border-green-400 text-green-700 px-4 py-3 rounded-r-lg mb-6 text-sm font-medium"
+                  initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+                  className="bg-emerald-50 border-l-4 border-emerald-500 text-emerald-700 px-4 py-3 rounded-r-lg mb-6 text-sm font-medium shadow-sm"
                 >
                   {successMessage}
                 </motion.div>
@@ -250,7 +250,7 @@ export default function AuthPage() {
                 
                 <div className="relative">
                   <InputField name="password" type={showPassword ? "text" : "password"} placeholder="Пароль" value={formData.password} onChange={handleChange} icon={<FaLock />} disabled={isLoading} minLength={8}/>
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors focus:outline-none">
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600 transition-colors focus:outline-none">
                     {showPassword ? <FaEyeSlash /> : <FaEye />}
                   </button>
                 </div>
@@ -259,7 +259,7 @@ export default function AuthPage() {
                    <>
                     <div className="relative">
                         <InputField name="confirmPassword" type={showConfirmPassword ? "text" : "password"} placeholder="Підтвердити пароль" value={formData.confirmPassword} onChange={handleChange} icon={<FaLock />} disabled={isLoading} minLength={8}/>
-                        <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors focus:outline-none">
+                        <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600 transition-colors focus:outline-none">
                             {showConfirmPassword ? <FaEyeSlash /> : <FaEye />}
                         </button>
                     </div>
@@ -269,20 +269,19 @@ export default function AuthPage() {
 
                  {isSignIn && (
                     <div className="flex items-center justify-between">
-                       <label className="flex items-center text-sm text-slate-600 cursor-pointer">
-                           <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                       <label className="flex items-center text-sm text-slate-600 cursor-pointer hover:text-slate-800 transition-colors">
+                           <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
                            <span className="ml-2">Запам'ятати мене</span>
                        </label>
                     </div>
                  )}
-
 
                 <motion.button 
                     whileHover={{ scale: 1.02, y: -2 }} 
                     whileTap={{ scale: 0.98, y: 0 }} 
                     type="submit" 
                     disabled={isLoading} 
-                    className="w-full px-6 py-3.5 bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 disabled:from-slate-400 disabled:to-slate-500 text-white rounded-lg font-bold transition-all duration-300 shadow-lg hover:shadow-indigo-500/30 text-base tracking-wider flex items-center justify-center space-x-3 mt-6"
+                    className="w-full px-6 py-3.5 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:from-slate-400 disabled:to-slate-500 text-white rounded-lg font-bold transition-all duration-300 shadow-lg hover:shadow-blue-500/30 text-base tracking-wider flex items-center justify-center space-x-3 mt-6"
                 >
                   {isLoading ? (
                     <>
@@ -319,7 +318,7 @@ export default function AuthPage() {
                 whileTap={{ scale: 0.95 }}
                 onClick={toggleMode}
                 disabled={isLoading}
-                className="ml-2 text-sm font-semibold text-indigo-600 hover:text-indigo-800 transition-colors focus:outline-none"
+                className="ml-2 text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors focus:outline-none"
               >
                 {isSignIn ? 'Зареєструватись' : 'Увійти в систему'}
               </motion.button>
