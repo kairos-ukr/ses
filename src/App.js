@@ -1,7 +1,7 @@
 import React from "react";
 import { HashRouter as Router, Routes, Route } from "react-router-dom";
 import AuthPage from "./AuthPage";
-import HomePage from "./hp";
+import HomePage from "./homep";
 import SolCalc from "./sol_calc";
 import PhotoUploadSite from "./Ocr";
 import ProjectPage from "./inst2";

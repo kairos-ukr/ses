@@ -1,36 +1,36 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Fa from "react-icons/fa";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "./supabaseClient";
+import Layout from "./components/Layout";
 
-// --- Supabase Configuration --- //
-const supabaseUrl = 'https://logxutaepqzmvgsvscle.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE';
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-// --- Helper Functions --- //
+// --- Helpers --- //
 const getCategoryProps = (category) => ({
-    'solar_panel': { icon: Fa.FaSolarPanel, name: 'Сонячна панель' },
-    'battery': { icon: Fa.FaBatteryHalf, name: 'Акумулятор' },
-    'inverter': { icon: Fa.FaMicrochip, name: 'Інвертор' },
-    'logger': { icon: Fa.FaServer, name: 'Логер' }
-}[category] || { icon: Fa.FaCog, name: 'Інше' });
+    'solar_panel': { icon: Fa.FaSolarPanel, name: 'Сонячна панель', color: 'text-amber-600 bg-amber-50', border: 'border-amber-200' },
+    'battery': { icon: Fa.FaBatteryHalf, name: 'Акумулятор', color: 'text-emerald-600 bg-emerald-50', border: 'border-emerald-200' },
+    'inverter': { icon: Fa.FaMicrochip, name: 'Інвертор', color: 'text-blue-600 bg-blue-50', border: 'border-blue-200' },
+    'logger': { icon: Fa.FaServer, name: 'Логер', color: 'text-purple-600 bg-purple-50', border: 'border-purple-200' }
+}[category] || { icon: Fa.FaCog, name: 'Інше', color: 'text-slate-600 bg-slate-50', border: 'border-slate-200' });
 
 // --- UI Components --- //
 
-const Modal = React.memo(({ children, closeModal, size = "md" }) => {
+const Modal = memo(({ children, closeModal, size = "md" }) => {
     const sizeClasses = { sm: "max-w-md", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl" };
     return (
         <AnimatePresence>
             <motion.div
-                className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[100]"
+                // ОПТИМІЗАЦІЯ: Прибрано backdrop-blur для плавності на Android
+                className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 sm:p-6"
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={closeModal}
             >
                 <motion.div
-                    className={`bg-white/95 backdrop-blur-xl rounded-2xl w-full ${sizeClasses[size]} shadow-2xl border border-gray-200/50 max-h-[90vh] flex flex-col`}
-                    initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }}
-                    exit={{ scale: 0.9, opacity: 0, y: 20 }} onClick={(e) => e.stopPropagation()}
+                    // ОПТИМІЗАЦІЯ: Прибрано складні ефекти, залишено чистий білий фон
+                    className={`bg-white rounded-2xl w-full ${sizeClasses[size]} shadow-xl flex flex-col max-h-[90dvh] overflow-hidden`}
+                    initial={{ scale: 0.95, opacity: 0, y: 10 }} animate={{ scale: 1, opacity: 1, y: 0 }}
+                    exit={{ scale: 0.95, opacity: 0, y: 10 }} 
+                    transition={{ duration: 0.2 }} // Швидша анімація
+                    onClick={(e) => e.stopPropagation()}
                 >
                     {children}
                 </motion.div>
@@ -39,119 +39,93 @@ const Modal = React.memo(({ children, closeModal, size = "md" }) => {
     );
 });
 
-const InputField = React.memo(React.forwardRef(({ icon, label, error, showPassword, onTogglePassword, ...props }, ref) => (
+const InputField = memo(({ icon, label, error, showPassword, onTogglePassword, ...props }) => (
     <div>
-        {label && <label className="block text-sm font-semibold text-gray-700 mb-2">{label}</label>}
+        {label && <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">{label}</label>}
         <div className="relative">
-            {icon && <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none z-10">{icon}</span>}
+            {icon && <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-lg">{icon}</span>}
             <input
-                ref={ref}
                 {...props}
-                className={`w-full border rounded-xl ${icon ? 'pl-12' : 'pl-4'} pr-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 bg-gray-50/80 border-gray-200 ${props.disabled ? 'bg-gray-200 cursor-not-allowed text-gray-500' : 'hover:bg-gray-50'}`}
+                // text-base для запобігання зуму на iPhone
+                className={`w-full border rounded-xl ${icon ? 'pl-12' : 'pl-4'} pr-4 py-3.5 text-base sm:text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition bg-white border-slate-200 ${props.disabled ? 'bg-slate-50 text-slate-400' : ''} ${error ? 'border-red-500 focus:ring-red-200' : ''}`}
             />
             {props.type === 'password' && onTogglePassword && (
-                <button type="button" onClick={onTogglePassword} className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                    {showPassword ? <Fa.FaEyeSlash /> : <Fa.FaEye />}
+                <button type="button" onClick={onTogglePassword} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-2">
+                    {showPassword ? <Fa.FaEyeSlash size={18}/> : <Fa.FaEye size={18}/>}
                 </button>
             )}
         </div>
-        {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
-    </div>
-)));
-
-const SelectField = React.memo(({ icon, label, children, error, ...props }) => (
-    <div>
-        <label className="block text-sm font-semibold text-gray-700 mb-2">{label}</label>
-        <div className="relative">
-            <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none z-10">{icon}</span>
-            <select {...props} className={`w-full appearance-none border rounded-xl pl-12 pr-10 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 bg-gray-50/80 border-gray-200`}>
-                {children}
-            </select>
-            <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none">
-                <Fa.FaChevronDown className="text-gray-400" />
-            </div>
-        </div>
-        {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
+        {error && <p className="text-red-500 text-xs mt-1 font-bold ml-1">{error}</p>}
     </div>
 ));
 
+const TextAreaField = memo(({ label, error, ...props }) => (
+    <div>
+        {label && <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">{label}</label>}
+        <textarea
+            {...props}
+            className={`w-full border rounded-xl p-4 text-base sm:text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition bg-white border-slate-200 resize-none ${error ? 'border-red-500 focus:ring-red-200' : ''}`}
+        />
+        {error && <p className="text-red-500 text-xs mt-1 font-bold ml-1">{error}</p>}
+    </div>
+));
 
-const SearchableSelect = React.memo(({ options, value, onChange, icon, label, placeholder = "Оберіть..." }) => {
+const SelectField = memo(({ icon, label, children, error, ...props }) => (
+    <div>
+        <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">{label}</label>
+        <div className="relative">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-lg">{icon}</span>
+            <select {...props} className="w-full appearance-none border rounded-xl pl-12 pr-10 py-3.5 text-base sm:text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white border-slate-200">
+                {children}
+            </select>
+            <Fa.FaChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" />
+        </div>
+        {error && <p className="text-red-500 text-xs mt-1 ml-1">{error}</p>}
+    </div>
+));
+
+const SearchableSelect = memo(({ options, value, onChange, icon, label, placeholder = "Оберіть...", disabled = false }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
-    const selectRef = useRef(null);
-    const inputRef = useRef(null);
+    const wrapperRef = useRef(null);
 
-    const selectedOption = useMemo(() => options.find(opt => opt.value === value), [options, value]);
+    const selectedOption = options.find(opt => opt.value === value);
+    const filteredOptions = options.filter(opt => opt.label.toLowerCase().includes(searchTerm.toLowerCase()));
 
-    const filteredOptions = useMemo(() =>
-        options.filter(opt =>
-            opt.label.toLowerCase().includes(searchTerm.toLowerCase())
-        ), [options, searchTerm]);
-
-    const handleSelect = useCallback((optionValue) => {
-        onChange({ target: { name: 'equipment_id', value: optionValue } });
+    const handleSelect = (val) => {
+        onChange({ target: { name: 'equipment_id', value: val } });
         setIsOpen(false);
         setSearchTerm('');
-    }, [onChange]);
-    
-    useEffect(() => {
-        if (isOpen && inputRef.current) {
-            inputRef.current.focus();
-        }
-    }, [isOpen]);
+    };
 
     useEffect(() => {
         const handleClickOutside = (event) => {
-            if (selectRef.current && !selectRef.current.contains(event.target)) {
-                setIsOpen(false);
-            }
+            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) setIsOpen(false);
         };
         document.addEventListener('mousedown', handleClickOutside);
-        return () => {
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
+        return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
     return (
-        <div>
-            {label && <label className="block text-sm font-semibold text-gray-700 mb-2">{label}</label>}
-            <div className="relative" ref={selectRef}>
-                <button type="button" onClick={() => setIsOpen(!isOpen)} className="w-full border rounded-xl pl-12 pr-10 py-3 text-sm text-left bg-gray-50/80 border-gray-200 flex items-center justify-between">
-                    <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none z-10">{icon}</span>
-                    <span className={selectedOption ? 'text-gray-800' : 'text-gray-500'}>
-                        {selectedOption ? selectedOption.label : placeholder}
-                    </span>
-                    <Fa.FaChevronDown className={`transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+        <div ref={wrapperRef} className={disabled ? "opacity-50 pointer-events-none" : ""}>
+            {label && <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">{label}</label>}
+            <div className="relative">
+                <button type="button" onClick={() => setIsOpen(!isOpen)} className="w-full border border-slate-200 rounded-xl pl-12 pr-10 py-3.5 text-base sm:text-sm text-left bg-white flex items-center justify-between focus:ring-2 focus:ring-indigo-500 outline-none">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-lg">{icon}</span>
+                    <span className={`truncate ${selectedOption ? 'text-slate-800' : 'text-slate-500'}`}>{selectedOption ? selectedOption.label : placeholder}</span>
+                    <Fa.FaChevronDown className={`transition-transform ${isOpen ? 'rotate-180' : ''} text-slate-400 flex-shrink-0`} />
                 </button>
                 
                 <AnimatePresence>
                     {isOpen && (
-                        <motion.div 
-                            initial={{ opacity: 0, y: -10 }} 
-                            animate={{ opacity: 1, y: 0 }} 
-                            exit={{ opacity: 0, y: -10 }}
-                            className="absolute top-full mt-2 w-full bg-white border rounded-xl shadow-lg z-20 overflow-hidden"
-                        >
-                            <div className="p-2 border-b">
-                                <InputField 
-                                    ref={inputRef}
-                                    icon={<Fa.FaSearch />} 
-                                    placeholder="Пошук..." 
-                                    value={searchTerm} 
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                />
+                        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute z-20 top-full mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden max-h-60 overflow-y-auto">
+                            <div className="p-2 sticky top-0 bg-white border-b border-slate-100">
+                                <input type="text" autoFocus placeholder="Пошук..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-base sm:text-sm outline-none focus:border-indigo-500"/>
                             </div>
-                            <ul className="max-h-60 overflow-y-auto">
+                            <ul>
                                 {filteredOptions.length > 0 ? filteredOptions.map(opt => (
-                                    <li 
-                                        key={opt.value} 
-                                        onClick={() => handleSelect(opt.value)} 
-                                        className="px-4 py-2 hover:bg-indigo-50 cursor-pointer text-sm"
-                                    >
-                                        {opt.label}
-                                    </li>
-                                )) : <li className="px-4 py-2 text-sm text-gray-500">Не знайдено</li>}
+                                    <li key={opt.value} onClick={() => handleSelect(opt.value)} className="px-4 py-3 hover:bg-indigo-50 cursor-pointer text-sm text-slate-700 border-b border-slate-50 last:border-0">{opt.label}</li>
+                                )) : <li className="px-4 py-3 text-sm text-slate-400 text-center">Не знайдено</li>}
                             </ul>
                         </motion.div>
                     )}
@@ -161,158 +135,170 @@ const SearchableSelect = React.memo(({ options, value, onChange, icon, label, pl
     );
 });
 
+// --- Serial Number Tag Input ---
+const SerialNumberInput = ({ serials, onChange, max }) => {
+    const [inputVal, setInputVal] = useState('');
 
+    const addSerial = () => {
+        if (!inputVal.trim()) return;
+        // Валідація прибрана - додаємо скільки хочемо, або обмежуємо, якщо треба. 
+        // Але ви просили забрати блокування. Залишимо ліміт UI, щоб не додавати більше ніж quantity,
+        // але зберегти можна і менше.
+        if (serials.length >= max) return; 
+        const newSerials = [...serials, inputVal.trim()];
+        onChange(newSerials);
+        setInputVal('');
+    };
+
+    const removeSerial = (index) => {
+        const newSerials = serials.filter((_, i) => i !== index);
+        onChange(newSerials);
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            addSerial();
+        }
+    };
+
+    return (
+        <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">
+                Серійні номери ({serials.length} / {max})
+            </label>
+            <div className="border border-slate-200 rounded-xl bg-white p-2 focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-transparent transition-all">
+                <div className="flex flex-wrap gap-2 mb-2">
+                    {serials.map((sn, idx) => (
+                        <span key={idx} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 border border-indigo-100">
+                            {sn}
+                            <button type="button" onClick={() => removeSerial(idx)} className="text-indigo-400 hover:text-indigo-900"><Fa.FaTimes size={10}/></button>
+                        </span>
+                    ))}
+                </div>
+                {serials.length < max && (
+                    <div className="flex items-center gap-2">
+                        <Fa.FaTag className="text-slate-400 ml-2" />
+                        <input 
+                            type="text" 
+                            value={inputVal}
+                            onChange={(e) => setInputVal(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            placeholder="Введіть S/N і натисніть +"
+                            className="flex-1 text-base sm:text-sm outline-none py-1 text-slate-700 placeholder:text-slate-400"
+                        />
+                        <button 
+                            type="button" 
+                            onClick={addSerial}
+                            disabled={!inputVal.trim()}
+                            className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 disabled:opacity-50"
+                        >
+                            <Fa.FaPlus size={12}/>
+                        </button>
+                    </div>
+                )}
+            </div>
+            {/* Інформаційне повідомлення замість помилки */}
+            {serials.length < max && <p className="text-[10px] text-amber-500 mt-1 ml-1 font-medium">Ще можна додати {max - serials.length} шт. (не обов'язково)</p>}
+        </div>
+    );
+};
+
+// --- Оновлений NotificationSystem (Toast) ---
 const NotificationSystem = ({ notification, onDismiss }) => {
     useEffect(() => {
         if (notification.message) {
-            const timer = setTimeout(() => {
-                onDismiss();
-            }, notification.duration || 4000);
+            const timer = setTimeout(onDismiss, 4000);
             return () => clearTimeout(timer);
         }
     }, [notification, onDismiss]);
 
     return (
-        <div className="fixed top-6 right-6 z-[200]">
-            <AnimatePresence>
-                {notification.message && (
-                    <motion.div
-                        layout
-                        initial={{ opacity: 0, y: -20, scale: 0.9 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, x: 50, scale: 0.9 }}
-                        transition={{ type: 'spring', stiffness: 300, damping: 25 }}
-                        className={`max-w-sm w-full ${notification.type === 'error' ? 'bg-red-500' : 'bg-green-500'} text-white rounded-xl p-4 shadow-2xl flex items-center gap-4`}
-                    >
-                        <div className="flex-shrink-0">
-                            {notification.type === 'error' ? <Fa.FaTimesCircle /> : <Fa.FaCheckCircle />}
-                        </div>
-                        <div className="flex-1">
-                            <p className="font-semibold text-sm">{notification.message}</p>
-                        </div>
-                        <button onClick={onDismiss} className="text-white/80 hover:text-white transition-opacity"><Fa.FaTimes /></button>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
+        <AnimatePresence>
+            {notification.message && (
+                <motion.div 
+                    initial={{ opacity: 0, y: -50, scale: 0.9 }} 
+                    animate={{ opacity: 1, y: 0, scale: 1 }} 
+                    exit={{ opacity: 0, y: -50, scale: 0.9 }} 
+                    className={`
+                        fixed z-[200] flex items-center gap-3 p-4 rounded-xl shadow-2xl text-white font-medium
+                        top-4 left-4 right-4  /* Мобільний: зверху, на всю ширину */
+                        sm:left-auto sm:right-6 sm:w-auto sm:min-w-[300px] /* ПК: справа зверху */
+                        ${notification.type === 'error' ? 'bg-red-500' : 'bg-emerald-500'}
+                    `}
+                >
+                    <div className="flex-shrink-0 text-xl">
+                        {notification.type === 'error' ? <Fa.FaTimesCircle /> : <Fa.FaCheckCircle />}
+                    </div>
+                    <p className="text-sm flex-1">{notification.message}</p>
+                    <button onClick={onDismiss} className="opacity-80 hover:opacity-100 p-1"><Fa.FaTimes /></button>
+                </motion.div>
+            )}
+        </AnimatePresence>
     );
 };
-
 
 const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, children }) => {
     if (!isOpen) return null;
     return (
         <Modal closeModal={onClose} size="sm">
-            <div className="p-6">
-                <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 flex-shrink-0 bg-red-100 rounded-full flex items-center justify-center">
-                        <Fa.FaExclamationTriangle className="text-red-500 text-xl" />
-                    </div>
-                    <div>
-                        <h3 className="text-lg font-bold text-gray-800">{title}</h3>
-                    </div>
+            <div className="p-6 text-center">
+                <div className="mx-auto w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-4"><Fa.FaExclamationTriangle className="text-red-500 text-xl" /></div>
+                <h3 className="text-lg font-bold text-slate-800 mb-2">{title}</h3>
+                <p className="text-slate-500 text-sm mb-6">{children}</p>
+                <div className="flex justify-center gap-3">
+                    <button onClick={onClose} className="px-5 py-2.5 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200">Скасувати</button>
+                    <button onClick={onConfirm} className="px-5 py-2.5 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600">Видалити</button>
                 </div>
-                <p className="text-gray-600 mt-4">{children}</p>
-            </div>
-            <div className="flex justify-end gap-3 p-4 bg-gray-50/50 rounded-b-2xl border-t">
-                <button onClick={onClose} className="py-2 px-5 bg-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-300">Скасувати</button>
-                <button onClick={onConfirm} className="py-2 px-5 bg-red-500 text-white rounded-xl font-semibold hover:bg-red-600">Видалити</button>
             </div>
         </Modal>
     );
 };
 
-const Sidebar = React.memo(({ isOpen, onClose, onNavigate }) => {
-    const navLinks = [
-        { path: "/home", icon: Fa.FaHome, label: "Головна" },
-        { path: "/installations", icon: Fa.FaIndustry, label: "Об'єкти" },
-        { path: "/clients", icon: Fa.FaUserFriends, label: "Клієнти" },
-        { path: "/employees", icon: Fa.FaUserTie, label: "Працівники" },
-        { path: "/tasks", icon: Fa.FaTasks, label: "Мікрозадачі" },
-        { path: "/equipment", icon: Fa.FaBolt, label: "Обладнання" },
-        { path: "/payments", icon: Fa.FaCreditCard, label: "Платежі" },
-        { id: 'documents', label: 'Документи', icon: Fa.FaFolderOpen, path: '/documents' },
-    ];
-
-    return (
-        <AnimatePresence>
-            {isOpen && (
-                <>
-                    <motion.div
-                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                        onClick={onClose} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[110]"
-                    />
-                    <motion.div
-                        initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
-                        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-                        className="fixed top-0 right-0 h-full w-72 bg-white/95 backdrop-blur-xl shadow-2xl z-[120] flex flex-col"
-                    >
-                        <div className="p-5 border-b border-gray-200/80 flex items-center justify-between">
-                            <h2 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">Навігація</h2>
-                            <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><Fa.FaTimes /></button>
-                        </div>
-                        <nav className="flex-1 p-4 space-y-2">
-                            {navLinks.map(link => (
-                                <button key={link.path} onClick={() => onNavigate(link.path)} className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-indigo-50 text-gray-700 font-semibold transition-colors">
-                                    <link.icon className="text-indigo-500 text-lg" />
-                                    <span>{link.label}</span>
-                                </button>
-                            ))}
-                        </nav>
-                    </motion.div>
-                </>
-            )}
-        </AnimatePresence>
-    );
-});
-
-
-// --- Main Page Component --- //
+// --- Main Page --- //
 export default function EquipmentPage() {
     const navigate = useNavigate();
-    const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [activeTab, setActiveTab] = useState('installations');
     const [modal, setModal] = useState({ type: null, data: null });
     const [loading, setLoading] = useState(true);
     const [notification, setNotification] = useState({ message: null, type: 'success' });
     const [confirmDialog, setConfirmDialog] = useState({ isOpen: false });
     
-    // Data State
+    // Filters for Catalog
+    const [catalogCategoryFilter, setCatalogCategoryFilter] = useState('all');
+
     const [equipment, setEquipment] = useState([]);
     const [installedEquipment, setInstalledEquipment] = useState([]);
     const [installations, setInstallations] = useState([]);
     const [employees, setEmployees] = useState([]);
 
-    // UI State
     const [installationSearch, setInstallationSearch] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
     const ITEMS_PER_PAGE = 9;
     
-    const showNotification = useCallback((message, type = 'success', duration = 4000) => {
-        setNotification({ message, type, duration });
-    }, []);
+    const showNotification = useCallback((message, type = 'success') => setNotification({ message, type }), []);
 
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
-            const [equipmentRes, instsRes, installedRes, employeesRes] = await Promise.all([
+            const [eqRes, instRes, instEqRes, empRes] = await Promise.all([
                 supabase.from('equipment').select('*').order('name'),
                 supabase.from('installations').select('*, clients!inner(name)').order('created_at', { ascending: false }),
                 supabase.from('installed_equipment').select('*, equipment:equipment_id(*), employees:employee_custom_id(name, phone)').order('created_at', { ascending: false }),
                 supabase.from('employees').select('custom_id, name, phone').order('name')
             ]);
+            
+            if (eqRes.error) throw eqRes.error;
+            if (instRes.error) throw instRes.error;
+            if (instEqRes.error) throw instEqRes.error;
+            if (empRes.error) throw empRes.error;
 
-            if (equipmentRes.error) throw equipmentRes.error;
-            if (instsRes.error) throw instsRes.error;
-            if (installedRes.error) throw installedRes.error;
-            if (employeesRes.error) throw employeesRes.error;
-
-            setEquipment(equipmentRes.data);
-            setInstallations(instsRes.data);
-            setInstalledEquipment(installedRes.data);
-            setEmployees(employeesRes.data);
+            setEquipment(eqRes.data);
+            setInstallations(instRes.data);
+            setInstalledEquipment(instEqRes.data);
+            setEmployees(empRes.data);
         } catch (e) {
-            showNotification(`Помилка завантаження даних: ${e.message}`, 'error');
+            showNotification(e.message, 'error');
         } finally {
             setLoading(false);
         }
@@ -321,335 +307,417 @@ export default function EquipmentPage() {
     useEffect(() => { fetchData(); }, [fetchData]);
 
     const installationsWithEquipment = useMemo(() => {
-        const installationMap = new Map();
-        installations.forEach(inst => installationMap.set(inst.custom_id, { ...inst, equipment: [] }));
+        const map = new Map(installations.map(inst => [inst.custom_id, { ...inst, equipment: [] }]));
         installedEquipment.forEach(item => {
-            if (installationMap.has(item.installation_custom_id)) {
-                installationMap.get(item.installation_custom_id).equipment.push(item);
-            }
+            if (map.has(item.installation_custom_id)) map.get(item.installation_custom_id).equipment.push(item);
         });
-        return Array.from(installationMap.values());
+        return Array.from(map.values());
     }, [installations, installedEquipment]);
 
-    const filteredInstallations = useMemo(() =>
-        installationsWithEquipment.filter(inst => {
-            const clientName = inst.clients?.name || '';
-            const objectName = inst.name || '';
-            const searchTerm = installationSearch.toLowerCase();
-            return clientName.toLowerCase().includes(searchTerm) || 
-                   objectName.toLowerCase().includes(searchTerm) ||
-                   inst.custom_id.toString().includes(searchTerm);
-        }),
-        [installationsWithEquipment, installationSearch]
-    );
+    const filteredInstallations = useMemo(() => {
+        const term = installationSearch.toLowerCase();
+        return installationsWithEquipment.filter(inst => 
+            inst.name?.toLowerCase().includes(term) || 
+            inst.clients?.name?.toLowerCase().includes(term) || 
+            inst.custom_id.toString().includes(term)
+        );
+    }, [installationsWithEquipment, installationSearch]);
     
+    const filteredCatalog = useMemo(() => {
+        let res = equipment;
+        if (catalogCategoryFilter !== 'all') {
+            res = res.filter(e => e.category === catalogCategoryFilter);
+        }
+        return res;
+    }, [equipment, catalogCategoryFilter]);
+
     const paginatedInstallations = useMemo(() => {
-        const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-        return filteredInstallations.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+        const start = (currentPage - 1) * ITEMS_PER_PAGE;
+        return filteredInstallations.slice(start, start + ITEMS_PER_PAGE);
     }, [filteredInstallations, currentPage]);
 
-    const totalPages = Math.ceil(filteredInstallations.length / ITEMS_PER_PAGE);
-
-    const handleCrudSubmit = useCallback(async (promise, successMsg) => {
+    const handleCrud = async (promise, msg) => {
         setLoading(true);
         const { error } = await promise;
-        if (error) {
-            showNotification(`Помилка: ${error.message}`, 'error');
-        } else {
-            showNotification(successMsg);
-            setModal({ type: null });
-            await fetchData();
-        }
+        if (error) showNotification(error.message, 'error');
+        else { showNotification(msg); setModal({ type: null }); fetchData(); }
         setLoading(false);
-    }, [fetchData, showNotification]);
+    };
 
-    const handleTypeSubmit = useCallback((typeForm) => {
-        const payload = { ...typeForm, power_kw: typeForm.power_kw ? parseFloat(typeForm.power_kw) : null };
-        const promise = modal.data?.id
-            ? supabase.from('equipment').update(payload).eq('id', modal.data.id)
-            : supabase.from('equipment').insert([payload]);
-        handleCrudSubmit(promise, modal.data?.id ? 'Тип оновлено!' : 'Тип додано!');
-    }, [handleCrudSubmit, modal.data]);
-    
-    const deleteType = useCallback((id) => {
+    const handleTypeSubmit = (data) => {
+        const payload = { ...data, power_kw: data.power_kw ? parseFloat(data.power_kw) : null };
+        const req = modal.data?.id ? supabase.from('equipment').update(payload).eq('id', modal.data.id) : supabase.from('equipment').insert([payload]);
+        handleCrud(req, modal.data?.id ? 'Оновлено' : 'Створено');
+    };
+
+    const deleteType = (id) => {
         setConfirmDialog({
-            isOpen: true,
-            title: "Підтвердити видалення",
-            message: "Видалити цей тип обладнання? Це може вплинути на існуючі записи.",
-            onConfirm: () => {
-                setConfirmDialog({ isOpen: false });
-                handleCrudSubmit(supabase.from('equipment').delete().eq('id', id), 'Тип видалено.');
-            }
+            isOpen: true, title: "Видалити тип?", message: "Це вплине на всі записи.",
+            onConfirm: () => { setConfirmDialog({ isOpen: false }); handleCrud(supabase.from('equipment').delete().eq('id', id), 'Видалено'); }
         });
-    }, [handleCrudSubmit]);
-    
-    const handleAssignSubmit = useCallback((formData) => {
-        const payload = { ...formData };
-        payload.equipment_id = parseInt(payload.equipment_id, 10);
-        payload.quantity = parseInt(payload.quantity, 10);
-        
-        const promise = supabase.from('installed_equipment').insert([payload]);
-        handleCrudSubmit(promise, 'Обладнання призначено!');
-    }, [handleCrudSubmit]);
-    
-    const handleUpdateDetailsSubmit = useCallback((detailsData) => {
-        const { id, ...payload } = detailsData;
-        payload.employee_custom_id = payload.employee_custom_id ? parseInt(payload.employee_custom_id, 10) : null;
-        
-        const promise = supabase.from('installed_equipment').update(payload).eq('id', id);
-        handleCrudSubmit(promise, 'Деталі оновлено!');
-    }, [handleCrudSubmit]);
+    };
 
-    const removeEquipmentFromInstallation = useCallback((id) => {
+    const handleAssign = (data) => {
+        const payload = { ...data, equipment_id: parseInt(data.equipment_id), quantity: parseInt(data.quantity) };
+        handleCrud(supabase.from('installed_equipment').insert([payload]), 'Додано на об\'єкт');
+    };
+
+    const handleUpdateDetails = (data) => {
+        const { id, ...payload } = data;
+        payload.employee_custom_id = payload.employee_custom_id ? parseInt(payload.employee_custom_id) : null;
+        
+        if (payload.serial_number && Array.isArray(payload.serial_number)) {
+             payload.serial_number = JSON.stringify(payload.serial_number);
+        }
+
+        handleCrud(supabase.from('installed_equipment').update(payload).eq('id', id), 'Оновлено');
+    };
+
+    const removeEquipment = (id) => {
         setConfirmDialog({
-            isOpen: true,
-            title: "Підтвердити видалення",
-            message: "Ви впевнені, що хочете видалити це обладнання з об'єкту?",
-            onConfirm: () => {
-                setConfirmDialog({ isOpen: false });
-                handleCrudSubmit(supabase.from('installed_equipment').delete().eq('id', id), 'Обладнання знято.');
-            }
+            isOpen: true, title: "Зняти обладнання?", message: "Ви впевнені?",
+            onConfirm: () => { setConfirmDialog({ isOpen: false }); handleCrud(supabase.from('installed_equipment').delete().eq('id', id), 'Знято'); }
         });
-    }, [handleCrudSubmit]);
+    };
 
-    const handleNavigate = useCallback((path) => {
-        setIsMenuOpen(false);
-        navigate(path);
-    }, [navigate]);
-    
     return (
-        <div className="min-h-screen bg-slate-50">
-            <NotificationSystem notification={notification} onDismiss={() => setNotification({ message: null })} />
-            <Sidebar isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} onNavigate={handleNavigate} />
-            <ConfirmationModal
-                isOpen={confirmDialog.isOpen}
-                onClose={() => setConfirmDialog({ isOpen: false })}
-                onConfirm={confirmDialog.onConfirm}
-                title={confirmDialog.title}
-            >
-                {confirmDialog.message}
-            </ConfirmationModal>
+        <Layout>
+            <div className="p-4 sm:p-8 space-y-6 max-w-[1600px] mx-auto pb-safe min-h-[calc(100dvh-80px)] flex flex-col">
+                <NotificationSystem notification={notification} onDismiss={() => setNotification({ message: null })} />
+                <ConfirmationModal {...confirmDialog} onClose={() => setConfirmDialog({ isOpen: false })} />
 
-            <header className="sticky top-0 bg-white/80 backdrop-blur-xl border-b border-gray-200/50 z-50">
-                <div className="px-4 sm:px-6 py-4 flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                         <button onClick={() => navigate(-1)} className="w-10 h-10 bg-white border border-gray-200 hover:bg-gray-100 text-gray-600 rounded-full flex items-center justify-center shadow-sm hover:shadow-md transition-all">
-                            <Fa.FaArrowLeft />
-                        </button>
-                        <h1 className="text-xl font-bold text-gray-800">Управління обладнанням</h1>
+                {/* HEADER */}
+                <div className="flex flex-col gap-4 flex-none">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                        <div>
+                            <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
+                                <Fa.FaBolt className="text-indigo-600"/> Обладнання
+                            </h1>
+                            <p className="text-slate-500 text-sm mt-1">Облік та розподіл по об'єктах</p>
+                        </div>
+                        
+                        {/* TABS */}
+                        <div className="flex bg-slate-100 p-1 rounded-xl w-full sm:w-auto">
+                            <button onClick={() => setActiveTab('installations')} className={`flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'installations' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Об'єкти</button>
+                            <button onClick={() => setActiveTab('catalog')} className={`flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'catalog' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Довідник</button>
+                        </div>
                     </div>
-                    <button onClick={() => setIsMenuOpen(true)} className="w-10 h-10 bg-white border border-gray-200 hover:bg-gray-100 text-gray-600 rounded-full flex items-center justify-center shadow-sm hover:shadow-md transition-all">
-                        <Fa.FaBars />
-                    </button>
-                </div>
-            </header>
-            
-            <main className="p-4 sm:p-6 lg:p-8">
-                <div className="mb-8 max-w-md mx-auto">
-                    <div className="flex space-x-1 bg-white/60 backdrop-blur-xl p-1 rounded-full shadow-lg border border-gray-200/50">
-                        <button onClick={() => setActiveTab('installations')} className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-full font-medium text-sm transition-all ${activeTab === 'installations' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:text-gray-800'}`}><Fa.FaBuilding /> <span>Об'єкти</span></button>
-                        <button onClick={() => setActiveTab('catalog')} className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-full font-medium text-sm transition-all ${activeTab === 'catalog' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:text-gray-800'}`}><Fa.FaBook /> <span>Довідник</span></button>
-                    </div>
+
+                    {/* SEARCH & FILTERS */}
+                    {activeTab === 'installations' && (
+                        <div className="relative">
+                            <Fa.FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
+                            <input type="text" placeholder="Пошук об'єкта..." value={installationSearch} onChange={e => {setInstallationSearch(e.target.value); setCurrentPage(1);}} className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-base sm:text-sm shadow-sm"/>
+                        </div>
+                    )}
+                    {activeTab === 'catalog' && (
+                        <div className="flex flex-col sm:flex-row gap-3">
+                            <div className="flex bg-white border border-slate-200 p-1 rounded-xl overflow-x-auto no-scrollbar flex-1">
+                                {[{id: 'all', l: 'Всі'}, {id: 'inverter', l: 'Інвертори'}, {id: 'battery', l: 'АКБ'}, {id: 'solar_panel', l: 'Панелі'}, {id: 'logger', l: 'Логери'}].map(cat => (
+                                    <button key={cat.id} onClick={() => setCatalogCategoryFilter(cat.id)} className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${catalogCategoryFilter === cat.id ? 'bg-slate-800 text-white shadow' : 'text-slate-600 hover:bg-slate-50'}`}>{cat.l}</button>
+                                ))}
+                            </div>
+                            <button onClick={() => setModal({type: 'addType', data: null})} className="w-full sm:w-auto self-end flex items-center justify-center gap-2 py-2.5 px-5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all text-sm">
+                                <Fa.FaPlus /> <span>Додати</span>
+                            </button>
+                        </div>
+                    )}
                 </div>
 
-                <AnimatePresence mode="wait">
-                    <motion.div key={activeTab} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-                        {activeTab === 'installations' && (
-                            <div>
-                                <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6 bg-white/90 backdrop-blur-xl rounded-2xl p-4 sm:p-6 shadow-xl border border-gray-200/50">
-                                    <h2 className="text-xl font-bold text-gray-800 whitespace-nowrap">Список об'єктів</h2>
-                                    <div className="w-full md:max-w-xs">
-                                        <InputField icon={<Fa.FaSearch />} type="text" placeholder="Пошук за назвою, клієнтом, ID..." value={installationSearch} onChange={e => {setInstallationSearch(e.target.value); setCurrentPage(1);}} />
+                {/* CONTENT */}
+                <div className="flex-1">
+                    <AnimatePresence mode="wait">
+                        {activeTab === 'installations' ? (
+                            <motion.div key="installations" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
+                                {loading ? <div className="col-span-full text-center py-20 text-slate-400">Завантаження...</div> : 
+                                paginatedInstallations.length === 0 ? <div className="col-span-full text-center py-20 text-slate-400 bg-white rounded-2xl border border-dashed border-slate-200">Нічого не знайдено</div> :
+                                paginatedInstallations.map((inst) => (
+                                    <div key={inst.custom_id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col">
+                                        <div className="flex justify-between items-start mb-4">
+                                            <div>
+                                                <h3 className="font-bold text-lg text-slate-800 line-clamp-1">{inst.name || 'Без назви'}</h3>
+                                                <p className="text-xs text-slate-500 font-medium">{inst.clients?.name}</p>
+                                            </div>
+                                            <span className="text-xs font-mono font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded">#{inst.custom_id}</span>
+                                        </div>
+                                        
+                                        <div className="flex-1 space-y-2 mb-4 overflow-y-auto max-h-60 pr-1 custom-scrollbar">
+                                            {inst.equipment.length > 0 ? inst.equipment.map(item => {
+                                                const { icon: Icon, color } = getCategoryProps(item.equipment?.category);
+                                                // Helper to check if S/N is JSON array or string
+                                                let serialDisplay = 'S/N ---';
+                                                try {
+                                                    const parsed = JSON.parse(item.serial_number);
+                                                    if (Array.isArray(parsed) && parsed.length > 0) serialDisplay = `${parsed[0]}...`;
+                                                    else if (item.serial_number) serialDisplay = item.serial_number;
+                                                } catch(e) {
+                                                    if(item.serial_number) serialDisplay = item.serial_number.substring(0,10) + '...';
+                                                }
+
+                                                return (
+                                                    <div key={item.id} className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className={`p-2 rounded-lg ${color}`}><Icon /></div>
+                                                            <div>
+                                                                <p className="text-sm font-bold text-slate-700">{item.equipment?.name}</p>
+                                                                <p className="text-[10px] text-slate-400 font-mono">
+                                                                    {item.equipment?.category === 'solar_panel' ? 'Панель' : serialDisplay}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-1">
+                                                            <span className="text-xs font-bold text-slate-600 mr-2">x{item.quantity}</span>
+                                                            <button onClick={() => setModal({ type: 'viewDetails', data: item })} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg"><Fa.FaEye/></button>
+                                                            <button onClick={() => setModal({ type: 'editDetails', data: item })} className="p-1.5 text-amber-500 hover:bg-amber-50 rounded-lg"><Fa.FaPencilAlt/></button>
+                                                            <button onClick={() => removeEquipment(item.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Fa.FaTrash/></button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            }) : <p className="text-sm text-slate-400 italic text-center py-4">Обладнання відсутнє</p>}
+                                        </div>
+                                        
+                                        <button onClick={() => setModal({type: 'assign', data: inst})} className="w-full py-2.5 border-2 border-dashed border-indigo-200 text-indigo-600 rounded-xl font-bold hover:bg-indigo-50 transition-colors flex items-center justify-center gap-2"><Fa.FaPlus/> Додати</button>
+                                    </div>
+                                ))}
+                            </motion.div>
+                        ) : (
+                            <motion.div key="catalog" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+                                {/* DESKTOP TABLE */}
+                                <div className="hidden md:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left">
+                                            <thead className="bg-slate-50 border-b border-slate-200">
+                                                <tr>
+                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase">Назва</th>
+                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase">Категорія</th>
+                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase">Потужність</th>
+                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase">Виробник</th>
+                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase text-right">Дії</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {filteredCatalog.map((type) => {
+                                                    const { name: catName, color } = getCategoryProps(type.category);
+                                                    return (
+                                                        <tr key={type.id} className="hover:bg-slate-50/50 transition-colors">
+                                                            <td className="p-4 text-sm font-bold text-slate-700">{type.name}</td>
+                                                            <td className="p-4"><span className={`px-2.5 py-1 rounded-full text-xs font-bold ${color}`}>{catName}</span></td>
+                                                            <td className="p-4 text-sm text-slate-600">{type.power_kw ? `${type.power_kw} кВт` : '—'}</td>
+                                                            <td className="p-4 text-sm text-slate-600">{type.manufacturer || '—'}</td>
+                                                            <td className="p-4 text-right">
+                                                                <button onClick={() => setModal({type: 'editType', data: type})} className="p-2 text-slate-400 hover:text-indigo-600"><Fa.FaEdit/></button>
+                                                                <button onClick={() => deleteType(type.id)} className="p-2 text-slate-400 hover:text-red-600"><Fa.FaTrash/></button>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
                                     </div>
                                 </div>
-                                {loading ? <div className="text-center p-10">Завантаження...</div> : (
-                                    <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
-                                        {paginatedInstallations.map((inst, index) => (
-                                            <motion.div key={inst.custom_id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.05 }} className="bg-white/90 backdrop-blur-xl rounded-2xl p-6 shadow-xl border border-gray-200/50 flex flex-col justify-between">
-                                                <div>
-                                                    <h3 className="text-lg font-bold text-gray-900">{inst.name || 'Об\'єкт без назви'}</h3>
-                                                    <p className="text-gray-600 text-sm">{inst.clients?.name}</p>
-                                                    <span className="text-xs text-gray-500 font-mono bg-gray-100 px-2 py-1 rounded">ID: {inst.custom_id}</span>
-                                                    <div className="border-t my-4"></div>
-                                                    <div className="space-y-3 max-h-48 overflow-y-auto pr-2">
-                                                        {inst.equipment.length > 0 ? inst.equipment.map(item => {
-                                                            const { icon: Icon } = getCategoryProps(item.equipment?.category);
-                                                            return (
-                                                                <div key={item.id} className="flex items-center justify-between text-sm p-2 rounded-lg bg-gray-50/70">
-                                                                    <div className="flex items-center gap-3"><Icon className="text-indigo-500 text-base"/> <div><span className="font-medium">{item.equipment?.name}</span><p className="text-xs text-gray-500 font-mono">{item.serial_number || 'S/N не вказано'}</p></div></div>
-                                                                    <div className="flex items-center gap-2">
-                                                                        <span className="font-bold text-gray-600 mr-2">x{item.quantity}</span>
-                                                                        <button onClick={() => setModal({ type: 'viewDetails', data: item })} className="text-sky-500 hover:text-sky-700"><Fa.FaEye /></button>
-                                                                        <button onClick={() => setModal({ type: 'editDetails', data: item })} className="text-amber-500 hover:text-amber-700"><Fa.FaPencilAlt /></button>
-                                                                        <button onClick={() => removeEquipmentFromInstallation(item.id)} className="text-red-400 hover:text-red-600"><Fa.FaTrash /></button>
-                                                                    </div>
-                                                                </div>
-                                                            );
-                                                        }) : <p className="text-sm text-gray-500 italic text-center py-4">Немає обладнання</p>}
+
+                                {/* MOBILE CARDS */}
+                                <div className="md:hidden space-y-3">
+                                    {filteredCatalog.map((type) => {
+                                        const { name: catName, color, icon: Icon } = getCategoryProps(type.category);
+                                        return (
+                                            <div key={type.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-3">
+                                                <div className="flex justify-between items-start">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className={`p-2.5 rounded-lg ${color}`}><Icon /></div>
+                                                        <div>
+                                                            <h4 className="font-bold text-slate-800 text-sm">{type.name}</h4>
+                                                            <span className="text-xs text-slate-500 font-medium">{catName}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex gap-1">
+                                                        <button onClick={() => setModal({type: 'editType', data: type})} className="p-2 text-slate-400 hover:text-indigo-600 bg-slate-50 rounded-lg"><Fa.FaEdit/></button>
+                                                        <button onClick={() => deleteType(type.id)} className="p-2 text-slate-400 hover:text-red-600 bg-slate-50 rounded-lg"><Fa.FaTrash/></button>
                                                     </div>
                                                 </div>
-                                                <button onClick={() => setModal({type: 'assign', data: inst})} className="mt-4 w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:shadow-lg font-semibold transition-shadow"><Fa.FaPlus/> Додати обладнання</button>
-                                            </motion.div>
-                                        ))}
-                                    </div>
-                                )}
-                                {totalPages > 1 && (
-                                    <div className="flex justify-center items-center gap-4 mt-8">
-                                        <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-4 py-2 bg-white rounded-lg shadow border disabled:opacity-50 disabled:cursor-not-allowed"> <Fa.FaChevronLeft/> </button>
-                                        <span className="font-medium text-gray-700">Сторінка {currentPage} з {totalPages}</span>
-                                        <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="px-4 py-2 bg-white rounded-lg shadow border disabled:opacity-50 disabled:cursor-not-allowed"> <Fa.FaChevronRight/> </button>
-                                    </div>
-                                )}
-                            </div>
+                                                <div className="flex justify-between text-xs pt-2 border-t border-slate-100 text-slate-500">
+                                                    <span>{type.manufacturer || 'Виробник не вказаний'}</span>
+                                                    <span>{type.power_kw ? `${type.power_kw} кВт` : ''}</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </motion.div>
                         )}
+                    </AnimatePresence>
+                </div>
 
-                        {activeTab === 'catalog' && (
-                           <div>
-                                <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6 bg-white/90 backdrop-blur-xl rounded-2xl p-4 sm:p-6 shadow-xl border border-gray-200/50">
-                                    <h2 className="text-xl font-bold text-gray-800">Довідник обладнання</h2>
-                                     <button onClick={() => setModal({type: 'addType', data: null})} className="w-full md:w-auto flex items-center justify-center gap-2 py-3 px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl"><Fa.FaPlus /> Додати тип</button>
-                                </div>
-                                <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200/50 overflow-x-auto">
-                                    <table className="w-full text-left min-w-[700px]">
-                                        <thead className="bg-gray-50/70 border-b border-gray-200">
-                                            <tr><th className="p-5 font-semibold text-gray-600 text-sm">Обладнання</th><th className="p-5 font-semibold text-gray-600 text-sm">Категорія</th><th className="p-5 font-semibold text-gray-600 text-sm">Потужність, кВт</th><th className="p-5 font-semibold text-gray-600 text-sm">Виробник</th><th className="p-5 font-semibold text-gray-600 text-sm text-right">Дії</th></tr>
-                                        </thead>
-                                        <tbody>
-                                           {equipment.map((type) => {
-                                                const { name: catName } = getCategoryProps(type.category);
-                                                return (
-                                                    <tr key={type.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/70">
-                                                        <td className="p-5 font-semibold text-gray-800">{type.name}</td>
-                                                        <td className="p-5"><span className="px-3 py-1 rounded-full text-sm font-medium bg-gray-200 text-gray-700">{catName}</span></td>
-                                                        <td className="p-5 text-gray-600">{type.power_kw || '—'}</td>
-                                                        <td className="p-5 text-gray-600">{type.manufacturer || '—'}</td>
-                                                        <td className="p-5 text-right"><div className="flex items-center justify-end gap-2"><button onClick={() => setModal({type: 'editType', data: type})} className="p-2 text-gray-600 hover:bg-gray-200 rounded-full"><Fa.FaEdit/></button><button onClick={() => deleteType(type.id)} className="p-2 text-red-500 hover:bg-red-100 rounded-full"><Fa.FaTrash/></button></div></td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                           </div>
-                        )}
-                    </motion.div>
+                {/* MODALS */}
+                <AnimatePresence>
+                    {modal.type === 'assign' && <AssignEquipmentModal closeModal={() => setModal({ type: null })} installation={modal.data} onAssign={handleAssign} equipmentCatalog={equipment} showNotification={showNotification} />}
+                    {(modal.type === 'addType' || modal.type === 'editType') && <TypeFormModal closeModal={() => setModal({ type: null })} onSubmit={handleTypeSubmit} initialData={modal.data} loading={loading} />}
+                    {modal.type === 'viewDetails' && <EquipmentDetailsModal closeModal={() => setModal({ type: null })} item={modal.data} />}
+                    {modal.type === 'editDetails' && <EditDetailsModal closeModal={() => setModal({ type: null })} onSubmit={handleUpdateDetails} initialData={modal.data} employees={employees} loading={loading} />}
                 </AnimatePresence>
-            </main>
-            
-            <AnimatePresence>
-                {modal.type && (
-                    <>
-                        {modal.type === 'assign' && 
-                            <AssignEquipmentModal 
-                                closeModal={() => setModal({ type: null })} 
-                                installation={modal.data} 
-                                onAssign={handleAssignSubmit} 
-                                equipmentCatalog={equipment}
-                                showNotification={showNotification} 
-                            />
-                        }
-                        {(modal.type === 'addType' || modal.type === 'editType') && 
-                            <TypeFormModal 
-                                closeModal={() => setModal({ type: null })}
-                                onSubmit={handleTypeSubmit}
-                                initialData={modal.data}
-                                loading={loading}
-                            />
-                        }
-                        {modal.type === 'viewDetails' && 
-                             <EquipmentDetailsModal 
-                                closeModal={() => setModal({ type: null })}
-                                item={modal.data}
-                            />
-                        }
-                        {modal.type === 'editDetails' &&
-                            <EditDetailsModal
-                                closeModal={() => setModal({ type: null })}
-                                onSubmit={handleUpdateDetailsSubmit}
-                                initialData={modal.data}
-                                employees={employees}
-                                loading={loading}
-                            />
-                        }
-                    </>
-                )}
-            </AnimatePresence>
-        </div>
+            </div>
+        </Layout>
     );
 }
 
-// --- Assign Equipment Modal Component (Simplified) --- //
+// --- SUB-COMPONENTS ---
+
 function AssignEquipmentModal({ closeModal, installation, onAssign, equipmentCatalog, showNotification }) {
-    const [formData, setFormData] = useState({
-        installation_custom_id: installation.custom_id,
-        equipment_id: '',
-        serial_number: '',
-        quantity: 1,
-    });
+    const [formData, setFormData] = useState({ installation_custom_id: installation.custom_id, equipment_id: '', serial_number: '', quantity: 1 });
     
-    const equipmentOptions = useMemo(() => 
-        equipmentCatalog.map(e => ({ value: e.id, label: e.name })),
-        [equipmentCatalog]
-    );
+    // Category Filter in Assign Modal
+    const [categoryFilter, setCategoryFilter] = useState('');
+    
+    const categories = [
+        {id: 'solar_panel', l: 'Панелі'}, {id: 'inverter', l: 'Інвертори'}, {id: 'battery', l: 'АКБ'}, {id: 'logger', l: 'Логери'}, {id: 'other', l: 'Інше'}
+    ];
 
-    const handleChange = useCallback((e) => {
-        const { name, value } = e.target;
-        setFormData(prev => ({ ...prev, [name]: value }));
-    }, []);
-
-    const handleSubmit = useCallback((e) => {
-        e.preventDefault();
-        if (!formData.equipment_id) {
-            showNotification('Будь ласка, виберіть тип обладнання', 'error');
-            return;
+    const options = useMemo(() => {
+        let filtered = equipmentCatalog;
+        if(categoryFilter) {
+            filtered = filtered.filter(e => e.category === categoryFilter);
         }
-        onAssign(formData);
-    }, [formData, onAssign, showNotification]);
-
+        return filtered.map(e => ({ value: e.id, label: e.name }));
+    }, [equipmentCatalog, categoryFilter]);
+    
+    const handleSubmit = (e) => { e.preventDefault(); if(!formData.equipment_id) return showNotification('Оберіть тип', 'error'); onAssign(formData); };
+    
     return (
-        <Modal closeModal={closeModal} size="lg">
-            <form onSubmit={handleSubmit} className="flex flex-col h-full">
-                <div className="p-6 md:p-8">
-                    <h3 className="text-2xl font-bold text-gray-800 mb-2">Додати обладнання на об'єкт</h3>
-                    <p className="text-indigo-600 font-medium">{installation.name} ({installation.clients?.name})</p>
-                </div>
-                
-                <div className="flex-grow overflow-y-auto border-t border-b py-6 px-6 md:px-8 space-y-4">
-                    <SearchableSelect
-                        label="Модель обладнання"
-                        icon={<Fa.FaCog />}
-                        options={equipmentOptions}
-                        value={formData.equipment_id}
-                        onChange={handleChange}
-                    />
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <InputField name="serial_number" label="Серійний номер" icon={<Fa.FaTag/>} value={formData.serial_number} onChange={handleChange} />
-                        <InputField name="quantity" label="Кількість" type="number" min="1" icon={<Fa.FaHashtag/>} value={formData.quantity} onChange={handleChange} required />
+        <Modal closeModal={closeModal} size="md">
+            <form onSubmit={handleSubmit} className="flex flex-col h-full overflow-hidden">
+                <div className="flex-none p-6 border-b border-slate-100"><h3 className="text-xl font-bold text-slate-800">Додати на об'єкт</h3><p className="text-sm text-indigo-600">{installation.name}</p></div>
+                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                    
+                    {/* Category Filter */}
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Фільтр категорій</label>
+                        <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => setCategoryFilter('')} className={`px-3 py-1.5 rounded-lg text-xs font-bold ${!categoryFilter ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'}`}>Всі</button>
+                            {categories.map(cat => (
+                                <button key={cat.id} type="button" onClick={() => setCategoryFilter(cat.id)} className={`px-3 py-1.5 rounded-lg text-xs font-bold ${categoryFilter === cat.id ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>{cat.l}</button>
+                            ))}
+                        </div>
                     </div>
+
+                    <SearchableSelect label="Модель обладнання" icon={<Fa.FaBoxOpen/>} options={options} value={formData.equipment_id} onChange={(e) => setFormData({...formData, equipment_id: e.target.value})} placeholder={categoryFilter ? "Оберіть зі списку..." : "Спочатку оберіть категорію або шукайте..."} />
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                        <InputField label="Кількість" type="number" min="1" icon={<Fa.FaHashtag/>} value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} />
+                    </div>
+                    <p className="text-xs text-slate-400 italic">Деталі (S/N, логіни) додаються через редагування.</p>
                 </div>
-                
-                <div className="flex justify-end gap-3 p-6 bg-gray-50/50 rounded-b-2xl mt-auto border-t">
-                    <button type="button" onClick={closeModal} className="py-2 px-5 bg-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-300">Скасувати</button>
-                    <button type="submit" className="py-2 px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg">Додати на об'єкт</button>
+                <div className="flex-none p-6 flex justify-end gap-3 bg-slate-50 border-t border-slate-100 pb-safe">
+                    <button type="button" onClick={closeModal} className="px-4 py-2 bg-white border border-slate-200 rounded-lg font-bold text-slate-600">Скасувати</button>
+                    <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold shadow-lg">Додати</button>
                 </div>
             </form>
         </Modal>
     );
 }
 
-// --- NEW: Edit Details Modal Component --- //
+function TypeFormModal({ closeModal, onSubmit, initialData, loading }) {
+    const [formData, setFormData] = useState(initialData || { name: '', category: '', power_kw: '', manufacturer: '' });
+    return (
+        <Modal closeModal={closeModal} size="md">
+            <form onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }} className="flex flex-col h-full overflow-hidden">
+                <div className="flex-none p-6 border-b border-slate-100"><h3 className="text-xl font-bold text-slate-800">{initialData ? 'Редагувати тип' : 'Новий тип'}</h3></div>
+                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                    <InputField label="Назва" icon={<Fa.FaTag/>} value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
+                    <SelectField label="Категорія" icon={<Fa.FaFilter/>} value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
+                        <option value="">Оберіть...</option><option value="solar_panel">Панель</option><option value="inverter">Інвертор</option><option value="battery">АКБ</option><option value="logger">Логер</option>
+                    </SelectField>
+                    <div className="grid grid-cols-2 gap-4">
+                        <InputField label="Потужність (кВт)" type="number" step="0.01" icon={<Fa.FaBolt/>} value={formData.power_kw} onChange={e => setFormData({...formData, power_kw: e.target.value})} />
+                        <InputField label="Виробник" icon={<Fa.FaBuilding/>} value={formData.manufacturer} onChange={e => setFormData({...formData, manufacturer: e.target.value})} />
+                    </div>
+                </div>
+                <div className="flex-none p-6 flex justify-end gap-3 bg-slate-50 border-t border-slate-100 pb-safe">
+                    <button type="button" onClick={closeModal} className="px-4 py-2 bg-white border border-slate-200 rounded-lg font-bold text-slate-600">Скасувати</button>
+                    <button type="submit" disabled={loading} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold shadow-lg">Зберегти</button>
+                </div>
+            </form>
+        </Modal>
+    );
+}
+
+function EquipmentDetailsModal({ closeModal, item }) {
+    const [showPass, setShowPass] = useState(false);
+    
+    // Parse serials just in case
+    let serialDisplay = '---';
+    try {
+        const parsed = JSON.parse(item.serial_number);
+        if (Array.isArray(parsed)) serialDisplay = parsed.join(', ');
+        else serialDisplay = item.serial_number || '---';
+    } catch(e) {
+        serialDisplay = item.serial_number || '---';
+    }
+
+    return (
+        <Modal closeModal={closeModal} size="sm">
+            <div className="flex flex-col h-full overflow-hidden">
+                <div className="flex-none p-6 border-b border-slate-100"><h3 className="text-lg font-bold text-slate-800">{item.equipment?.name}</h3></div>
+                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                    {item.equipment?.category !== 'solar_panel' && (
+                        <div className="flex flex-col border-b pb-4 gap-2">
+                            <span className="text-slate-500 text-sm">Серійні номери</span>
+                            <div className="flex flex-wrap gap-2">
+                                {serialDisplay.split(', ').map((sn, i) => (
+                                    <span key={i} className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-mono border border-slate-200">{sn}</span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    
+                    {item.equipment?.category !== 'solar_panel' && item.equipment?.category !== 'battery' && (item.login || item.password) && (
+                        <div className="bg-slate-50 p-3 rounded-lg space-y-2 border border-slate-100">
+                            <div className="flex justify-between text-sm"><span className="text-slate-500">Логін</span><span className="font-bold">{item.login}</span></div>
+                            <div className="flex justify-between text-sm items-center"><span className="text-slate-500">Пароль</span><div className="flex gap-2 items-center"><span className="font-mono">{showPass ? item.password : '••••••'}</span><button onClick={() => setShowPass(!showPass)} className="text-slate-400"><Fa.FaEye/></button></div></div>
+                        </div>
+                    )}
+                    {/* Fixed alignment for Responsible */}
+                    <div className="flex justify-between items-start pt-2 gap-4">
+                        <span className="text-slate-500 text-sm whitespace-nowrap">Відповідальний</span>
+                        <span className="font-bold text-indigo-600 text-right">{item.employees?.name || '---'}</span>
+                    </div>
+                </div>
+                <div className="flex-none p-4 bg-slate-50 text-right pb-safe"><button onClick={closeModal} className="px-4 py-2 bg-white border border-slate-200 rounded-lg font-bold text-slate-600">Закрити</button></div>
+            </div>
+        </Modal>
+    );
+}
+
+// --- EDIT DETAILS MODAL WITH VALIDATION (NON-BLOCKING) ---
 function EditDetailsModal({ closeModal, onSubmit, initialData, employees, loading }) {
-    const [formData, setFormData] = useState({
-        id: initialData.id,
-        login: initialData.login || '',
-        password: initialData.password || '',
+    let initialSerials = [];
+    try {
+        const parsed = JSON.parse(initialData.serial_number);
+        if (Array.isArray(parsed)) initialSerials = parsed;
+        else if (initialData.serial_number) initialSerials = [initialData.serial_number];
+    } catch(e) {
+        if(initialData.serial_number) initialSerials = [initialData.serial_number];
+    }
+
+    const [formData, setFormData] = useState({ 
+        id: initialData.id, 
+        login: initialData.login || '', 
+        password: initialData.password || '', 
         employee_custom_id: initialData.employee_custom_id || '',
     });
+    
+    // Serial Numbers State (Tags)
+    const [serials, setSerials] = useState(initialSerials);
+
     const [showPassword, setShowPassword] = useState(false);
     
     const equipment = initialData.equipment;
-    const isCredentialsApplicable = equipment?.category === 'inverter' || equipment?.category === 'logger';
-    
+    const category = equipment?.category;
+    const qty = initialData.quantity || 1;
+
+    const isPanel = category === 'solar_panel';
+    const isBattery = category === 'battery';
+    const isSmart = category === 'inverter' || category === 'logger'; 
+
     const handleChange = useCallback((e) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
@@ -657,21 +725,33 @@ function EditDetailsModal({ closeModal, onSubmit, initialData, employees, loadin
 
     const handleSubmit = useCallback((e) => {
         e.preventDefault();
-        onSubmit(formData);
-    }, [formData, onSubmit]);
+        // Validation removed as requested - saving whatever serials are there
+        const payload = { ...formData, serial_number: JSON.stringify(serials) };
+        onSubmit(payload);
+    }, [formData, onSubmit, serials]);
 
     return (
         <Modal closeModal={closeModal} size="lg">
-            <form onSubmit={handleSubmit} className="flex flex-col h-full">
-                <div className="p-6 md:p-8">
-                    <h3 className="text-2xl font-bold text-gray-800 mb-2">Редагувати деталі обладнання</h3>
-                    <p className="text-indigo-600 font-medium">{equipment?.name}</p>
+            <form onSubmit={handleSubmit} className="flex flex-col h-full overflow-hidden">
+                <div className="flex-none p-6 md:p-8 border-b border-slate-100">
+                    <h3 className="text-xl font-bold text-slate-800 mb-1">Редагувати деталі</h3>
+                    <div className="flex items-center gap-2 text-sm text-indigo-600 font-medium">
+                        <span className="bg-indigo-50 px-2 py-0.5 rounded">{equipment?.name}</span>
+                        <span className="text-slate-400">x{qty} шт.</span>
+                    </div>
                 </div>
                 
-                <div className="flex-grow overflow-y-auto border-t border-b py-6 px-6 md:px-8 space-y-4">
-                    {isCredentialsApplicable && (
-                        <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-200 space-y-4">
-                            <p className="font-semibold text-blue-800 text-sm">Облікові дані</p>
+                <div className="flex-1 overflow-y-auto p-6 md:p-8 space-y-6">
+                    
+                    {/* --- SERIAL NUMBERS (TAG INPUT) --- */}
+                    {!isPanel && (
+                        <SerialNumberInput serials={serials} onChange={setSerials} max={qty} />
+                    )}
+
+                    {/* --- LOGIN / PASS (Only for Inverter/Logger) --- */}
+                    {isSmart && (
+                        <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100 space-y-4">
+                            <p className="font-bold text-blue-800 text-xs uppercase tracking-wider">Облікові дані</p>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <InputField name="login" label="Логін" icon={<Fa.FaUserCircle/>} value={formData.login} onChange={handleChange} />
                                 <InputField name="password" label="Пароль" icon={<Fa.FaKey/>} type={showPassword ? "text" : "password"} value={formData.password} onChange={handleChange} showPassword={showPassword} onTogglePassword={() => setShowPassword(!showPassword)} />
@@ -679,126 +759,24 @@ function EditDetailsModal({ closeModal, onSubmit, initialData, employees, loadin
                         </div>
                     )}
 
+                    {/* --- RESPONSIBLE EMPLOYEE --- */}
                     <SelectField name="employee_custom_id" label="Відповідальний працівник" icon={<Fa.FaUserTie />} value={formData.employee_custom_id} onChange={handleChange}>
                         <option value="">Не вказано</option>
                         {employees.map(e => <option key={e.custom_id} value={e.custom_id}>{e.name}</option>)}
                     </SelectField>
                 </div>
                 
-                <div className="flex justify-end gap-3 p-6 mt-auto bg-gray-50/50 rounded-b-2xl">
-                    <button type="button" onClick={closeModal} className="py-2 px-5 bg-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-300">Скасувати</button>
-                    <button type="submit" disabled={loading} className="py-2 px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg flex items-center gap-2">{loading ? 'Збереження...' : 'Зберегти деталі'}</button>
+                <div className="flex-none flex justify-end gap-3 p-6 bg-slate-50/50 rounded-b-2xl border-t border-slate-100 pb-safe">
+                    <button type="button" onClick={closeModal} className="px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition">Скасувати</button>
+                    <button 
+                        type="submit" 
+                        disabled={loading} 
+                        className="px-5 py-2.5 rounded-xl font-bold shadow-lg transition flex items-center gap-2 bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-xl"
+                    >
+                        {loading ? 'Збереження...' : 'Зберегти'}
+                    </button>
                 </div>
             </form>
-        </Modal>
-    );
-}
-
-
-// --- Type (Catalog) Form Modal --- //
-function TypeFormModal({ closeModal, onSubmit, initialData, loading }) {
-    const [formData, setFormData] = useState(
-        initialData || { name: '', category: '', power_kw: '', manufacturer: '', notes: '' }
-    );
-
-    const handleChange = useCallback((e) => {
-        const { name, value } = e.target;
-        setFormData(prev => ({ ...prev, [name]: value }));
-    }, []);
-
-    const handleSubmit = useCallback((e) => {
-        e.preventDefault();
-        onSubmit(formData);
-    }, [formData, onSubmit]);
-
-    return (
-        <Modal closeModal={closeModal} size="lg">
-            <form onSubmit={handleSubmit} className="flex flex-col h-full">
-                <div className="p-6 md:p-8"><h3 className="text-2xl font-bold text-gray-800">{initialData ? 'Редагувати тип' : 'Новий тип обладнання'}</h3></div>
-                <div className="space-y-4 flex-grow overflow-y-auto px-6 md:px-8 py-6 border-t border-b">
-                    <InputField name="name" label="Назва моделі" icon={<Fa.FaCog/>} value={formData.name} onChange={handleChange} required />
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <SelectField name="category" label="Категорія" icon={<Fa.FaFilter/>} value={formData.category} onChange={handleChange} required>
-                            <option value="">Оберіть...</option>
-                            <option value="solar_panel">Сонячна панель</option>
-                            <option value="battery">Акумулятор</option>
-                            <option value="inverter">Інвертор</option>
-                            <option value="logger">Логер</option>
-                        </SelectField>
-                        <InputField name="power_kw" label="Потужність (кВт)" icon={<Fa.FaBolt/>} type="number" step="0.01" min="0" value={formData.power_kw} onChange={handleChange} />
-                    </div>
-                    <InputField name="manufacturer" label="Виробник" icon={<Fa.FaBuilding/>} value={formData.manufacturer} onChange={handleChange} />
-                </div>
-                <div className="flex justify-end gap-3 p-6 mt-auto bg-gray-50/50 rounded-b-2xl">
-                    <button type="button" onClick={closeModal} className="py-2 px-5 bg-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-300">Скасувати</button>
-                    <button type="submit" disabled={loading} className="py-2 px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg flex items-center gap-2">{loading ? 'Обробка...' : 'Зберегти'}</button>
-                </div>
-            </form>
-        </Modal>
-    );
-}
-
-
-// --- View Equipment Details Modal --- //
-function EquipmentDetailsModal({ closeModal, item }) {
-    const [showPassword, setShowPassword] = useState(false);
-    const { equipment, employees } = item;
-    const { name: catName } = getCategoryProps(equipment?.category);
-
-    const DetailItem = ({ icon, label, value }) => (
-        <div className="flex items-start">
-            <div className="flex-shrink-0 w-8 text-center"><span className="text-gray-400">{icon}</span></div>
-            <div className="ml-3">
-                <p className="text-sm font-semibold text-gray-500">{label}</p>
-                <p className="text-gray-800 font-medium break-words">{value || '—'}</p>
-            </div>
-        </div>
-    );
-
-    return (
-        <Modal closeModal={closeModal} size="md">
-            <div className="p-6 md:p-8 border-b border-gray-200">
-                <h3 className="text-2xl font-bold text-gray-800 mb-1">{equipment?.name || 'Інформація про обладнання'}</h3>
-                <p className="text-indigo-600 font-medium">{catName}</p>
-            </div>
-            
-            <div className="overflow-y-auto px-6 md:px-8 py-6 space-y-5">
-                <DetailItem icon={<Fa.FaTag />} label="Серійний номер" value={item.serial_number} />
-                <DetailItem icon={<Fa.FaHashtag />} label="Кількість" value={item.quantity} />
-                <DetailItem icon={<Fa.FaBuilding />} label="Виробник" value={equipment?.manufacturer} />
-                <DetailItem icon={<Fa.FaBolt />} label="Потужність" value={equipment?.power_kw ? `${equipment.power_kw} кВт` : null} />
-                
-                { (item.login || item.password) &&
-                    <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-200 space-y-4">
-                        <p className="font-semibold text-blue-800 text-sm">Облікові дані</p>
-                         <DetailItem icon={<Fa.FaUserCircle />} label="Логін" value={item.login} />
-                         <div className="flex items-start">
-                            <div className="flex-shrink-0 w-8 text-center"><span className="text-gray-400"><Fa.FaKey/></span></div>
-                            <div className="ml-3">
-                                <p className="text-sm font-semibold text-gray-500">Пароль</p>
-                                <div className="flex items-center gap-3">
-                                    <p className="text-gray-800 font-medium break-all">{showPassword ? item.password : '••••••••'}</p>
-                                    <button onClick={() => setShowPassword(!showPassword)} className="text-gray-500 hover:text-gray-800">
-                                        {showPassword ? <Fa.FaEyeSlash /> : <Fa.FaEye />}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                }
-
-                { employees &&
-                    <div className="bg-green-50/70 p-4 rounded-xl border border-green-200 space-y-4">
-                        <p className="font-semibold text-green-800 text-sm">Відповідальний</p>
-                        <DetailItem icon={<Fa.FaUserTie />} label="Працівник" value={employees.name} />
-                        <DetailItem icon={<Fa.FaPhone />} label="Телефон" value={employees.phone} />
-                    </div>
-                }
-            </div>
-            
-            <div className="flex justify-end gap-3 p-6 bg-gray-50/50 rounded-b-2xl border-t border-gray-200 mt-auto">
-                <button type="button" onClick={closeModal} className="py-2 px-5 bg-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-300">Закрити</button>
-            </div>
         </Modal>
     );
 }

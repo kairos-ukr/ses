@@ -5,13 +5,7 @@ import {
   FaUserTie, FaHardHat, FaTruck, FaBuilding, FaUser, FaTimes,
   FaCheck, FaSave, FaStickyNote, FaCalendarDay, FaCalendarCheck, FaTags
 } from "react-icons/fa";
-import { createClient } from "@supabase/supabase-js";
-
-// --- КОНФІГУРАЦІЯ ---
-const supabaseUrl = "https://logxutaepqzmvgsvscle.supabase.co";
-const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE";
-const supabase = createClient(supabaseUrl, supabaseKey);
-
+import { supabase } from "./supabaseClient";
 // --- HELPER FUNCTIONS ---
 
 const getAge = (dateString) => {

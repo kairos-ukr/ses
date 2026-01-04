@@ -1,15 +1,13 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaSearch, FaPlus, FaTrash, FaPlane, FaBed, FaNotesMedical, 
-  FaCalendarAlt, FaUser, FaCheck, FaChevronDown, FaChevronUp
+  FaCalendarAlt, FaUser, FaCheck, FaChevronDown, FaChevronUp,
+  FaTimes, FaExclamationTriangle, FaListUl, FaArrowsAltH, FaKeyboard
 } from "react-icons/fa";
-import { createClient } from "@supabase/supabase-js";
 
-// --- КОНФІГУРАЦІЯ ---
-const supabaseUrl = "https://logxutaepqzmvgsvscle.supabase.co";
-const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE";
-const supabase = createClient(supabaseUrl, supabaseKey);
+
+import { supabase } from "./supabaseClient";
 
 // --- HELPER FUNCTIONS ---
 
@@ -53,7 +51,13 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon })
     const [search, setSearch] = useState("");
 
     const filteredOptions = useMemo(() => {
-        return options.filter(opt => opt.label.toLowerCase().includes(search.toLowerCase()));
+        if (search.trim() === "") return []; 
+        
+        const s = search.toLowerCase();
+        return options.filter(opt => 
+            opt.label.toLowerCase().includes(s) || 
+            String(opt.value).includes(s)
+        );
     }, [options, search]);
 
     const selectedOption = options.find(o => o.value === value);
@@ -66,8 +70,15 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon })
             >
                 <span className="flex items-center gap-2 truncate">
                     {Icon && <Icon className="text-indigo-500"/>}
-                    <span className="truncate">
-                        {selectedOption ? selectedOption.label : <span className="text-gray-400">{placeholder}</span>}
+                    <span className="truncate flex items-center gap-2">
+                        {selectedOption ? (
+                            <>
+                                <span className="bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded text-xs font-mono">{selectedOption.value}</span>
+                                {selectedOption.label}
+                            </>
+                        ) : (
+                            <span className="text-gray-400">{placeholder}</span>
+                        )}
                     </span>
                 </span>
             </button>
@@ -89,21 +100,31 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon })
                                         autoFocus
                                         type="text" 
                                         className="w-full pl-8 pr-3 py-2 bg-gray-50 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-                                        placeholder="Пошук..."
+                                        placeholder="Введіть ім'я або ID..."
                                         value={search}
                                         onChange={e => setSearch(e.target.value)}
                                     />
                                 </div>
                             </div>
                             <div>
-                                {filteredOptions.length > 0 ? (
+                                {search === "" ? (
+                                    <div className="p-8 text-center text-gray-400 text-sm">
+                                        <FaKeyboard className="mx-auto mb-2 text-2xl opacity-20"/>
+                                        Почніть вводити ім'я або ID...
+                                    </div>
+                                ) : filteredOptions.length > 0 ? (
                                     filteredOptions.map(opt => (
                                         <button
                                             key={opt.value}
                                             onClick={() => { onChange(opt.value); setIsOpen(false); setSearch(""); }}
                                             className="w-full text-left px-4 py-3 text-sm hover:bg-indigo-50 transition-colors border-b border-gray-50 last:border-0"
                                         >
-                                            <div className="font-medium text-gray-800">{opt.label}</div>
+                                            <div className="font-medium text-gray-800 flex items-center gap-3">
+                                                <span className="bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded text-xs font-mono w-8 text-center">
+                                                    {opt.value}
+                                                </span>
+                                                {opt.label}
+                                            </div>
                                         </button>
                                     ))
                                 ) : (
@@ -118,14 +139,58 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon })
     );
 };
 
+// --- MODAL DELETE COMPONENT ---
+const DeleteConfirmModal = ({ isOpen, onClose, onConfirm }) => {
+    if (!isOpen) return null;
+    return (
+        <AnimatePresence>
+            <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+                onClick={onClose}
+            >
+                <motion.div 
+                    initial={{ scale: 0.9, opacity: 0 }} 
+                    animate={{ scale: 1, opacity: 1 }} 
+                    exit={{ scale: 0.9, opacity: 0 }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden"
+                >
+                    <div className="p-6 text-center">
+                        <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                            <FaExclamationTriangle />
+                        </div>
+                        <h3 className="text-lg font-bold text-gray-800 mb-2">Видалити запис?</h3>
+                        <p className="text-gray-500 text-sm">Цю дію неможливо скасувати. Ви впевнені, що хочете продовжити?</p>
+                    </div>
+                    <div className="flex border-t border-gray-100">
+                        <button 
+                            onClick={onClose}
+                            className="flex-1 py-4 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+                        >
+                            Скасувати
+                        </button>
+                        <div className="w-px bg-gray-100"></div>
+                        <button 
+                            onClick={onConfirm}
+                            className="flex-1 py-4 text-sm font-bold text-red-600 hover:bg-red-50 transition-colors"
+                        >
+                            Так, видалити
+                        </button>
+                    </div>
+                </motion.div>
+            </motion.div>
+        </AnimatePresence>
+    );
+};
+
 // --- ГОЛОВНИЙ КОМПОНЕНТ ---
 export default function TimeOffManager() {
     const isDesktop = useIsDesktop();
-    
-    // Стан гармошки (Відкрито/Закрито). На ПК завжди відкрито, на мобільному - закрито за замовчуванням.
     const [isFormOpen, setIsFormOpen] = useState(false);
 
-    // Слідкуємо за зміною розміру екрану
     useEffect(() => {
         if (isDesktop) setIsFormOpen(true);
         else setIsFormOpen(false);
@@ -135,8 +200,13 @@ export default function TimeOffManager() {
     const [upcomingRecords, setUpcomingRecords] = useState([]); 
     const [loading, setLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [deleteModal, setDeleteModal] = useState({ show: false, id: null });
 
-    // Форма
+    // Стан форми
+    const [mode, setMode] = useState('RANGE'); 
+    const [manualDates, setManualDates] = useState([]);
+    const [singleDateInput, setSingleDateInput] = useState(formatDateToYYYYMMDD(new Date())); 
+
     const [formData, setFormData] = useState({
         employeeId: null,
         type: 'OFF',
@@ -148,11 +218,11 @@ export default function TimeOffManager() {
     const loadData = async () => {
         setLoading(true);
         const today = new Date();
-        const twoWeeksLater = new Date();
-        twoWeeksLater.setDate(today.getDate() + 14);
+        const limitDate = new Date();
+        limitDate.setDate(today.getDate() + 10); // 10 днів
 
         const todayStr = formatDateToYYYYMMDD(today);
-        const endStr = formatDateToYYYYMMDD(twoWeeksLater);
+        const endStr = formatDateToYYYYMMDD(limitDate);
 
         try {
             const { data: empData } = await supabase.from('employees').select('custom_id, name').order('name');
@@ -186,31 +256,50 @@ export default function TimeOffManager() {
         return groups;
     }, [upcomingRecords]);
 
+    const addManualDate = () => {
+        if (!singleDateInput) return;
+        if (!manualDates.includes(singleDateInput)) {
+            setManualDates([...manualDates, singleDateInput].sort());
+        }
+    };
+
+    const removeManualDate = (dateToRemove) => {
+        setManualDates(manualDates.filter(d => d !== dateToRemove));
+    };
+
     const handleAddRecord = async () => {
         if (!formData.employeeId) {
             alert("Оберіть працівника");
             return;
         }
-        setIsSaving(true);
-
-        const start = new Date(formData.startDate);
-        const end = new Date(formData.endDate);
         
-        if (end < start) {
-            alert("Дата завершення не може бути раніше дати початку");
-            setIsSaving(false);
-            return;
+        let finalDates = [];
+
+        if (mode === 'RANGE') {
+            const start = new Date(formData.startDate);
+            const end = new Date(formData.endDate);
+            if (end < start) {
+                alert("Дата завершення не може бути раніше дати початку");
+                return;
+            }
+            for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                finalDates.push(formatDateToYYYYMMDD(d));
+            }
+        } else {
+            if (manualDates.length === 0) {
+                alert("Додайте хоча б одну дату");
+                return;
+            }
+            finalDates = [...manualDates];
         }
 
-        const records = [];
-        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-            records.push({
-                work_date: formatDateToYYYYMMDD(d),
-                employee_custom_id: formData.employeeId,
-                status: formData.type,
-                notes: formData.notes
-            });
-        }
+        setIsSaving(true);
+        const records = finalDates.map(dateStr => ({
+            work_date: dateStr,
+            employee_custom_id: formData.employeeId,
+            status: formData.type,
+            notes: formData.notes
+        }));
 
         try {
             const { error } = await supabase.from('attendance').upsert(records, { onConflict: 'employee_custom_id, work_date' });
@@ -218,8 +307,8 @@ export default function TimeOffManager() {
             
             await loadData();
             setFormData(prev => ({ ...prev, employeeId: null, notes: '' }));
+            setManualDates([]); 
             
-            // На мобільному закриваємо форму після успішного додавання
             if (!isDesktop) setIsFormOpen(false);
             
         } catch (e) {
@@ -229,13 +318,27 @@ export default function TimeOffManager() {
         }
     };
 
-    const handleDelete = async (id) => {
-        if (!window.confirm("Видалити запис?")) return;
+    const confirmDelete = async () => {
+        if (!deleteModal.id) return;
         try {
-            await supabase.from('attendance').delete().eq('id', id);
+            await supabase.from('attendance').delete().eq('id', deleteModal.id);
             await loadData();
         } catch (e) {
             alert("Помилка видалення");
+        } finally {
+            setDeleteModal({ show: false, id: null });
+        }
+    };
+
+    const requestDelete = (id) => {
+        setDeleteModal({ show: true, id });
+    };
+
+    // --- ЛОГІКА ДЛЯ ЗГОРТАННЯ ГАРМОШКИ ---
+    // Якщо користувач на мобільному скролить список або клікає на нього, закриваємо форму
+    const handleListInteraction = () => {
+        if (!isDesktop && isFormOpen) {
+            setIsFormOpen(false);
         }
     };
 
@@ -244,17 +347,21 @@ export default function TimeOffManager() {
     return (
         <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row h-screen overflow-hidden">
             
-            {/* --- ЛІВА ПАНЕЛЬ (ГАРМОШКА НА МОБІЛЬНОМУ) --- */}
-            <div className="bg-white border-b md:border-b-0 md:border-r border-gray-200 md:w-[400px] flex-shrink-0 z-20 shadow-md md:h-full transition-all">
-                {/* Заголовок-кнопка для гармошки */}
+            <DeleteConfirmModal 
+                isOpen={deleteModal.show} 
+                onClose={() => setDeleteModal({ show: false, id: null })} 
+                onConfirm={confirmDelete}
+            />
+
+            {/* --- ЛІВА ПАНЕЛЬ (ГАРМОШКА) --- */}
+            <div className="bg-white border-b md:border-b-0 md:border-r border-gray-200 md:w-[400px] flex-shrink-0 z-20 shadow-md md:h-full transition-all overflow-y-auto custom-scrollbar relative">
                 <div 
                     onClick={() => !isDesktop && setIsFormOpen(!isFormOpen)}
-                    className="p-6 flex justify-between items-center cursor-pointer md:cursor-default"
+                    className="p-6 flex justify-between items-center cursor-pointer md:cursor-default sticky top-0 bg-white z-10 border-b border-gray-50"
                 >
                     <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                         <FaPlus className="text-indigo-600"/> Новий запис
                     </h2>
-                    {/* Стрілочка тільки на мобільному */}
                     {!isDesktop && (
                         <div className="text-gray-400">
                             {isFormOpen ? <FaChevronUp/> : <FaChevronDown/>}
@@ -262,17 +369,15 @@ export default function TimeOffManager() {
                     )}
                 </div>
 
-                {/* Вміст форми (Анімований) */}
                 <AnimatePresence>
                     {isFormOpen && (
                         <motion.div
                             initial={isDesktop ? { opacity: 1, height: 'auto' } : { opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: 'auto' }}
                             exit={{ opacity: 0, height: 0 }}
-                            transition={{ duration: 0.3, ease: "easeInOut" }}
                             className="overflow-hidden"
                         >
-                            <div className="px-6 pb-6 space-y-4">
+                            <div className="px-6 pb-6 space-y-5 pt-2">
                                 {/* 1. Працівник */}
                                 <div>
                                     <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Працівник</label>
@@ -311,30 +416,87 @@ export default function TimeOffManager() {
                                     </div>
                                 </div>
 
-                                {/* 3. Дати */}
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">З дати</label>
-                                        <input 
-                                            type="date" 
-                                            value={formData.startDate}
-                                            onChange={(e) => setFormData({...formData, startDate: e.target.value, endDate: e.target.value > formData.endDate ? e.target.value : formData.endDate})}
-                                            className="w-full p-3 rounded-xl border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">По дату</label>
-                                        <input 
-                                            type="date" 
-                                            value={formData.endDate}
-                                            min={formData.startDate}
-                                            onChange={(e) => setFormData({...formData, endDate: e.target.value})}
-                                            className="w-full p-3 rounded-xl border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
-                                        />
+                                {/* Режим дат */}
+                                <div>
+                                    <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Режим вибору дат</label>
+                                    <div className="bg-gray-100 p-1 rounded-xl flex text-sm font-medium">
+                                        <button 
+                                            onClick={() => setMode('RANGE')}
+                                            className={`flex-1 py-2 rounded-lg flex items-center justify-center gap-2 transition-all ${mode === 'RANGE' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}
+                                        >
+                                            <FaArrowsAltH/> Період
+                                        </button>
+                                        <button 
+                                            onClick={() => setMode('DATES')}
+                                            className={`flex-1 py-2 rounded-lg flex items-center justify-center gap-2 transition-all ${mode === 'DATES' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}
+                                        >
+                                            <FaListUl/> Окремі дати
+                                        </button>
                                     </div>
                                 </div>
 
-                                {/* 4. Нотатки */}
+                                {/* Дати */}
+                                {mode === 'RANGE' ? (
+                                    <div className="grid grid-cols-2 gap-3 animate-fadeIn">
+                                        <div>
+                                            <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">З дати</label>
+                                            <input 
+                                                type="date" 
+                                                value={formData.startDate}
+                                                onChange={(e) => setFormData({...formData, startDate: e.target.value, endDate: e.target.value > formData.endDate ? e.target.value : formData.endDate})}
+                                                className="w-full p-3 rounded-xl border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">По дату</label>
+                                            <input 
+                                                type="date" 
+                                                value={formData.endDate}
+                                                min={formData.startDate}
+                                                onChange={(e) => setFormData({...formData, endDate: e.target.value})}
+                                                className="w-full p-3 rounded-xl border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
+                                            />
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3 animate-fadeIn">
+                                        <div>
+                                            <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Додати дату до списку</label>
+                                            <div className="flex gap-2">
+                                                <input 
+                                                    type="date" 
+                                                    value={singleDateInput}
+                                                    onChange={(e) => setSingleDateInput(e.target.value)}
+                                                    className="flex-1 p-3 rounded-xl border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
+                                                />
+                                                <button 
+                                                    onClick={addManualDate}
+                                                    className="w-12 bg-gray-800 text-white rounded-xl flex items-center justify-center hover:bg-black transition-colors"
+                                                >
+                                                    <FaPlus/>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        {manualDates.length > 0 && (
+                                            <div className="bg-gray-50 p-3 rounded-xl border border-gray-200">
+                                                <div className="text-xs font-bold text-gray-400 mb-2 uppercase flex justify-between">
+                                                    <span>Вибрані дати ({manualDates.length})</span>
+                                                    <button onClick={() => setManualDates([])} className="text-red-400 hover:text-red-600">Очистити</button>
+                                                </div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {manualDates.map(d => (
+                                                        <div key={d} className="bg-white border border-gray-300 px-3 py-1.5 rounded-lg text-sm font-mono flex items-center gap-2 shadow-sm">
+                                                            {d}
+                                                            <button onClick={() => removeManualDate(d)} className="text-red-400 hover:text-red-600"><FaTimes size={10}/></button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Нотатки */}
                                 <div>
                                     <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Коментар</label>
                                     <input 
@@ -360,11 +522,16 @@ export default function TimeOffManager() {
             </div>
 
             {/* --- ПРАВА ПАНЕЛЬ: СПИСОК (Timeline) --- */}
-            <div className="flex-1 bg-slate-50 overflow-y-auto p-4 md:p-8">
+            {/* Додано обробники onScroll і onClick для автоматичного закриття форми на мобільному */}
+            <div 
+                className="flex-1 bg-slate-50 overflow-y-auto p-4 md:p-8"
+                onScroll={handleListInteraction}
+                onClick={handleListInteraction}
+            >
                 <div className="max-w-2xl mx-auto">
                     <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
                         <FaCalendarAlt className="text-indigo-500"/> Графік відсутності
-                        <span className="text-sm font-normal text-gray-400 ml-2 bg-white px-2 py-1 rounded-lg border">Найближчі 2 тижні</span>
+                        <span className="text-sm font-normal text-gray-400 ml-2 bg-white px-2 py-1 rounded-lg border">Найближчі 10 днів</span>
                     </h2>
 
                     {loading ? (
@@ -375,7 +542,7 @@ export default function TimeOffManager() {
                         <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-gray-300">
                             <FaBed className="text-gray-300 text-5xl mx-auto mb-4"/>
                             <p className="text-gray-500 font-medium">Всі в строю!</p>
-                            <p className="text-sm text-gray-400">На найближчий час запланованих відсутностей немає.</p>
+                            <p className="text-sm text-gray-400">На найближчі 10 днів запланованих відсутностей немає.</p>
                         </div>
                     ) : (
                         <div className="space-y-6">
@@ -386,7 +553,6 @@ export default function TimeOffManager() {
 
                                 return (
                                     <div key={dateStr} className="relative">
-                                        {/* Дата Заголовок */}
                                         <div className={`sticky top-0 z-10 py-2 mb-2 flex items-center gap-3 ${isToday ? 'text-indigo-600' : 'text-gray-500'}`}>
                                             <div className={`font-bold text-lg ${isToday ? 'bg-indigo-50 px-3 py-1 rounded-lg' : 'bg-slate-100/80 backdrop-blur px-3 py-1 rounded-lg'}`}>
                                                 {label}
@@ -395,7 +561,6 @@ export default function TimeOffManager() {
                                             <div className="text-xs font-mono opacity-50">{dateStr}</div>
                                         </div>
 
-                                        {/* Картки */}
                                         <div className="grid grid-cols-1 gap-3 pl-2 border-l-2 border-gray-100 ml-4">
                                             {records.map(rec => {
                                                 const emp = employees.find(e => e.custom_id === rec.employee_custom_id);
@@ -428,8 +593,8 @@ export default function TimeOffManager() {
                                                         </div>
                                                         
                                                         <button 
-                                                            onClick={() => handleDelete(rec.id)}
-                                                            className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                                                            onClick={(e) => { e.stopPropagation(); requestDelete(rec.id); }}
+                                                            className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
                                                         >
                                                             <FaTrash/>
                                                         </button>

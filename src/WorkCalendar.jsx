@@ -6,13 +6,7 @@ import {
   FaExclamationTriangle, FaArrowLeft, FaArrowRight, FaPen, FaTasks, FaUser,
   FaBed, FaChevronLeft, FaEye, FaPencilAlt, FaRegCalendarAlt
 } from "react-icons/fa";
-import { createClient } from "@supabase/supabase-js";
-
-// --- КОНФІГУРАЦІЯ ---
-const supabaseUrl = "https://logxutaepqzmvgsvscle.supabase.co";
-const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE";
-const supabase = createClient(supabaseUrl, supabaseKey);
-
+import { supabase } from "./supabaseClient";
 // --- HELPER FUNCTIONS ---
 
 const formatDateToYYYYMMDD = (date) => {
@@ -86,7 +80,8 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, d
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: 5 }}
                             transition={{ duration: 0.15 }}
-                            className="absolute z-50 w-full mt-2 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden max-h-60 overflow-y-auto"
+                            // FIX: Z-Index підвищено до 100
+                            className="absolute z-[100] w-full mt-2 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden max-h-60 overflow-y-auto"
                         >
                             <div className="p-2 border-b border-gray-100 sticky top-0 bg-white z-10">
                                 <div className="relative">
@@ -367,19 +362,16 @@ export default function WorkCalendar() {
         loadWeekData();
     }, [loadWeekData]);
 
-    // 2. АВТОМАТИЧНИЙ СКРОЛ ДО "СЬОГОДНІ"
+    // FIX: АВТОМАТИЧНИЙ СКРОЛ ДО "СЬОГОДНІ" - залежить від loading
     useEffect(() => {
-        // Чекаємо поки все відрендериться, тоді скролимо
-        if (todayRef.current) {
-            setTimeout(() => {
-                todayRef.current.scrollIntoView({ 
-                    behavior: 'smooth', 
-                    block: 'center', // Вертикально по центру
-                    inline: 'center' // Горизонтально по центру (якщо є горизонт. скрол)
-                });
-            }, 300); // Невелика затримка для стабільності
+        if (!loading && todayRef.current) {
+            todayRef.current.scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'center', 
+                inline: 'center' 
+            });
         }
-    }, [currentWeekStart]); // Спрацьовує при зміні тижня
+    }, [loading, currentWeekStart]);
 
     const openDayEditor = (date) => {
         const dateStr = formatDateToYYYYMMDD(date);
@@ -564,13 +556,11 @@ export default function WorkCalendar() {
                 <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
                     <button onClick={() => setCurrentWeekStart(d => addDays(d, -7))} className="p-2 hover:bg-gray-100 rounded-full text-gray-600"><FaArrowLeft/></button>
                     
-                    {/* Виправлений блок заголовка */}
                     <div className="flex-1 flex justify-center">
                         <div 
                             onClick={triggerDatePicker}
                             className="relative group cursor-pointer px-4 py-2 rounded-xl hover:bg-gray-50 transition-colors"
                         >
-                            {/* Інпут схований, але присутній для showPicker */}
                             <input 
                                 ref={dateInputRef}
                                 type="date" 
@@ -597,64 +587,80 @@ export default function WorkCalendar() {
             {/* Grid */}
             <div className="max-w-7xl mx-auto p-2 sm:p-4 overflow-x-auto">
                 <div className="grid grid-cols-1 md:grid-cols-7 gap-3 min-w-[300px]">
-                    {weekDays.map(date => {
-                        const dateStr = formatDateToYYYYMMDD(date);
-                        const isToday = dateStr === formatDateToYYYYMMDD(new Date());
-                        const dayTasks = assignmentsByDate[dateStr] || [];
-                        const dayOffsCount = Object.keys(timeOffMap[dateStr] || {}).length;
-
-                        return (
-                            <div 
-                                key={dateStr} 
-                                ref={isToday ? todayRef : null} // 3. ПРИВ'ЯЗУЄМО REF ДО СЬОГОДНІ
-                                onClick={() => openDayEditor(date)}
-                                className={`
-                                    min-h-[120px] bg-white rounded-xl border p-3 flex flex-col gap-2 cursor-pointer transition-all active:scale-[0.98] hover:shadow-md
-                                    ${isToday ? 'border-indigo-500 ring-2 ring-indigo-100' : 'border-gray-200 hover:border-indigo-300'}
-                                `}
-                            >
+                    {/* FIX: SKELETON LOADING */}
+                    {loading ? (
+                         Array.from({ length: 7 }).map((_, i) => (
+                            <div key={i} className="min-h-[120px] bg-white rounded-xl border border-gray-100 p-3 flex flex-col gap-2 animate-pulse">
                                 <div className="flex justify-between items-center pb-2 border-b border-gray-50">
-                                    <span className={`text-sm font-bold ${isToday ? 'text-indigo-600' : 'text-gray-700'}`}>
-                                        {date.toLocaleDateString('uk-UA', { weekday: 'short' }).toUpperCase()}
-                                    </span>
-                                    <span className={`text-xs px-2 py-0.5 rounded-full ${isToday ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>
-                                        {date.getDate()}
-                                    </span>
+                                    <div className="h-4 w-10 bg-gray-200 rounded"></div>
+                                    <div className="h-4 w-6 bg-gray-200 rounded-full"></div>
                                 </div>
+                                <div className="space-y-2 mt-2">
+                                    <div className="h-6 w-full bg-gray-100 rounded-lg"></div>
+                                    <div className="h-6 w-3/4 bg-gray-100 rounded-lg"></div>
+                                </div>
+                            </div>
+                         ))
+                    ) : (
+                        weekDays.map(date => {
+                            const dateStr = formatDateToYYYYMMDD(date);
+                            const isToday = dateStr === formatDateToYYYYMMDD(new Date());
+                            const dayTasks = assignmentsByDate[dateStr] || [];
+                            const dayOffsCount = Object.keys(timeOffMap[dateStr] || {}).length;
 
-                                <div className="flex-1 space-y-1.5 overflow-hidden">
-                                    {dayTasks.length > 0 ? (
-                                        dayTasks.map((task, i) => {
-                                            const isCustom = task.installationId === 'custom';
-                                            const instName = isCustom 
-                                                ? (task.notes || 'Без назви') 
-                                                : (task.installationId 
-                                                    ? (installations.find(inst => inst.custom_id?.toString() === task.installationId?.toString())?.name || `Об'єкт #${task.installationId}`)
-                                                    : "Завантаження...");
-                                            
-                                            return (
-                                                <div key={i} className={`text-xs px-2 py-1.5 rounded-lg truncate font-medium flex items-center gap-1.5 ${isCustom ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'}`}>
-                                                    {isCustom ? <FaTasks size={10}/> : <FaBriefcase size={10}/>}
-                                                    <span className="truncate">{instName}</span>
-                                                    <span className="opacity-60 ml-auto text-[10px]">{task.workers.length}</span>
-                                                </div>
-                                            );
-                                        })
-                                    ) : (
-                                        <div className="h-full flex items-center justify-center text-gray-300 text-xs">
-                                            <FaPlus/>
+                            return (
+                                <div 
+                                    key={dateStr} 
+                                    ref={isToday ? todayRef : null} 
+                                    onClick={() => openDayEditor(date)}
+                                    className={`
+                                        min-h-[120px] bg-white rounded-xl border p-3 flex flex-col gap-2 cursor-pointer transition-all active:scale-[0.98] hover:shadow-md
+                                        ${isToday ? 'border-indigo-500 ring-2 ring-indigo-100' : 'border-gray-200 hover:border-indigo-300'}
+                                    `}
+                                >
+                                    <div className="flex justify-between items-center pb-2 border-b border-gray-50">
+                                        <span className={`text-sm font-bold ${isToday ? 'text-indigo-600' : 'text-gray-700'}`}>
+                                            {date.toLocaleDateString('uk-UA', { weekday: 'short' }).toUpperCase()}
+                                        </span>
+                                        <span className={`text-xs px-2 py-0.5 rounded-full ${isToday ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>
+                                            {date.getDate()}
+                                        </span>
+                                    </div>
+
+                                    <div className="flex-1 space-y-1.5 overflow-hidden">
+                                        {dayTasks.length > 0 ? (
+                                            dayTasks.map((task, i) => {
+                                                const isCustom = task.installationId === 'custom';
+                                                const instName = isCustom 
+                                                    ? (task.notes || 'Без назви') 
+                                                    : (task.installationId 
+                                                        ? (installations.find(inst => inst.custom_id?.toString() === task.installationId?.toString())?.name || `Об'єкт #${task.installationId}`)
+                                                        : "Завантаження...");
+                                                
+                                                return (
+                                                    <div key={i} className={`text-xs px-2 py-1.5 rounded-lg truncate font-medium flex items-center gap-1.5 ${isCustom ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'}`}>
+                                                        {isCustom ? <FaTasks size={10}/> : <FaBriefcase size={10}/>}
+                                                        <span className="truncate">{instName}</span>
+                                                        <span className="opacity-60 ml-auto text-[10px]">{task.workers.length}</span>
+                                                    </div>
+                                                );
+                                            })
+                                        ) : (
+                                            <div className="h-full flex items-center justify-center text-gray-300 text-xs">
+                                                <FaPlus/>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {dayOffsCount > 0 && (
+                                        <div className="mt-auto pt-2 text-[10px] text-red-400 font-medium flex items-center gap-1">
+                                            <FaExclamationTriangle size={10}/> {dayOffsCount} відсутні
                                         </div>
                                     )}
                                 </div>
-
-                                {dayOffsCount > 0 && (
-                                    <div className="mt-auto pt-2 text-[10px] text-red-400 font-medium flex items-center gap-1">
-                                        <FaExclamationTriangle size={10}/> {dayOffsCount} відсутні
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })}
+                            );
+                        })
+                    )}
                 </div>
             </div>
 
