@@ -5,7 +5,6 @@ import { AuthProvider } from "./AuthProvider";
 import AuthPage from "./AuthPage";
 import HomePage from "./homep";
 import SolCalc from "./sol_calc";
-import PhotoUploadSite from "./Ocr";
 import ProjectPage from "./inst2";
 import ClientsPage from "./cli1";
 import EmployeesPage from "./MainEmployeesPage";
@@ -27,7 +26,6 @@ export default function App() {
           <Route path="/" element={<AuthPage />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/calc" element={<SolCalc />} />
-          <Route path="/vis" element={<PhotoUploadSite />} />
           <Route path="/installations" element={<ProjectPage />} />
           <Route path="/clients" element={<ClientsPage />} />
           <Route path="/employees" element={<EmployeesPage />} />
