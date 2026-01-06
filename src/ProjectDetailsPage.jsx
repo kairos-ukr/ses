@@ -14,8 +14,8 @@ import {
 
 import { supabase } from "./supabaseClient";
 // Імпорти
-import ObjectDocumentsModal from "./components/ObjectDocumentsModal";
-import ProjectEquipmentModal from "./components/ProjectEquipmentModal";
+import ObjectDocumentsModal from "./ObjectDocumentsModal";
+import ProjectEquipmentModal from "./ProjectEquipmentModal";
 import { useAuth } from "./AuthProvider"; // 1. ІМПОРТУЄМО AUTH CONTEXT
 
 

@@ -2,13 +2,11 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { FaEye, FaEyeSlash, FaUser, FaLock, FaEnvelope, FaSignInAlt, FaUserPlus, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
-import { createClient } from "@supabase/supabase-js";
+
 import logoImg from './logo.png'; // ІМПОРТ ЛОГОТИПУ
 
 // Ініціалізація клієнта Supabase
-const supabaseUrl = 'https://logxutaepqzmvgsvscle.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE';
-const supabase = createClient(supabaseUrl, supabaseKey);
+import { supabase } from './supabaseClient';
 
 // Компонент поля вводу
 const InputField = ({ name, type, placeholder, value, onChange, icon, disabled, required = true, minLength }) => (

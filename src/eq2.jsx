@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Fa from "react-icons/fa";
 import { supabase } from "./supabaseClient";
-import Layout from "./components/Layout";
+import Layout from "./Layout";
 
 // --- Helpers --- //
 const getCategoryProps = (category) => ({

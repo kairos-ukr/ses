@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { 
   FaUsers, FaCalendarAlt, FaUmbrellaBeach, FaUserTie 
 } from "react-icons/fa";
-import Layout from "./components/Layout";
+import Layout from "./Layout";
 
 // Імпорт твоїх робочих компонентів
 import EmployeeList from "./EmployeeList";

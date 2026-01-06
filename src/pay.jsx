@@ -8,7 +8,7 @@ import {
   FaUniversity, FaMoneyBillWave, FaCreditCard as FaCard, FaQuestionCircle
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
-import Layout from "./components/Layout";
+import Layout from "./Layout";
 
 // --- Helpers ---
 const formatCurrency = (amount) => {

@@ -7,7 +7,7 @@ import {
 } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "./supabaseClient"; 
-import Layout from "./components/Layout"; 
+import Layout from "./Layout"; 
 import logo from './rbplogo.png';
 
 // --- ДОВІДНИК ЕТАПІВ ---

@@ -2,14 +2,12 @@ import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { Sun, Calculator, Phone, CheckCircle, AlertCircle, TrendingUp, Zap, DollarSign, BrainCircuit, ShieldCheck, Rocket, Users, BatteryCharging, Info, Lightbulb, Leaf, Home, Coins, Award, Target, ArrowRight } from 'lucide-react';
 // +++ 1. ІМПОРТ КЛІЄНТА SUPABASE +++
-import { createClient } from '@supabase/supabase-js';
+
 
 
 // +++ 2. СТВОРЕННЯ КЛІЄНТА З ВАШИМИ КЛЮЧАМИ +++
 // ⚠️ Важливо: Замініть на ваші реальні дані з панелі Supabase (Settings -> API)
-const supabaseUrl = 'https://dymcoyjwtytfiszvncrn.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5bWNveWp3dHl0ZmlzenZuY3JuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc2NjEzMDAsImV4cCI6MjA3MzIzNzMwMH0.FGNCLp94xkq-Rdr0NOUCX2YCe1-1y_RpEEww43QzV8s';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { supabase } from './supabaseClient';
 
 
 // --- Constants and Configuration ---

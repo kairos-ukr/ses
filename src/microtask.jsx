@@ -10,7 +10,7 @@ import {
   FaUserEdit, FaUser, FaFilter, FaFolderOpen, FaFire 
 } from 'react-icons/fa';
 import { supabase } from "./supabaseClient";
-import Layout from "./components/Layout";
+import Layout from "./Layout";
 import { useAuth } from "./AuthProvider"; // 1. ІМПОРТ AUTH CONTEXT
 
 // --- КОМПОНЕНТИ UI ---

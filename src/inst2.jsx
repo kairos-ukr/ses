@@ -12,9 +12,9 @@ import {
   FaRegEye, FaTruck
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
-import Layout from "./components/Layout";
-import ObjectDocumentsModal from "./components/ObjectDocumentsModal";
-import ProjectEquipmentModal from "./components/ProjectEquipmentModal"; 
+import Layout from "./Layout";
+import ObjectDocumentsModal from "./ObjectDocumentsModal";
+import ProjectEquipmentModal from "./ProjectEquipmentModal"; 
 import { useAuth } from "./AuthProvider"; // 1. ІМПОРТ AUTH CONTEXT
 
 // --- CONSTANTS ---

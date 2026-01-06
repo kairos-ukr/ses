@@ -6,19 +6,24 @@ import {
   FaHardHat, FaMoneyBillWave 
 } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
-import { supabase } from '../supabaseClient';
 
-// Імпорт логотипу
+// ЗМІНА 1: Імпортуємо useAuth замість supabase
+import { useAuth } from './AuthProvider'; 
+
 import logo from './logoCore1.png'; 
 
 const Layout = ({ children }) => {
   const [isOpen, setIsOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  
+  // ЗМІНА 2: Дістаємо функцію signOut з контексту
+  const { signOut } = useAuth();
 
+  // ЗМІНА 3: Використовуємо функцію з "хаком"
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    navigate("/");
+    await signOut();
+    // navigate("/") тут вже не потрібен, бо signOut зробить редірект через window.location
   };
 
   const menuItems = [
@@ -37,7 +42,6 @@ const Layout = ({ children }) => {
       
       {/* --- SIDEBAR (DESKTOP) --- */}
       <aside className="hidden lg:flex flex-col w-64 bg-white border-r border-slate-200 h-full flex-shrink-0 z-20">
-        {/* ЗМІНИ ТУТ: justify-start (зліва) та h-12 (менший розмір) */}
         <div className="p-6 flex items-center justify-start border-b border-slate-100 min-h-[80px]">
            <img 
              src={logo} 
@@ -67,6 +71,7 @@ const Layout = ({ children }) => {
         </nav>
 
         <div className="p-4 border-t border-slate-100">
+            {/* Кнопка виходу тепер викликає handleLogout з хаком */}
             <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all w-full text-sm font-medium">
                 <FaSignOutAlt /> Вихід
             </button>
@@ -92,7 +97,6 @@ const Layout = ({ children }) => {
               transition={{ type: "tween", ease: "easeOut", duration: 0.3 }}
               className="fixed inset-y-0 right-0 z-50 w-72 bg-white shadow-2xl flex flex-col lg:hidden will-change-transform"
             >
-              {/* Логотип в мобільному меню теж трішки зменшив */}
               <div className="p-5 flex justify-between items-center border-b border-slate-100 min-h-[80px]">
                  <img src={logo} alt="K-Core" className="h-9 w-auto object-contain" />
                  <button onClick={() => setIsOpen(false)} className="p-2 bg-slate-50 rounded-full text-slate-400 hover:text-slate-600">
@@ -109,8 +113,8 @@ const Layout = ({ children }) => {
                        onClick={() => { navigate(item.path); setIsOpen(false); }}
                        className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl font-medium text-sm transition-colors
                          ${isActive 
-                            ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' 
-                            : 'text-slate-600 hover:bg-slate-50'}
+                           ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' 
+                           : 'text-slate-600 hover:bg-slate-50'}
                        `}
                      >
                        <item.icon size={18} className={isActive ? 'text-white' : 'text-slate-400'} /> 
@@ -121,6 +125,7 @@ const Layout = ({ children }) => {
               </nav>
 
               <div className="p-4 border-t border-slate-100 bg-slate-50 pb-safe">
+                  {/* Кнопка виходу мобільна */}
                   <button onClick={() => { handleLogout(); setIsOpen(false); }} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white border border-slate-200 text-red-500 rounded-xl font-bold shadow-sm active:scale-95 transition-all">
                       <FaSignOutAlt /> Вийти
                   </button>
@@ -130,18 +135,14 @@ const Layout = ({ children }) => {
         )}
       </AnimatePresence>
 
-      {/* --- MAIN CONTENT WRAPPER --- */}
+      {/* --- MAIN CONTENT --- */}
       <div className="flex-1 flex flex-col min-w-0 relative h-full">
-        
-        {/* Mobile Header */}
         <header className="lg:hidden flex items-center justify-between px-5 py-3 bg-white border-b border-slate-200 flex-shrink-0 z-30 min-h-[64px]">
-           {/* ЗМІНИ ТУТ: h-9 (36px) для мобільного */}
            <img 
              src={logo} 
              alt="K-Core" 
              className="h-8 w-auto object-contain" 
            />
-           
            <button onClick={() => setIsOpen(true)} className="p-2.5 -mr-2 text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100">
              <FaBars size={22} />
            </button>
@@ -150,7 +151,6 @@ const Layout = ({ children }) => {
         <main className="flex-1 overflow-y-auto bg-slate-100 w-full relative scroll-smooth">
            {children}
         </main>
-
       </div>
     </div>
   );
