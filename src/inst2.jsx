@@ -15,6 +15,7 @@ import { supabase } from "./supabaseClient";
 import Layout from "./components/Layout";
 import ObjectDocumentsModal from "./components/ObjectDocumentsModal";
 import ProjectEquipmentModal from "./components/ProjectEquipmentModal"; 
+import { useAuth } from "./AuthProvider"; // 1. ІМПОРТ AUTH CONTEXT
 
 // --- CONSTANTS ---
 const PROJECTS_PER_PAGE = 6;
@@ -95,6 +96,13 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => {
 
 // --- MAIN PAGE ---
 export default function ProjectsPage() {
+    // 2. ОТРИМУЄМО РОЛЬ КОРИСТУВАЧА
+    const { role } = useAuth();
+    
+    // 3. ВИЗНАЧАЄМО ПРАВА НА ВИДАЛЕННЯ
+    // Видаляти можуть тільки Адміни та Офіс. Монтажники (будь-якого Tier) - НІ.
+    const canDelete = role === 'admin' || role === 'super_admin' || role === 'office';
+
     const [projects, setProjects] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
@@ -258,6 +266,12 @@ export default function ProjectsPage() {
     const handleEmployeeSelect = (employee) => { setFormData(prev => ({ ...prev, responsible_emp_id: employee.custom_id })); setEmployeeSearch(`${employee.name} (ID: ${employee.custom_id})`); };
 
     const handleDelete = (projectId, projectName) => {
+        // Додатковий захист, якщо користувач якось натиснув кнопку
+        if (!canDelete) {
+            showToast("У вас немає прав на видалення", "error");
+            return;
+        }
+
         setConfirmModal({
             isOpen: true,
             title: "Підтвердити видалення",
@@ -479,7 +493,13 @@ export default function ProjectsPage() {
                                                 <button onClick={() => handleDetailsClick(project)} className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-500 hover:text-blue-600 transition-colors"><FaRegEye size={18}/></button>
                                                 <button onClick={() => setViewingProjectEquipment(project)} className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-500 transition-colors"><FaTruck/></button>
                                                 <button onClick={() => setViewingProjectDocs(project)} className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-500 transition-colors"><FaFolderOpen className="text-indigo-500" /></button>
-                                                <button onClick={() => handleDelete(project.custom_id, project.name)} className="w-9 h-9 flex items-center justify-center hover:bg-red-50 rounded-lg text-red-500 transition-colors"><FaTrash/></button>
+                                                
+                                                {/* 4. КНОПКА ВИДАЛЕННЯ З ОБМЕЖЕННЯМ */}
+                                                {canDelete && (
+                                                    <button onClick={() => handleDelete(project.custom_id, project.name)} className="w-9 h-9 flex items-center justify-center hover:bg-red-50 rounded-lg text-red-500 transition-colors">
+                                                        <FaTrash/>
+                                                    </button>
+                                                )}
                                             </div>
                                         </div>
                                     </motion.div>

@@ -5,12 +5,13 @@ import {
   FaDownload, FaEye, FaTimes, FaBuilding, FaFolderOpen, FaCheck, FaExclamationTriangle, FaTrash
 } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
-import { createClient } from '@supabase/supabase-js';
-import Layout from "./components/Layout"; // Імпорт Layout
+
+import Layout from "./components/Layout";
 import { supabase } from "./supabaseClient";
+import { useAuth } from "./AuthProvider";
+
 // --- КОНФІГУРАЦІЯ ---
 const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev'; 
-
 
 const DOC_TYPES = [
     "Комерційна пропозиція",
@@ -49,7 +50,69 @@ const Toast = memo(({ message, type, isVisible, onClose }) => {
     );
 });
 
-const DocumentCard = memo(({ doc, onPreview }) => {
+// --- НОВЕ КРАСИВЕ ВІКНО ПІДТВЕРДЖЕННЯ ---
+const ConfirmationModal = ({ isOpen, onClose, onConfirm, fileName, isDeleting }) => {
+    return (
+        <AnimatePresence>
+            {isOpen && (
+                <motion.div 
+                    initial={{ opacity: 0 }} 
+                    animate={{ opacity: 1 }} 
+                    exit={{ opacity: 0 }} 
+                    className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[300] flex items-center justify-center p-4"
+                    onClick={onClose}
+                >
+                    <motion.div 
+                        initial={{ scale: 0.95, opacity: 0 }} 
+                        animate={{ scale: 1, opacity: 1 }} 
+                        exit={{ scale: 0.95, opacity: 0 }} 
+                        className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="p-6 text-center">
+                            <div className="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-red-100 mb-4">
+                                <FaTrash className="h-6 w-6 text-red-600" />
+                            </div>
+                            <h3 className="text-lg leading-6 font-bold text-gray-900 mb-2">Видалити документ?</h3>
+                            <p className="text-sm text-gray-500">
+                                Ви збираєтесь безповоротно видалити файл <br/>
+                                <span className="font-semibold text-gray-800">"{fileName}"</span> <br/>
+                                з Google Диску. Цю дію неможливо скасувати.
+                            </p>
+                        </div>
+                        <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse gap-2">
+                            <button 
+                                type="button" 
+                                disabled={isDeleting}
+                                className="w-full inline-flex justify-center rounded-xl border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-70 disabled:cursor-not-allowed flex items-center gap-2"
+                                onClick={onConfirm}
+                            >
+                                {isDeleting ? (
+                                    <>
+                                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                        Видалення...
+                                    </>
+                                ) : (
+                                    "Так, видалити"
+                                )}
+                            </button>
+                            <button 
+                                type="button" 
+                                disabled={isDeleting}
+                                className="mt-3 w-full inline-flex justify-center rounded-xl border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                                onClick={onClose}
+                            >
+                                Скасувати
+                            </button>
+                        </div>
+                    </motion.div>
+                </motion.div>
+            )}
+        </AnimatePresence>
+    );
+};
+
+const DocumentCard = memo(({ doc, onPreview, onDeleteClick, canDelete }) => {
     const getIcon = (mimeType) => {
         if (mimeType.includes('pdf')) return <FaFilePdf className="text-red-500 text-3xl"/>;
         if (mimeType.includes('image')) return <FaFileImage className="text-blue-500 text-3xl"/>;
@@ -93,6 +156,16 @@ const DocumentCard = memo(({ doc, onPreview }) => {
                         <FaDownload />
                     </a>
                 )}
+                
+                {canDelete && (
+                    <button 
+                        onClick={() => onDeleteClick(doc)} // Викликаємо відкриття модалки
+                        className="p-2 text-red-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Видалити з Google Drive"
+                    >
+                        <FaTrash />
+                    </button>
+                )}
             </div>
         </motion.div>
     );
@@ -100,6 +173,10 @@ const DocumentCard = memo(({ doc, onPreview }) => {
 
 export default function DocumentsPage() {
     const fileInputRef = useRef(null);
+    const { role } = useAuth();
+    
+    // Права на видалення
+    const canDelete = ['admin', 'super_admin', 'office'].includes(role);
     
     // --- STATE ---
     const [searchTerm, setSearchTerm] = useState("");
@@ -119,6 +196,9 @@ export default function DocumentsPage() {
     const [previewUrl, setPreviewUrl] = useState(null);
     const [notification, setNotification] = useState({ isVisible: false, message: '', type: 'success' });
     const [showFilters, setShowFilters] = useState(false);
+
+    // Стан для модального вікна видалення
+    const [deleteModal, setDeleteModal] = useState({ isOpen: false, doc: null, isDeleting: false });
 
     // --- SEARCH ---
     useEffect(() => {
@@ -225,6 +305,51 @@ export default function DocumentsPage() {
         }
     };
 
+    // --- ЛОГІКА ВИДАЛЕННЯ ---
+    
+    // 1. Відкрити модалку
+    const openDeleteModal = (doc) => {
+        setDeleteModal({ isOpen: true, doc: doc, isDeleting: false });
+    };
+
+    // 2. Закрити модалку
+    const closeDeleteModal = () => {
+        setDeleteModal({ isOpen: false, doc: null, isDeleting: false });
+    };
+
+    // 3. Виконати видалення
+    const confirmDeleteDocument = async () => {
+        const doc = deleteModal.doc;
+        if (!doc) return;
+
+        setDeleteModal(prev => ({ ...prev, isDeleting: true }));
+
+        try {
+            const response = await fetch(`${SERVER_URL}/delete`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ file_id: doc.id })
+            });
+
+            const result = await response.json();
+
+            if (result.status === 'success' || response.ok) {
+                showToast("Файл успішно видалено з Google Drive", "success");
+                setDocuments(prev => prev.filter(d => d.id !== doc.id));
+                closeDeleteModal(); // Закриваємо модалку при успіху
+            } else {
+                throw new Error(result.message || "Помилка сервера при видаленні");
+            }
+        } catch (error) {
+            console.error("Delete failed:", error);
+            showToast("Не вдалося видалити файл: " + error.message, "error");
+            // Не закриваємо модалку, щоб юзер бачив, що сталась помилка, або просто скидаємо стан завантаження
+            setDeleteModal(prev => ({ ...prev, isDeleting: false }));
+        }
+    };
+
     const showToast = (message, type) => {
         setNotification({ isVisible: true, message, type });
     };
@@ -238,6 +363,15 @@ export default function DocumentsPage() {
         <Layout>
             <div className="p-4 sm:p-8 space-y-6 max-w-[1600px] mx-auto pb-safe min-h-[calc(100dvh-80px)] flex flex-col">
                 <Toast {...notification} onClose={() => setNotification(prev => ({ ...prev, isVisible: false }))} />
+                
+                {/* МОДАЛЬНЕ ВІКНО ПІДТВЕРДЖЕННЯ */}
+                <ConfirmationModal 
+                    isOpen={deleteModal.isOpen} 
+                    onClose={closeDeleteModal} 
+                    onConfirm={confirmDeleteDocument} 
+                    fileName={deleteModal.doc?.name}
+                    isDeleting={deleteModal.isDeleting}
+                />
 
                 {/* HEADER */}
                 <div className="flex flex-col gap-4 flex-none">
@@ -382,7 +516,6 @@ export default function DocumentsPage() {
                     </div>
 
                     {/* RIGHT COLUMN: Document List */}
-                    {/* FIX: h-auto для мобільного, щоб не було внутрішнього скролу */}
                     <div className="lg:col-span-2 lg:h-full lg:min-h-[500px] h-auto">
                          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 lg:h-full h-auto flex flex-col">
                             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 border-b border-slate-100 pb-4 flex-none">
@@ -418,7 +551,7 @@ export default function DocumentsPage() {
                                 )}
                             </div>
 
-                            {/* LIST CONTENT: overflow-y-auto ТІЛЬКИ на десктопі */}
+                            {/* LIST CONTENT */}
                             <div className="lg:flex-1 lg:overflow-y-auto lg:pr-1 custom-scrollbar">
                                 {!selectedObject ? (
                                     <div className="h-64 lg:h-full flex flex-col items-center justify-center text-slate-400">
@@ -437,7 +570,13 @@ export default function DocumentsPage() {
                                 ) : (
                                     <div className="grid grid-cols-1 gap-3">
                                         {filteredDocuments.map(doc => (
-                                            <DocumentCard key={doc.id} doc={doc} onPreview={setPreviewUrl} />
+                                            <DocumentCard 
+                                                key={doc.id} 
+                                                doc={doc} 
+                                                onPreview={setPreviewUrl} 
+                                                onDeleteClick={openDeleteModal} // Відкриваємо модалку замість прямого видалення
+                                                canDelete={canDelete}
+                                            />
                                         ))}
                                     </div>
                                 )}

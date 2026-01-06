@@ -11,16 +11,14 @@ import {
   FaFolderOpen, FaStickyNote, FaHashtag, FaBan, FaHourglass, FaSpinner,
   FaPhone, FaCity, FaGlobe, FaChevronDown, FaChevronUp, FaHandshake
 } from "react-icons/fa";
-import { createClient } from '@supabase/supabase-js';
 
-// Імпорти твоїх модальних вікон
+import { supabase } from "./supabaseClient";
+// Імпорти
 import ObjectDocumentsModal from "./components/ObjectDocumentsModal";
-import ProjectEquipmentModal from "./components/ProjectEquipmentModal"; 
+import ProjectEquipmentModal from "./components/ProjectEquipmentModal";
+import { useAuth } from "./AuthProvider"; // 1. ІМПОРТУЄМО AUTH CONTEXT
 
-// --- КОНФІГУРАЦІЯ ---
-const supabaseUrl = 'https://logxutaepqzmvgsvscle.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE';
-const supabase = createClient(supabaseUrl, supabaseKey);
+
 
 const ALLOWED_COMPANIES = ['Кайрос', 'Розумне збереження енергії'];
 
@@ -61,14 +59,15 @@ const STAGE_STATUS_OPTIONS = [
   { value: 'failed', label: 'Не виконали', icon: FaBan, color: 'text-red-500' },
 ];
 
-// Toast Component
+// --- Helper: Toast Component ---
 const Toast = ({ message, type = 'success', isVisible, onClose }) => {
   useEffect(() => {
     if (isVisible) {
-      const timer = setTimeout(onClose, 4000);
+      const duration = message.includes('УВАГА') ? 6000 : 4000;
+      const timer = setTimeout(onClose, duration);
       return () => clearTimeout(timer);
     }
-  }, [isVisible, onClose]);
+  }, [isVisible, onClose, message]);
 
   const styles = {
     success: 'bg-green-600 text-white',
@@ -100,7 +99,7 @@ const Toast = ({ message, type = 'success', isVisible, onClose }) => {
   );
 };
 
-// Comment Modal
+// --- Helper: Comment Modal ---
 const CommentModal = ({ isOpen, onClose, stage, comment, onSave }) => {
   const [text, setText] = useState(comment || '');
 
@@ -148,11 +147,24 @@ const CommentModal = ({ isOpen, onClose, stage, comment, onSave }) => {
   );
 };
 
-// Main Component
+// --- Helper: Порівняння значень для часткового оновлення ---
+const isDifferent = (val1, val2) => {
+  if (!val1 && !val2) return false;
+  return String(val1) !== String(val2);
+};
+
+// === MAIN COMPONENT ===
 export default function ProjectDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   
+  // 2. ОТРИМУЄМО РОЛЬ I TIER
+  const { role, tier } = useAuth();
+
+  // 3. ВИЗНАЧАЄМО ПРАВА НА РЕДАГУВАННЯ
+  // Редагувати можуть: Адміни, Офіс, або Монтажники з Tier 1 (Бригадири)
+  const canEdit = role === 'admin' || role === 'super_admin' || role === 'office' || (role === 'installer' && tier === 1);
+
   const activeStageRef = useRef(null);
 
   const [project, setProject] = useState(null);
@@ -160,7 +172,6 @@ export default function ProjectDetailPage() {
   const [saving, setSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   
-  // State для гармошок
   const [isObjectInfoOpen, setIsObjectInfoOpen] = useState(false);
   const [isFinanceOpen, setIsFinanceOpen] = useState(false);
   
@@ -214,7 +225,7 @@ export default function ProjectDetailPage() {
         }
         
         setProject(data);
-        setFormData(data);
+        setFormData(data); 
         setCurrentStage(data.workflow_stage || 'survey');
         
         const workflow = data.workflow_data ? (typeof data.workflow_data === 'string' ? JSON.parse(data.workflow_data) : data.workflow_data) : {};
@@ -249,37 +260,89 @@ export default function ProjectDetailPage() {
   }, []);
 
   const handleSave = async () => {
+    // Додатковий захист перед збереженням
+    if (!canEdit) {
+      showToast('У вас немає прав на редагування', 'error');
+      return;
+    }
+
     setSaving(true);
     try {
-      const { client, responsible_employee, ...updateData } = formData;
-      
-      updateData.workflow_data = workflowData;
-      updateData.workflow_stage = currentStage;
-      updateData.payment_status = updatePaymentStatus(updateData.total_cost, updateData.paid_amount);
-      
-      const { error } = await supabase
+      const currentData = {
+        ...formData,
+        workflow_data: workflowData,
+        workflow_stage: currentStage,
+        payment_status: updatePaymentStatus(formData.total_cost, formData.paid_amount),
+      };
+
+      const updates = {};
+      const ignoredKeys = ['client', 'responsible_employee', 'id', 'created_at', 'updated_at', 'client_id'];
+
+      Object.keys(currentData).forEach(key => {
+        if (ignoredKeys.includes(key)) return;
+
+        const oldValue = project[key];
+        const newValue = currentData[key];
+
+        if (key === 'workflow_data') {
+          if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
+            updates[key] = newValue;
+          }
+        } 
+        else if (isDifferent(oldValue, newValue)) {
+          updates[key] = newValue;
+        }
+      });
+
+      if (Object.keys(updates).length === 0) {
+        showToast('Немає змін для збереження', 'info');
+        setIsEditing(false);
+        setSaving(false);
+        return;
+      }
+
+      updates.updated_at = new Date().toISOString();
+
+      const { data, error } = await supabase
         .from('installations')
-        .update(updateData)
-        .eq('custom_id', id);
-        
-      if (error) throw error;
-      
-      showToast('Зміни успішно збережено!', 'success');
-      setIsEditing(false);
-      
-      const { data } = await supabase
-        .from('installations')
+        .update(updates)
+        .eq('custom_id', id)
+        .eq('updated_at', project.updated_at) 
         .select(`
             *,
             client:clients!installations_client_id_fkey (*),
             responsible_employee:employees!installations_responsible_emp_id_fkey (*)
-          `)
-        .eq('custom_id', id)
-        .single();
-      setProject(data);
+        `);
+        
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        throw new Error('VERSION_CONFLICT');
+      }
+      
+      showToast('Зміни успішно збережено!', 'success');
+      setIsEditing(false);
+      
+      const updatedProject = data[0];
+      setProject(updatedProject);
+      setFormData(updatedProject);
+
+      if (updatedProject.workflow_data) {
+         setWorkflowData(typeof updatedProject.workflow_data === 'string' 
+            ? JSON.parse(updatedProject.workflow_data) 
+            : updatedProject.workflow_data
+         );
+      }
       
     } catch (error) {
-      showToast(`Помилка збереження: ${error.message}`, 'error');
+      if (error.message === 'VERSION_CONFLICT') {
+        showToast('УВАГА! Дані застаріли. Хтось інший змінив цей проект. Сторінка оновиться для отримання актуальних даних.', 'error');
+        setTimeout(() => {
+           window.location.reload(); 
+        }, 3000);
+      } else {
+        showToast(`Помилка збереження: ${error.message}`, 'error');
+      }
     } finally {
       setSaving(false);
     }
@@ -371,7 +434,7 @@ export default function ProjectDetailPage() {
         />
       )}
 
-      {/* Header - Optimized for mobile & desktop */}
+      {/* Header */}
       <header className="sticky top-0 z-40 bg-white border-b border-gray-200/80 shadow-sm md:bg-white/95 md:backdrop-blur-xl md:shadow-lg">
         <div className="px-3 sm:px-6 py-4">
           <div className="flex justify-between items-center gap-2">
@@ -390,20 +453,23 @@ export default function ProjectDetailPage() {
             </div>
             
             <div className="flex items-center gap-2 flex-shrink-0">
-              {isEditing ? (
-                <>
-                  <button onClick={() => { setIsEditing(false); setFormData(project); }} className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium text-sm text-gray-700">
-                    <span className="hidden sm:inline">Скасувати</span><FaTimes className="sm:hidden"/>
+              {/* 4. КНОПКИ РЕДАГУВАННЯ ТІЛЬКИ ДЛЯ ALLOWED ROLES */}
+              {canEdit && (
+                isEditing ? (
+                  <>
+                    <button onClick={() => { setIsEditing(false); setFormData(project); }} className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium text-sm text-gray-700">
+                      <span className="hidden sm:inline">Скасувати</span><FaTimes className="sm:hidden"/>
+                    </button>
+                    <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium disabled:opacity-50 text-sm">
+                      {saving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <FaSave />}
+                      <span className="hidden sm:inline">{saving ? 'Збереження...' : 'Зберегти'}</span>
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => { setIsEditing(true); setIsObjectInfoOpen(true); setIsFinanceOpen(true); }} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm">
+                    <FaEdit /> <span className="hidden sm:inline">Редагувати</span>
                   </button>
-                  <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium disabled:opacity-50 text-sm">
-                    {saving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <FaSave />}
-                    <span className="hidden sm:inline">{saving ? 'Збереження...' : 'Зберегти'}</span>
-                  </button>
-                </>
-              ) : (
-                <button onClick={() => { setIsEditing(true); setIsObjectInfoOpen(true); setIsFinanceOpen(true); }} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm">
-                  <FaEdit /> <span className="hidden sm:inline">Редагувати</span>
-                </button>
+                )
               )}
             </div>
           </div>

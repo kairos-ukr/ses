@@ -4,9 +4,11 @@ import {
   FaCalendarAlt, FaSearch, FaPlus, FaTrash, FaUserPlus, 
   FaMapMarkerAlt, FaCheck, FaTimes, FaSave, FaBriefcase, 
   FaExclamationTriangle, FaArrowLeft, FaArrowRight, FaPen, FaTasks, FaUser,
-  FaBed, FaChevronLeft, FaEye, FaPencilAlt, FaRegCalendarAlt
+  FaBed, FaChevronLeft, FaEye, FaPencilAlt, FaRegCalendarAlt, FaUserSlash, FaLock
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
+import { useAuth } from "./AuthProvider"; // 1. ІМПОРТ AUTH CONTEXT
+
 // --- HELPER FUNCTIONS ---
 
 const formatDateToYYYYMMDD = (date) => {
@@ -18,7 +20,8 @@ const formatDateToYYYYMMDD = (date) => {
 
 const getStartOfWeek = (date) => {
     const d = new Date(date);
-    const day = d.getDay();
+    const day = d.getDay(); // 0 = Sunday, 1 = Monday, ...
+    // Робимо так, щоб тиждень починався з понеділка (якщо 0 (нд), то віднімаємо 6 днів)
     const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
     return new Date(d.setDate(diff));
 };
@@ -39,23 +42,52 @@ const useIsDesktop = () => {
     return isDesktop;
 };
 
+const isDateInPast = (date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const target = new Date(date);
+    target.setHours(0, 0, 0, 0);
+    
+    return target < today;
+};
+
 // --- КОМПОНЕНТИ ---
 
-const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, disabledItems = [], error }) => {
+const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, disabledItems = [], error, showInitialList = false }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState("");
+    const inputRef = useRef(null);
 
     const filteredOptions = useMemo(() => {
+        if (!search && !showInitialList) return [];
+
         const searchLower = search.toLowerCase();
-        return options.filter(opt => 
-            !disabledItems.includes(opt.value) && (
-                opt.label.toLowerCase().includes(searchLower) || 
-                (opt.subLabel && opt.subLabel.toLowerCase().includes(searchLower))
-            )
-        );
-    }, [options, search, disabledItems]);
+        let count = 0;
+        
+        return options.filter(opt => {
+            if (count > 50) return false;
+            
+            const isDisabled = disabledItems.includes(opt.value);
+            const matches = !search || 
+                            opt.label.toLowerCase().includes(searchLower) || 
+                            (opt.subLabel && opt.subLabel.toLowerCase().includes(searchLower));
+            
+            if (!isDisabled && matches) {
+                count++;
+                return true;
+            }
+            return false;
+        });
+    }, [options, search, disabledItems, showInitialList]);
 
     const selectedOption = options.find(o => o.value === value);
+
+    useEffect(() => {
+        if (isOpen && inputRef.current) {
+            inputRef.current.focus();
+        }
+    }, [isOpen]);
 
     return (
         <div className="relative">
@@ -76,27 +108,26 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, d
                     <>
                         <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}/>
                         <motion.div 
-                            initial={{ opacity: 0, y: 5 }}
+                            initial={{ opacity: 0, y: -10 }}
                             animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: 5 }}
+                            exit={{ opacity: 0, y: -10 }}
                             transition={{ duration: 0.15 }}
-                            // FIX: Z-Index підвищено до 100
-                            className="absolute z-[100] w-full mt-2 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden max-h-60 overflow-y-auto"
+                            className="absolute z-[100] w-full mt-2 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden"
                         >
-                            <div className="p-2 border-b border-gray-100 sticky top-0 bg-white z-10">
+                            <div className="p-2 border-b border-gray-100 bg-gray-50">
                                 <div className="relative">
                                     <FaSearch className="absolute left-3 top-2.5 text-gray-400 text-xs"/>
                                     <input 
-                                        autoFocus
+                                        ref={inputRef}
                                         type="text" 
-                                        className="w-full pl-8 pr-3 py-2 bg-gray-50 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-                                        placeholder="Пошук..."
+                                        className="w-full pl-8 pr-3 py-2 bg-white rounded-lg text-sm outline-none border border-gray-200 focus:border-indigo-300 transition-all"
+                                        placeholder={showInitialList ? "Пошук..." : "Введіть для пошуку..."}
                                         value={search}
                                         onChange={e => setSearch(e.target.value)}
                                     />
                                 </div>
                             </div>
-                            <div>
+                            <div className="max-h-56 overflow-y-auto">
                                 {filteredOptions.length > 0 ? (
                                     filteredOptions.map(opt => (
                                         <button
@@ -105,10 +136,13 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, d
                                             className="w-full text-left px-4 py-3 text-sm hover:bg-indigo-50 transition-colors border-b border-gray-50 last:border-0"
                                         >
                                             <div className="font-medium text-gray-800">{opt.label}</div>
+                                            {opt.subLabel && <div className="text-[10px] text-gray-400">{opt.subLabel}</div>}
                                         </button>
                                     ))
                                 ) : (
-                                    <div className="p-4 text-center text-xs text-gray-400">Нічого не знайдено</div>
+                                    <div className="p-4 text-center text-xs text-gray-400 italic">
+                                        {!search && !showInitialList ? "Введіть текст для пошуку..." : "Нічого не знайдено"}
+                                    </div>
                                 )}
                             </div>
                         </motion.div>
@@ -120,18 +154,70 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, d
     );
 };
 
+const QuickAbsenceAdder = ({ employees, date, onAdd }) => {
+    const [selectedEmp, setSelectedEmp] = useState("");
+    const [status, setStatus] = useState("OFF");
+
+    const availableEmployees = employees.map(e => ({
+        value: e.custom_id,
+        label: e.name,
+        subLabel: e.position
+    }));
+
+    const handleAdd = () => {
+        if (!selectedEmp) return;
+        onAdd(selectedEmp, status);
+        setSelectedEmp("");
+    };
+
+    return (
+        <div className="bg-red-50 border border-red-100 rounded-xl p-3 mb-4">
+            <h4 className="text-xs font-bold text-red-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                <FaUserSlash/> Відмітити відсутність
+            </h4>
+            <div className="space-y-2">
+                <SearchableSelect 
+                    options={availableEmployees}
+                    value={selectedEmp}
+                    onChange={setSelectedEmp}
+                    placeholder="Введіть ім'я працівника..."
+                    icon={FaUser}
+                />
+                <div className="flex gap-2">
+                    <select 
+                        value={status} 
+                        onChange={e => setStatus(e.target.value)}
+                        className="flex-1 bg-white border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2 outline-none"
+                    >
+                        <option value="OFF">Вихідний</option>
+                        <option value="SICK_LEAVE">Лікарняний</option>
+                        <option value="VACATION">Відпустка</option>
+                    </select>
+                    <button 
+                        onClick={handleAdd}
+                        disabled={!selectedEmp}
+                        className="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm disabled:opacity-50"
+                    >
+                        <FaCheck/>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const AbsentEmployeesList = ({ employees }) => {
     if (!employees || employees.length === 0) return null;
     return (
-        <div className="mt-6 pt-4 border-t border-gray-200">
+        <div className="mt-4 pt-4 border-t border-gray-200">
             <h4 className="text-xs font-bold text-red-400 uppercase tracking-wider mb-3 flex items-center gap-2">
                 <FaBed/> Вихідні сьогодні ({employees.length})
             </h4>
             <div className="space-y-2">
                 {employees.map(emp => (
-                    <div key={emp.id} className="flex justify-between items-center text-sm p-2 bg-red-50 rounded-lg text-red-700 border border-red-100">
-                        <span>{emp.name}</span>
-                        <span className="text-xs font-bold px-2 py-0.5 bg-white rounded-md border border-red-200">
+                    <div key={emp.id} className="flex justify-between items-center text-sm p-2 bg-white rounded-lg text-red-700 border border-red-100 shadow-sm">
+                        <span className="font-medium">{emp.name}</span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 bg-red-50 rounded-md text-red-500 border border-red-100 uppercase">
                             {emp.status === 'OFF' ? 'Вихідний' : emp.status === 'VACATION' ? 'Відпустка' : 'Лікарняний'}
                         </span>
                     </div>
@@ -141,12 +227,14 @@ const AbsentEmployeesList = ({ employees }) => {
     );
 };
 
-const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, onEdit, onSave, onCancel, isSaving, absentEmployees }) => {
+// --- КОМПОНЕНТ ПЕРЕГЛЯДУ (З УРАХУВАННЯМ ПРАВ) ---
+const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, onEdit, onSave, onCancel, isSaving, absentEmployees, isPast, canManageSchedule }) => {
     return (
         <div className="flex flex-col h-full bg-slate-50">
-            <div className="p-4 border-b flex items-center justify-between bg-white rounded-t-2xl shadow-sm z-20">
-                <h3 className="font-bold text-lg text-gray-800">
+            <div className="p-4 border-b flex items-center justify-between bg-white rounded-t-2xl shadow-sm z-20 flex-none">
+                <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2">
                     {isPreviewMode ? "Попередній перегляд" : "План робіт"}
+                    {isPast && <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full flex items-center gap-1"><FaLock size={10}/> Архів</span>}
                 </h3>
                 <button onClick={onCancel} className="p-2 bg-gray-100 rounded-full text-gray-500 hover:text-gray-800"><FaTimes/></button>
             </div>
@@ -209,7 +297,7 @@ const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, on
                 <AbsentEmployeesList employees={absentEmployees} />
             </div>
 
-            <div className="p-4 border-t bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] space-y-3">
+            <div className="p-4 border-t bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] space-y-3 flex-none">
                 {isPreviewMode ? (
                     <>
                         <button 
@@ -224,12 +312,19 @@ const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, on
                         </button>
                     </>
                 ) : (
-                    <button 
-                        onClick={onEdit} 
-                        className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
-                    >
-                        <FaPencilAlt/> Редагувати план
-                    </button>
+                    // КНОПКА РЕДАГУВАННЯ: ТІЛЬКИ ЯКЩО НЕ В МИНУЛОМУ І Є ПРАВА
+                    !isPast && canManageSchedule ? (
+                        <button 
+                            onClick={onEdit} 
+                            className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+                        >
+                            <FaPencilAlt/> Редагувати план
+                        </button>
+                    ) : (
+                        <div className="text-center text-gray-400 text-sm py-2 flex items-center justify-center gap-2">
+                            {isPast ? <><FaLock/> Редагування минулих періодів заборонено</> : <span className="italic">Тільки для перегляду</span>}
+                        </div>
+                    )
                 )}
             </div>
         </div>
@@ -238,8 +333,24 @@ const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, on
 
 // --- ГОЛОВНИЙ КОМПОНЕНТ ---
 export default function WorkCalendar() {
+    // 2. ОТРИМУЄМО РОЛЬ
+    const { role } = useAuth();
+    // 3. ВИЗНАЧАЄМО ПРАВО НА РЕДАГУВАННЯ (Admin або Office)
+    const canManageSchedule = role === 'admin' || role === 'super_admin' || role === 'office';
+
     const isDesktop = useIsDesktop();
-    const [currentWeekStart, setCurrentWeekStart] = useState(getStartOfWeek(new Date()));
+    
+    // 4. ЛОГІКА ПОЧАТКУ ТИЖНЯ (Якщо Нд -> показуємо наступний тиждень)
+    const [currentWeekStart, setCurrentWeekStart] = useState(() => {
+        const today = new Date();
+        const day = today.getDay();
+        if (day === 0) { // Якщо сьогодні неділя
+             const nextMonday = addDays(today, 1);
+             return getStartOfWeek(nextMonday);
+        }
+        return getStartOfWeek(today);
+    });
+
     const [assignmentsByDate, setAssignmentsByDate] = useState({});
     
     // States for Modal
@@ -248,6 +359,8 @@ export default function WorkCalendar() {
     const [modalMode, setModalMode] = useState('view');
     const [validationErrors, setValidationErrors] = useState({});
     
+    const [isPastDate, setIsPastDate] = useState(false);
+
     const [installations, setInstallations] = useState([]);
     const [employees, setEmployees] = useState([]);
     const [timeOffMap, setTimeOffMap] = useState({}); 
@@ -255,13 +368,9 @@ export default function WorkCalendar() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
-    // 1. СТВОРЮЄМО REF ДЛЯ СЬОГОДНІШНЬОГО ДНЯ
     const todayRef = useRef(null);
-
-    // Реф для інпуту дати
     const dateInputRef = useRef(null);
 
-    // Клік по хедеру для відкриття календаря
     const triggerDatePicker = () => {
         try {
             if (dateInputRef.current) {
@@ -287,7 +396,8 @@ export default function WorkCalendar() {
     const loadWeekData = useCallback(async () => {
         setLoading(true);
         const startDateStr = formatDateToYYYYMMDD(currentWeekStart);
-        const endDateStr = formatDateToYYYYMMDD(addDays(currentWeekStart, 6));
+        // Завантажуємо дані до суботи (6-й день від старту), бо неділю не показуємо
+        const endDateStr = formatDateToYYYYMMDD(addDays(currentWeekStart, 6)); 
 
         try {
             const { data: instData } = await supabase
@@ -362,7 +472,6 @@ export default function WorkCalendar() {
         loadWeekData();
     }, [loadWeekData]);
 
-    // FIX: АВТОМАТИЧНИЙ СКРОЛ ДО "СЬОГОДНІ" - залежить від loading
     useEffect(() => {
         if (!loading && todayRef.current) {
             todayRef.current.scrollIntoView({ 
@@ -374,13 +483,24 @@ export default function WorkCalendar() {
     }, [loading, currentWeekStart]);
 
     const openDayEditor = (date) => {
+        const isPast = isDateInPast(date);
+        setIsPastDate(isPast);
+
         const dateStr = formatDateToYYYYMMDD(date);
         const existingData = assignmentsByDate[dateStr] ? JSON.parse(JSON.stringify(assignmentsByDate[dateStr])) : [];
         setDayAssignments(existingData);
         setEditingDate(date);
         setValidationErrors({});
         
-        if (existingData.length === 0) {
+        // 5. ЛОГІКА ВІДКРИТТЯ МОДАЛКИ В ЗАЛЕЖНОСТІ ВІД ПРАВ
+        if (!canManageSchedule) {
+            // Монтажники завжди бачать 'view'
+            setModalMode('view');
+        } else if (isPast) {
+            // Минуле тільки для перегляду навіть для адмінів
+            setModalMode('view');
+        } else if (existingData.length === 0) {
+            // Якщо пусто і є права - зразу режим редагування
             setDayAssignments([{ id: Date.now(), installationId: null, workers: [], notes: "" }]);
             setModalMode('edit');
         } else {
@@ -393,6 +513,7 @@ export default function WorkCalendar() {
         setDayAssignments([]);
         setModalMode('view');
         setValidationErrors({});
+        setIsPastDate(false);
     };
 
     const getAbsentEmployees = () => {
@@ -421,9 +542,6 @@ export default function WorkCalendar() {
 
         return employees.filter(emp => {
             const deps = emp.department || [];
-            const pos = (emp.position || "").toLowerCase();
-            if (deps.includes('Проектування') || pos.includes('проектант')) return false;
-            if (deps.includes('Офіс') && !deps.some(d => ['Монтаж', 'Водій'].includes(d))) return false;
             if (dayOffs.hasOwnProperty(emp.custom_id)) return false;
             if (assignedElsewhere.has(emp.custom_id)) return false;
             if (assignedInCurrent.has(emp.custom_id)) return false; 
@@ -431,7 +549,7 @@ export default function WorkCalendar() {
         }).map(emp => ({
             value: emp.custom_id,
             label: emp.name,
-            subLabel: `${emp.position || ''} #${emp.custom_id}`
+            subLabel: `${emp.position || ''}`
         }));
     };
 
@@ -446,7 +564,9 @@ export default function WorkCalendar() {
     const updateCard = (idx, field, val) => {
         const newData = [...dayAssignments];
         newData[idx][field] = val;
-        if (field === 'installationId' && val === 'custom') newData[idx].notes = "";
+        if (field === 'installationId' && val === 'custom') {
+             if (!newData[idx].notes) newData[idx].notes = ""; 
+        }
         setDayAssignments(newData);
         if (validationErrors[idx] && validationErrors[idx][field]) {
             setValidationErrors(prev => ({ ...prev, [idx]: { ...prev[idx], [field]: null } }));
@@ -466,6 +586,34 @@ export default function WorkCalendar() {
         const newData = [...dayAssignments];
         newData[idx].workers = newData[idx].workers.filter(id => id !== wId);
         setDayAssignments(newData);
+    };
+
+    const handleQuickAbsence = async (empId, status) => {
+        if (!editingDate) return;
+        const dateStr = formatDateToYYYYMMDD(editingDate);
+        try {
+            const { error } = await supabase.from('attendance').upsert({
+                employee_custom_id: empId,
+                work_date: dateStr,
+                status: status
+            }, { onConflict: 'employee_custom_id, work_date' });
+
+            if (error) throw error;
+            
+            setTimeOffMap(prev => ({
+                ...prev,
+                [dateStr]: { ...(prev[dateStr] || {}), [empId]: status }
+            }));
+            
+            const newAssignments = dayAssignments.map(assign => ({
+                ...assign,
+                workers: assign.workers.filter(w => w !== empId)
+            }));
+            setDayAssignments(newAssignments);
+
+        } catch (e) {
+            alert("Помилка збереження відсутності: " + e.message);
+        }
     };
 
     const handleSwitchToPreview = () => {
@@ -498,6 +646,10 @@ export default function WorkCalendar() {
     };
 
     const handleSaveDay = async () => {
+        if (isPastDate) {
+            alert("Неможливо зберегти зміни для минулої дати.");
+            return;
+        }
         setSaving(true);
         const dateStr = formatDateToYYYYMMDD(editingDate);
         const records = [];
@@ -543,23 +695,31 @@ export default function WorkCalendar() {
         return [{ value: 'custom', label: '⚡ Інше / Створити вручну', subLabel: 'Для робіт поза базою' }, ...base];
     }, [installations]);
 
+    // 6. ГЕНЕРАЦІЯ ТІЛЬКИ 6 ДНІВ (ПН-СБ)
     const weekDays = useMemo(() => {
-        return Array.from({ length: 7 }).map((_, i) => addDays(currentWeekStart, i));
+        return Array.from({ length: 6 }).map((_, i) => addDays(currentWeekStart, i));
     }, [currentWeekStart]);
 
     const absentEmployees = getAbsentEmployees();
+    
+    const employeesAvailableForAbsence = useMemo(() => {
+        if(!editingDate) return [];
+        const dateStr = formatDateToYYYYMMDD(editingDate);
+        const dayOffs = timeOffMap[dateStr] || {};
+        return employees.filter(e => !dayOffs.hasOwnProperty(e.custom_id));
+    }, [employees, timeOffMap, editingDate]);
 
     return (
         <div className="min-h-screen bg-slate-100 pb-20">
-            {/* Header with Programmatic Date Picker */}
-            <div className="bg-white sticky top-0 z-30 shadow-sm border-b border-gray-200">
-                <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+            {/* Header */}
+            <div className="bg-white relative z-30 shadow-sm border-b border-gray-200">
+                <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
                     <button onClick={() => setCurrentWeekStart(d => addDays(d, -7))} className="p-2 hover:bg-gray-100 rounded-full text-gray-600"><FaArrowLeft/></button>
                     
                     <div className="flex-1 flex justify-center">
                         <div 
                             onClick={triggerDatePicker}
-                            className="relative group cursor-pointer px-4 py-2 rounded-xl hover:bg-gray-50 transition-colors"
+                            className="relative group cursor-pointer px-4 py-1.5 rounded-xl hover:bg-gray-50 transition-colors"
                         >
                             <input 
                                 ref={dateInputRef}
@@ -569,13 +729,14 @@ export default function WorkCalendar() {
                             />
                             
                             <div className="text-center">
-                                <h2 className="text-lg font-bold text-gray-800 flex items-center justify-center gap-2 group-hover:text-indigo-600 transition-colors">
+                                <h2 className="text-base font-bold text-gray-800 flex items-center justify-center gap-2 group-hover:text-indigo-600 transition-colors">
                                     <FaRegCalendarAlt className="text-indigo-500"/>
                                     <span className="whitespace-nowrap">
-                                        {weekDays[0].toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })} — {weekDays[6].toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}
+                                        {/* Відображення тижня */}
+                                        {weekDays[0].toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })} — {weekDays[5].toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}
                                     </span>
                                 </h2>
-                                <p className="text-xs text-gray-500 font-medium">{weekDays[0].getFullYear()}</p>
+                                <p className="text-[10px] text-gray-400 font-medium">{weekDays[0].getFullYear()}</p>
                             </div>
                         </div>
                     </div>
@@ -586,19 +747,13 @@ export default function WorkCalendar() {
 
             {/* Grid */}
             <div className="max-w-7xl mx-auto p-2 sm:p-4 overflow-x-auto">
-                <div className="grid grid-cols-1 md:grid-cols-7 gap-3 min-w-[300px]">
-                    {/* FIX: SKELETON LOADING */}
+                {/* Змінено на 6 колонок */}
+                <div className="grid grid-cols-1 md:grid-cols-6 gap-3 min-w-[300px]">
                     {loading ? (
-                         Array.from({ length: 7 }).map((_, i) => (
+                         Array.from({ length: 6 }).map((_, i) => (
                             <div key={i} className="min-h-[120px] bg-white rounded-xl border border-gray-100 p-3 flex flex-col gap-2 animate-pulse">
-                                <div className="flex justify-between items-center pb-2 border-b border-gray-50">
-                                    <div className="h-4 w-10 bg-gray-200 rounded"></div>
-                                    <div className="h-4 w-6 bg-gray-200 rounded-full"></div>
-                                </div>
-                                <div className="space-y-2 mt-2">
-                                    <div className="h-6 w-full bg-gray-100 rounded-lg"></div>
-                                    <div className="h-6 w-3/4 bg-gray-100 rounded-lg"></div>
-                                </div>
+                                <div className="h-4 w-10 bg-gray-200 rounded"></div>
+                                <div className="h-6 w-full bg-gray-100 rounded-lg mt-2"></div>
                             </div>
                          ))
                     ) : (
@@ -646,9 +801,12 @@ export default function WorkCalendar() {
                                                 );
                                             })
                                         ) : (
-                                            <div className="h-full flex items-center justify-center text-gray-300 text-xs">
-                                                <FaPlus/>
-                                            </div>
+                                            // Плюсик показуємо тільки тим, хто може редагувати
+                                            canManageSchedule && !isPastDate && (
+                                                <div className="h-full flex items-center justify-center text-gray-300 text-xs">
+                                                    <FaPlus/>
+                                                </div>
+                                            )
                                         )}
                                     </div>
 
@@ -677,7 +835,7 @@ export default function WorkCalendar() {
                             animate={isDesktop ? { x: 0 } : { y: 0 }}
                             exit={isDesktop ? { x: "100%" } : { y: "100%" }}
                             transition={{ type: "tween", ease: "easeOut", duration: 0.25 }}
-                            className="bg-white w-full h-full md:w-[600px] shadow-2xl flex flex-col md:rounded-l-2xl"
+                            className="bg-white w-full h-[100dvh] md:h-full md:w-[600px] shadow-2xl flex flex-col rounded-t-2xl md:rounded-l-2xl md:rounded-tr-none"
                             onClick={e => e.stopPropagation()}
                         >
                             {(modalMode === 'view' || modalMode === 'preview') && (
@@ -691,12 +849,15 @@ export default function WorkCalendar() {
                                     onCancel={closeDayEditor}
                                     isSaving={saving}
                                     absentEmployees={absentEmployees}
+                                    isPast={isPastDate}
+                                    // ПЕРЕДАЄМО ПРАВА В КОМПОНЕНТ ПЕРЕГЛЯДУ
+                                    canManageSchedule={canManageSchedule}
                                 />
                             )}
 
-                            {modalMode === 'edit' && (
+                            {modalMode === 'edit' && canManageSchedule && (
                                 <>
-                                    <div className="p-4 border-b flex items-center justify-between bg-white sticky top-0 z-20 md:rounded-tl-2xl">
+                                    <div className="p-4 border-b flex items-center justify-between bg-white z-20 rounded-t-2xl md:rounded-tl-2xl flex-none shadow-sm">
                                         <button onClick={closeDayEditor} className="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full md:hidden">
                                             <FaChevronLeft size={20} />
                                         </button>
@@ -710,73 +871,89 @@ export default function WorkCalendar() {
                                         <div className="w-10 md:hidden"></div>
                                     </div>
 
-                                    <div className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-4">
-                                        {dayAssignments.map((assign, idx) => (
-                                            <div key={assign.id} className={`bg-white p-4 rounded-xl shadow-sm border relative ${validationErrors[idx] ? 'border-red-300 ring-1 ring-red-100' : 'border-gray-200'}`}>
-                                                <button onClick={() => removeCard(idx)} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 p-2"><FaTrash size={14}/></button>
-                                                
-                                                <div className="mb-3 pr-6">
-                                                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Завдання</label>
-                                                    <SearchableSelect 
-                                                        options={installationOptions}
-                                                        value={assign.installationId}
-                                                        onChange={(val) => updateCard(idx, 'installationId', val)}
-                                                        placeholder="Оберіть об'єкт..."
-                                                        icon={FaBriefcase}
-                                                        disabledItems={dayAssignments.filter((_, i) => i !== idx).map(a => a.installationId)}
-                                                        error={validationErrors[idx]?.installationId}
-                                                    />
-                                                </div>
-
-                                                {assign.installationId === 'custom' && (
-                                                    <div className="mb-3">
-                                                        <label className="text-[10px] font-bold text-amber-500 uppercase tracking-wider mb-1 block flex items-center gap-1"><FaPen size={10}/> Назва завдання</label>
-                                                        <input 
-                                                            type="text" 
-                                                            placeholder="Наприклад: Прибирання складу..." 
-                                                            value={assign.notes}
-                                                            onChange={(e) => updateCard(idx, 'notes', e.target.value)}
-                                                            className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 outline-none ${validationErrors[idx]?.notes ? 'border-red-500 ring-red-100' : 'border-amber-200 bg-amber-50/50 focus:ring-amber-200'}`}
-                                                            autoFocus
-                                                        />
-                                                        {validationErrors[idx]?.notes && <p className="text-red-500 text-xs mt-1">{validationErrors[idx].notes}</p>}
-                                                    </div>
-                                                )}
-
-                                                {assign.installationId && (
-                                                    <div>
-                                                        <div className="flex flex-wrap gap-2 mb-2">
-                                                            {assign.workers.map(wId => {
-                                                                const emp = employees.find(e => e.custom_id === wId);
-                                                                return (
-                                                                    <span key={wId} className="inline-flex items-center gap-2 px-2 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-medium border border-indigo-100">
-                                                                        <FaUser size={10}/> {emp?.name || wId}
-                                                                        <button onClick={() => removeWorker(idx, wId)} className="text-indigo-300 hover:text-red-500"><FaTimes size={10}/></button>
-                                                                    </span>
-                                                                );
-                                                            })}
-                                                        </div>
+                                    <div className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-6">
+                                        {/* Секція завдань */}
+                                        <div className="space-y-4">
+                                            {dayAssignments.map((assign, idx) => (
+                                                <div key={assign.id} className={`bg-white p-4 rounded-xl shadow-sm border relative ${validationErrors[idx] ? 'border-red-300 ring-1 ring-red-100' : 'border-gray-200'}`}>
+                                                    <button onClick={() => removeCard(idx)} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 p-2"><FaTrash size={14}/></button>
+                                                    
+                                                    <div className="mb-3 pr-6">
+                                                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Завдання #{idx + 1}</label>
                                                         <SearchableSelect 
-                                                            options={getAvailableEmployees(idx)}
-                                                            onChange={(val) => addWorker(idx, val)}
-                                                            placeholder="Додати працівника..."
-                                                            icon={FaUserPlus}
-                                                            value={null}
+                                                            options={installationOptions}
+                                                            value={assign.installationId}
+                                                            onChange={(val) => updateCard(idx, 'installationId', val)}
+                                                            placeholder="Оберіть об'єкт..."
+                                                            icon={FaBriefcase}
+                                                            disabledItems={dayAssignments
+                                                                .filter((_, i) => i !== idx)
+                                                                .map(a => a.installationId)
+                                                                .filter(id => id !== 'custom')
+                                                            }
+                                                            error={validationErrors[idx]?.installationId}
+                                                            showInitialList={true} 
                                                         />
-                                                        {validationErrors[idx]?.workers && <p className="text-red-500 text-xs mt-1">{validationErrors[idx].workers}</p>}
                                                     </div>
-                                                )}
-                                            </div>
-                                        ))}
 
-                                        <button onClick={addCard} className="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 text-sm font-medium hover:border-indigo-400 hover:text-indigo-600 transition-colors flex items-center justify-center gap-2">
-                                            <FaPlus /> Додати ще завдання
-                                        </button>
+                                                    {assign.installationId === 'custom' && (
+                                                        <div className="mb-3">
+                                                            <label className="text-[10px] font-bold text-amber-500 uppercase tracking-wider mb-1 block flex items-center gap-1"><FaPen size={10}/> Назва завдання</label>
+                                                            <input 
+                                                                type="text" 
+                                                                placeholder="Наприклад: Прибирання складу..." 
+                                                                value={assign.notes}
+                                                                onChange={(e) => updateCard(idx, 'notes', e.target.value)}
+                                                                className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 outline-none ${validationErrors[idx]?.notes ? 'border-red-500 ring-red-100' : 'border-amber-200 bg-amber-50/50 focus:ring-amber-200'}`}
+                                                                autoFocus
+                                                            />
+                                                            {validationErrors[idx]?.notes && <p className="text-red-500 text-xs mt-1">{validationErrors[idx].notes}</p>}
+                                                        </div>
+                                                    )}
 
-                                        <AbsentEmployeesList employees={absentEmployees} />
+                                                    {assign.installationId && (
+                                                        <div>
+                                                            <div className="flex flex-wrap gap-2 mb-2">
+                                                                {assign.workers.map(wId => {
+                                                                    const emp = employees.find(e => e.custom_id === wId);
+                                                                    return (
+                                                                        <span key={wId} className="inline-flex items-center gap-2 px-2 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-medium border border-indigo-100">
+                                                                            <FaUser size={10}/> {emp?.name || wId}
+                                                                            <button onClick={() => removeWorker(idx, wId)} className="text-indigo-300 hover:text-red-500"><FaTimes size={10}/></button>
+                                                                        </span>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                            <SearchableSelect 
+                                                                options={getAvailableEmployees(idx)}
+                                                                onChange={(val) => addWorker(idx, val)}
+                                                                placeholder="Додати працівника..."
+                                                                icon={FaUserPlus}
+                                                                value={null}
+                                                            />
+                                                            {validationErrors[idx]?.workers && <p className="text-red-500 text-xs mt-1">{validationErrors[idx].workers}</p>}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+
+                                            <button onClick={addCard} className="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 text-sm font-medium hover:border-indigo-400 hover:text-indigo-600 transition-colors flex items-center justify-center gap-2">
+                                                <FaPlus /> Додати ще завдання
+                                            </button>
+                                        </div>
+
+                                        {/* Секція відсутності */}
+                                        <div className="border-t border-gray-200 pt-4">
+                                            <QuickAbsenceAdder 
+                                                employees={employeesAvailableForAbsence}
+                                                date={editingDate}
+                                                onAdd={handleQuickAbsence}
+                                            />
+                                            <AbsentEmployeesList employees={absentEmployees} />
+                                        </div>
                                     </div>
 
-                                    <div className="p-4 border-t bg-white sticky bottom-0 z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] rounded-b-none md:rounded-b-2xl">
+                                    <div className="p-4 border-t bg-white sticky bottom-0 z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] rounded-b-none md:rounded-b-2xl flex-none">
                                         <button 
                                             onClick={handleSwitchToPreview} 
                                             className="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 text-lg hover:bg-indigo-700"

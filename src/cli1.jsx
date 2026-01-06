@@ -5,13 +5,12 @@ import {
   FaEdit, FaHandshake, FaIndustry, FaTimes, FaCheck, FaChevronLeft, FaChevronRight,
   FaSignOutAlt
 } from "react-icons/fa";
-import { createClient } from '@supabase/supabase-js';
-import Layout from "./components/Layout"; // ІМПОРТУЄМО НОВИЙ LAYOUT
+import { supabase } from "./supabaseClient";
+import Layout from "./components/Layout";
+import { useAuth } from "./AuthProvider"; // 1. ІМПОРТУЄМО AUTH CONTEXT
 
 // Supabase
-const supabaseUrl = 'https://logxutaepqzmvgsvscle.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZ3h1dGFlcHF6bXZnc3ZzY2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODU4MDEsImV4cCI6MjA2OTU2MTgwMX0.NhbaKL5X48jHyPPxZ-6EadLcBfM-NMxMA8qbksT9VhE';
-const supabase = createClient(supabaseUrl, supabaseKey);
+
 
 // Debounce hook
 const useDebounce = (value, delay) => {
@@ -47,7 +46,8 @@ const NotificationSystem = memo(({ notifications, removeNotification }) => (
   </div>
 ));
 
-const ClientCard = memo(({ client, onEdit }) => {
+// 2. ОНОВЛЮЄМО CLIENT CARD: приймаємо проп canEdit
+const ClientCard = memo(({ client, onEdit, canEdit }) => {
   const typeMap = {
     'Приватний будинок': { icon: FaBuilding, color: 'text-blue-600 bg-blue-50', label: 'Приватний' },
     'Промислове підприємство': { icon: FaIndustry, color: 'text-purple-600 bg-purple-50', label: 'Промисловість' },
@@ -90,9 +90,13 @@ const ClientCard = memo(({ client, onEdit }) => {
       
       <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center">
         <span className="text-[10px] text-slate-400">Створено: {formatDate(client.created_at)}</span>
-        <button onClick={() => onEdit(client)} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 rounded-lg text-xs font-bold transition-colors border border-slate-200 hover:border-indigo-200">
-          <FaEdit/> Редагувати
-        </button>
+        
+        {/* 3. УМОВА ВІДОБРАЖЕННЯ КНОПКИ РЕДАГУВАННЯ */}
+        {canEdit && (
+          <button onClick={() => onEdit(client)} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 rounded-lg text-xs font-bold transition-colors border border-slate-200 hover:border-indigo-200">
+            <FaEdit/> Редагувати
+          </button>
+        )}
       </div>
     </div>
   );
@@ -110,6 +114,14 @@ const Pagination = memo(({ currentPage, totalPages, onPageChange }) => {
 });
 
 export default function ClientsPage() {
+  // 4. ОТРИМУЄМО РОЛЬ КОРИСТУВАЧА
+  const { role } = useAuth();
+  
+  // 5. ВИЗНАЧАЄМО ПРАВА ДОСТУПУ
+  // Create доступно всім (згідно з таблицею), тому canCreate окремо не потрібен, кнопка просто відображається.
+  // Edit доступно тільки Адміну та Офісу.
+  const canEdit = role === 'admin' || role === 'super_admin' || role === 'office';
+
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -119,7 +131,7 @@ export default function ClientsPage() {
   const [showFilters, setShowFilters] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(9); // 9 карток на сторінку - добре для сітки 3х3
+  const [itemsPerPage] = useState(9); 
   const [totalClients, setTotalClients] = useState(0);
 
   const [showForm, setShowForm] = useState(false);
@@ -179,6 +191,11 @@ export default function ClientsPage() {
   useEffect(() => { loadClients(currentPage); }, [currentPage, loadClients]);
 
   const handleEditClient = (client) => {
+      // Додатковий захист: якщо монтажник якось викликав цю функцію
+      if (!canEdit) {
+        addNotification("У вас немає прав на редагування", "error");
+        return;
+      }
       setEditingClient(client);
       setFormData({
           name: client.name || '', oblast: client.oblast || '', populated_place: client.populated_place || '',
@@ -202,7 +219,6 @@ export default function ClientsPage() {
 
   const handleInputChange = (field, value) => {
     if (field === 'phone') {
-        // Проста валідація вводу телефону
         if (!value.startsWith('+380')) value = '+380' + value.replace(/^\+380/, '').replace(/[^\d]/g, '');
         if (value.length > 13) value = value.substring(0, 13);
     }
@@ -221,9 +237,13 @@ export default function ClientsPage() {
     try {
       const clientData = { ...formData, first_contact: formData.first_contact || null };
       let result;
+      
+      // Перевірка прав при спробі оновлення
       if (editingClient) {
+        if (!canEdit) throw new Error("Немає прав на редагування");
         result = await supabase.from('clients').update({ ...clientData, updated_at: new Date().toISOString() }).eq('custom_id', editingClient.custom_id);
       } else {
+        // Створення доступне всім
         result = await supabase.from('clients').insert([clientData]);
       }
       if (result.error) throw result.error;
@@ -249,6 +269,7 @@ export default function ClientsPage() {
                     <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 tracking-tight">Клієнти</h1>
                     <p className="text-slate-500 text-sm mt-1">База замовників та об'єктів</p>
                 </div>
+                {/* КНОПКА СТВОРЕННЯ (Доступна всім ✅) */}
                 <button onClick={handleAddClient} className="flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all w-full sm:w-auto">
                     <FaPlus/> <span>Новий клієнт</span>
                 </button>
@@ -317,7 +338,12 @@ export default function ClientsPage() {
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                     {clients.map(client => (
-                        <ClientCard key={client.custom_id} client={client} onEdit={handleEditClient} />
+                        <ClientCard 
+                            key={client.custom_id} 
+                            client={client} 
+                            onEdit={handleEditClient}
+                            canEdit={canEdit} // 6. ПЕРЕДАЄМО ПРАВА В КАРТКУ
+                        />
                     ))}
                 </div>
             )}
@@ -334,7 +360,7 @@ export default function ClientsPage() {
       <AnimatePresence>
         {showForm && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6" onClick={() => setShowForm(false)}>
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" /> {/* Оптимізований фон модалки */}
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" /> 
                 <motion.div 
                     initial={{ scale: 0.95, opacity: 0, y: 20 }} 
                     animate={{ scale: 1, opacity: 1, y: 0 }} 

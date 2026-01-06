@@ -7,10 +7,11 @@ import {
   FaSortAmountDown, FaSortAmountUp, FaUsers, FaBuilding, 
   FaUserTie, FaCog, FaCreditCard, FaLink,
   FaSignOutAlt, FaHome, FaChevronDown, FaExclamationTriangle,
-  FaUserEdit, FaUser, FaFilter, FaFolderOpen, FaFire // Додано FaFire для прострочених
+  FaUserEdit, FaUser, FaFilter, FaFolderOpen, FaFire 
 } from 'react-icons/fa';
 import { supabase } from "./supabaseClient";
-import Layout from "./components/Layout"; 
+import Layout from "./components/Layout";
+import { useAuth } from "./AuthProvider"; // 1. ІМПОРТ AUTH CONTEXT
 
 // --- КОМПОНЕНТИ UI ---
 
@@ -20,7 +21,7 @@ const StatusIcon = ({ status, className = '' }) => {
     'в процесі': <FaClock className={`text-blue-500 ${className}`} />,
     'виконано': <FaCheck className={`text-emerald-500 ${className}`} />,
     'скасовано': <FaTimes className={`text-slate-400 ${className}`} />,
-    'прострочено': <FaFire className={`text-red-500 ${className}`} />, // Іконка для прострочених
+    'прострочено': <FaFire className={`text-red-500 ${className}`} />,
   };
   return icons[status] || <FaTasks className={`text-slate-500 ${className}`} />;
 };
@@ -49,19 +50,16 @@ const LoadingScreen = () => (
     </div>
 );
 
-// ОНОВЛЕНИЙ KOMPONENT КАРТОК ФІЛЬТРІВ (6 карток, новий дизайн)
 const FilterCards = ({ tasks, filter, setFilter }) => {
-  // Додаємо 'прострочено' як окрему категорію для карток (хоча в базі статус може бути іншим)
   const categories = [
       { id: 'всі', label: 'Всі', color: 'indigo', icon: FaTasks },
       { id: 'нове', label: 'Нові', color: 'amber', icon: FaPlus },
       { id: 'в процесі', label: 'В роботі', color: 'blue', icon: FaClock },
-      { id: 'прострочено', label: 'Горять', color: 'red', icon: FaFire }, // Нова картка
+      { id: 'прострочено', label: 'Горять', color: 'red', icon: FaFire },
       { id: 'виконано', label: 'Готово', color: 'emerald', icon: FaCheck },
       { id: 'скасовано', label: 'Скасовано', color: 'slate', icon: FaTimes },
   ];
 
-  // Функція підрахунку (для прострочених особлива логіка)
   const getCount = (catId) => {
       if (catId === 'всі') return tasks.length;
       if (catId === 'прострочено') {
@@ -77,7 +75,6 @@ const FilterCards = ({ tasks, filter, setFilter }) => {
             const count = getCount(cat.id);
             const isActive = filter === cat.id;
             
-            // Стилі для кольорів
             const colorStyles = {
                 indigo:  isActive ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-l-indigo-500 hover:bg-indigo-50/50',
                 amber:   isActive ? 'bg-amber-50 border-amber-500 text-amber-700' : 'border-l-amber-500 hover:bg-amber-50/50',
@@ -99,9 +96,7 @@ const FilterCards = ({ tasks, filter, setFilter }) => {
                         ${isActive ? 'shadow-md ring-1 ring-black/5' : ''}
                     `}
                 >
-                    {/* Фонова іконка для краси */}
                     <cat.icon className={`absolute -right-2 -bottom-2 text-4xl opacity-10 ${isActive ? 'scale-110' : 'scale-100'}`} />
-                    
                     <div className="relative z-10">
                         <p className="text-xs font-bold uppercase tracking-wider opacity-70 mb-1">{cat.label}</p>
                         <p className="text-2xl font-extrabold">{count}</p>
@@ -113,7 +108,8 @@ const FilterCards = ({ tasks, filter, setFilter }) => {
   );
 };
 
-const TaskCard = ({ task, employees, onEdit, onDelete, onUpdateStatus, formatDateTime, formatDate, isOverdue }) => {
+// 2. ОНОВЛЕНИЙ TASK CARD З ПРАВИЛЬНИМИ ДОСТУПАМИ
+const TaskCard = ({ task, employees, onEdit, onDelete, onUpdateStatus, formatDateTime, formatDate, isOverdue, canEdit, canDelete, canComplete }) => {
     const creator = employees.find(e => e.email === task.creator_email);
     const creatorName = creator ? creator.name : task.creator_email;
     const assignee = employees.find(e => e.custom_id === task.assigned_to);
@@ -127,9 +123,17 @@ const TaskCard = ({ task, employees, onEdit, onDelete, onUpdateStatus, formatDat
                         <span className="font-mono font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded text-xs border border-slate-200">#{task.custom_id}</span>
                         <StatusBadge status={task.status} />
                      </div>
+                     
+                     {/* --- МОБІЛЬНІ КНОПКИ --- */}
                      <div className="flex md:hidden items-center gap-2">
-                        {task.status !== 'виконано' && <button onClick={() => onUpdateStatus(task.custom_id, 'виконано')} className="p-2 text-emerald-600 bg-emerald-50 rounded-lg"><FaCheck size={14}/></button>}
-                        <button onClick={() => onEdit(task)} className="p-2 text-blue-600 bg-blue-50 rounded-lg"><FaEdit size={14}/></button>
+                        {/* Кнопка "Виконано" тільки для причетних */}
+                        {task.status !== 'виконано' && canComplete && (
+                            <button onClick={() => onUpdateStatus(task.custom_id, 'виконано')} className="p-2 text-emerald-600 bg-emerald-50 rounded-lg"><FaCheck size={14}/></button>
+                        )}
+                        {/* Кнопка "Редагувати" тільки для причетних */}
+                        {canEdit && (
+                            <button onClick={() => onEdit(task)} className="p-2 text-blue-600 bg-blue-50 rounded-lg"><FaEdit size={14}/></button>
+                        )}
                      </div>
                 </div>
                 
@@ -172,19 +176,28 @@ const TaskCard = ({ task, employees, onEdit, onDelete, onUpdateStatus, formatDat
                     </div>
                 </div>
 
+                {/* --- ДЕСКТОПНІ КНОПКИ --- */}
                 <div className="hidden md:flex items-center justify-end gap-2 mt-auto pt-2">
-                    {task.status !== 'виконано' && (
+                    {/* Кнопка "Виконано" (Тільки якщо canComplete = true) */}
+                    {task.status !== 'виконано' && canComplete && (
                         <button onClick={() => onUpdateStatus(task.custom_id, 'виконано')} className="p-2 text-emerald-600 hover:bg-emerald-100 rounded-lg transition-colors border border-transparent hover:border-emerald-200" title="Виконано"><FaCheck /></button>
                     )}
-                    <button onClick={() => onEdit(task)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors border border-transparent hover:border-blue-200" title="Редагувати"><FaEdit /></button>
-                    <button onClick={() => onDelete(task.custom_id)} className="p-2 text-red-600 hover:bg-red-100 rounded-lg transition-colors border border-transparent hover:border-red-200" title="Видалити"><FaTrash /></button>
+                    
+                    {/* Кнопка "Редагувати" */}
+                    {canEdit && (
+                        <button onClick={() => onEdit(task)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors border border-transparent hover:border-blue-200" title="Редагувати"><FaEdit /></button>
+                    )}
+                    
+                    {/* Кнопка "Видалити" */}
+                    {canDelete && (
+                        <button onClick={() => onDelete(task.custom_id)} className="p-2 text-red-600 hover:bg-red-100 rounded-lg transition-colors border border-transparent hover:border-red-200" title="Видалити"><FaTrash /></button>
+                    )}
                 </div>
             </div>
         </motion.div>
     );
 };
 
-// Селектор Об'єктів з ПОШУКОМ
 const InstallationSelector = ({ installations, selectedId, onChange }) => { 
     const [searchTerm, setSearchTerm] = useState(''); 
     const [isOpen, setIsOpen] = useState(false); 
@@ -226,7 +239,6 @@ const InstallationSelector = ({ installations, selectedId, onChange }) => {
     ); 
 };
 
-// Селектор Працівників з ПОШУКОМ
 const EmployeeSelector = ({ employees, selectedCustomId, onChange }) => {
     const [searchTerm, setSearchTerm] = useState(''); 
     const [isOpen, setIsOpen] = useState(false);
@@ -316,6 +328,15 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => { 
 // --- ГОЛОВНИЙ КОМПОНЕНТ ---
 
 export default function MicrotasksPage() {
+  // 3. ОТРИМУЄМО ДАНІ ПРО КОРИСТУВАЧА З КОНТЕКСТУ
+  const { role, user, employee } = useAuth();
+  
+  // Визначаємо глобальні права
+  const isAdminOrOffice = role === 'admin' || role === 'super_admin' || role === 'office';
+  const myEmail = user?.email;
+  // Використовуємо custom_id з профілю працівника (з контексту або якщо він ще не завантажився - null)
+  const myCustomId = employee?.custom_id;
+
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -332,9 +353,6 @@ export default function MicrotasksPage() {
   const [installations, setInstallations] = useState([]);
   const [employees, setEmployees] = useState([]);
   
-  const [currentUserEmail, setCurrentUserEmail] = useState(null);
-  const [myCustomId, setMyCustomId] = useState(null);
-  
   const [notification, setNotification] = useState(null);
   const [taskToDelete, setTaskToDelete] = useState(null);
   
@@ -349,10 +367,6 @@ export default function MicrotasksPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const userEmail = user?.email;
-      setCurrentUserEmail(userEmail);
-
       const [tasksRes, installationsRes, employeesRes] = await Promise.all([
         supabase.from('microtasks').select('*, installations(id, name, custom_id)').order('created_at', { ascending: false }),
         supabase.from('installations').select('id, name, custom_id'),
@@ -362,11 +376,6 @@ export default function MicrotasksPage() {
       if (tasksRes.error) throw tasksRes.error;
       if (installationsRes.error) throw installationsRes.error;
       if (employeesRes.error) throw employeesRes.error;
-
-      if (userEmail && employeesRes.data) {
-          const myProfile = employeesRes.data.find(e => e.email === userEmail);
-          if (myProfile) { setMyCustomId(myProfile.custom_id); }
-      }
       
       const formattedTasks = tasksRes.data.map(task => ({
         ...task,
@@ -388,8 +397,6 @@ export default function MicrotasksPage() {
   const filteredTasks = useMemo(() => {
     let result = [...tasks];
 
-    // Фільтр "прострочено" в картках - це не статус в БД, а обчислюваний стан.
-    // Але якщо натиснуто картку "прострочено", ми маємо показати тільки такі.
     if (statusFilter === 'прострочено') {
         const today = new Date().setHours(0,0,0,0);
         result = result.filter(t => t.due_date && new Date(t.due_date) < today && t.status !== 'виконано' && t.status !== 'скасовано');
@@ -398,7 +405,7 @@ export default function MicrotasksPage() {
     }
 
     if (roleFilter === 'created_by_me') {
-        result = result.filter(task => task.creator_email === currentUserEmail);
+        result = result.filter(task => task.creator_email === myEmail);
     } else if (roleFilter === 'assigned_to_me') {
         if (myCustomId) {
             result = result.filter(task => task.assigned_to === myCustomId);
@@ -422,7 +429,7 @@ export default function MicrotasksPage() {
       return sortOrder === 'asc' ? (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
     });
     return result;
-  }, [tasks, statusFilter, roleFilter, sortBy, sortOrder, searchQuery, currentUserEmail, myCustomId]);
+  }, [tasks, statusFilter, roleFilter, sortBy, sortOrder, searchQuery, myEmail, myCustomId]);
 
   const handleFormSubmit = async (formData) => {
     setSubmitting(true);
@@ -439,8 +446,8 @@ export default function MicrotasksPage() {
       if (editingTask) {
         result = await supabase.from('microtasks').update(taskData).eq('custom_id', editingTask.custom_id).select('*, installations(id, name, custom_id)').single();
       } else {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user && user.email) { taskData.creator_email = user.email; }
+        // Якщо створюємо нову - додаємо автора (поточний юзер)
+        if (myEmail) { taskData.creator_email = myEmail; }
         result = await supabase.from('microtasks').insert(taskData).select('*, installations(id, name, custom_id)').single();
       }
 
@@ -460,7 +467,14 @@ export default function MicrotasksPage() {
     }
   };
 
-  const promptForDelete = (taskCustomId) => { setTaskToDelete(taskCustomId); };
+  const promptForDelete = (taskCustomId) => { 
+      // Додатковий захист
+      if (!isAdminOrOffice) {
+          showNotification('У вас немає прав на видалення задач', 'error');
+          return;
+      }
+      setTaskToDelete(taskCustomId); 
+  };
 
   const confirmDeleteTask = async () => {
     if (!taskToDelete) return;
@@ -488,7 +502,21 @@ export default function MicrotasksPage() {
     }
   };
 
-  const openModalForEdit = (task) => { setEditingTask(task); setIsModalOpen(true); };
+  const openModalForEdit = (task) => { 
+      // Перевірка прав на редагування
+      const isCreator = task.creator_email === myEmail;
+      const isAssignee = task.assigned_to === myCustomId;
+      const canEdit = isAdminOrOffice || isCreator || isAssignee;
+
+      if (!canEdit) {
+          showNotification('У вас немає прав на редагування цієї задачі', 'error');
+          return;
+      }
+
+      setEditingTask(task); 
+      setIsModalOpen(true); 
+  };
+
   const openModalForCreate = () => { setEditingTask(null); setIsModalOpen(true); };
   const closeModal = () => { setIsModalOpen(false); };
 
@@ -508,6 +536,7 @@ export default function MicrotasksPage() {
                     <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 tracking-tight">Мікрозадачі</h1>
                     <p className="text-slate-500 text-sm mt-1">Швидкі доручення та нотатки</p>
                 </div>
+                {/* Створювати можуть всі */}
                 <button onClick={openModalForCreate} className="hidden sm:flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all w-full sm:w-auto">
                     <FaPlus/> <span>Нова задача</span>
                 </button>
@@ -558,19 +587,39 @@ export default function MicrotasksPage() {
              ) : (
               <div className="space-y-3">
                 <AnimatePresence>
-                  {filteredTasks.map(task => (
-                    <TaskCard 
-                        key={task.custom_id} 
-                        task={task} 
-                        employees={employees} 
-                        onEdit={openModalForEdit} 
-                        onDelete={promptForDelete} 
-                        onUpdateStatus={handleUpdateStatus} 
-                        formatDateTime={formatDateTime} 
-                        formatDate={formatDate} 
-                        isOverdue={isOverdue} 
-                    />
-                  ))}
+                  {filteredTasks.map(task => {
+                    // 4. ВИЗНАЧАЄМО ПРАВА ДЛЯ КОНКРЕТНОЇ ЗАДАЧІ
+                    const isCreator = task.creator_email === myEmail;
+                    
+                    // Якщо задача призначена мені (по ID)
+                    const isAssignee = task.assigned_to === myCustomId;
+                    
+                    // ПРАВА НА РЕДАГУВАННЯ І ЗАВЕРШЕННЯ
+                    // Може робити: Адмін/Офіс АБО Автор АБО Той, кому доручили
+                    const canManage = isAdminOrOffice || isCreator || isAssignee;
+                    
+                    // ПРАВА НА ВИДАЛЕННЯ
+                    // Тільки Адмін/Офіс (щоб історія не пропадала)
+                    const canDelete = isAdminOrOffice;
+
+                    return (
+                        <TaskCard 
+                            key={task.custom_id} 
+                            task={task} 
+                            employees={employees} 
+                            onEdit={openModalForEdit} 
+                            onDelete={promptForDelete} 
+                            onUpdateStatus={handleUpdateStatus} 
+                            formatDateTime={formatDateTime} 
+                            formatDate={formatDate} 
+                            isOverdue={isOverdue}
+                            // Передаємо права
+                            canEdit={canManage}      // Редагувати
+                            canComplete={canManage}  // ✅ Завершити (тепер це обмежено!)
+                            canDelete={canDelete}    // Видалити
+                        />
+                    );
+                  })}
                 </AnimatePresence>
               </div>
             )}

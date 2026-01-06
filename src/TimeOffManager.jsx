@@ -3,11 +3,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   FaSearch, FaPlus, FaTrash, FaPlane, FaBed, FaNotesMedical, 
   FaCalendarAlt, FaUser, FaCheck, FaChevronDown, FaChevronUp,
-  FaTimes, FaExclamationTriangle, FaListUl, FaArrowsAltH, FaKeyboard
+  FaTimes, FaExclamationTriangle, FaListUl, FaArrowsAltH, FaKeyboard, FaLock
 } from "react-icons/fa";
-
-
 import { supabase } from "./supabaseClient";
+import { useAuth } from "./AuthProvider"; // Підключення контексту
 
 // --- HELPER FUNCTIONS ---
 
@@ -188,6 +187,14 @@ const DeleteConfirmModal = ({ isOpen, onClose, onConfirm }) => {
 
 // --- ГОЛОВНИЙ КОМПОНЕНТ ---
 export default function TimeOffManager() {
+    // 1. ОТРИМУЄМО ДАНІ ПРО КОРИСТУВАЧА
+    const { role, employee } = useAuth();
+    
+    // Визначаємо права
+    const isInstaller = role === 'installer';
+    const isAdminOrOffice = role === 'admin' || role === 'super_admin' || role === 'office';
+    const myCustomId = employee?.custom_id;
+
     const isDesktop = useIsDesktop();
     const [isFormOpen, setIsFormOpen] = useState(false);
 
@@ -246,6 +253,13 @@ export default function TimeOffManager() {
     useEffect(() => {
         loadData();
     }, []);
+
+    // 2. АВТОМАТИЧНИЙ ВИБІР ДЛЯ МОНТАЖНИКА
+    useEffect(() => {
+        if (isInstaller && myCustomId) {
+            setFormData(prev => ({ ...prev, employeeId: myCustomId }));
+        }
+    }, [isInstaller, myCustomId]);
 
     const groupedRecords = useMemo(() => {
         const groups = {};
@@ -306,7 +320,8 @@ export default function TimeOffManager() {
             if (error) throw error;
             
             await loadData();
-            setFormData(prev => ({ ...prev, employeeId: null, notes: '' }));
+            // Якщо монтажник - не скидаємо ID, інакше скидаємо
+            setFormData(prev => ({ ...prev, employeeId: isInstaller ? myCustomId : null, notes: '' }));
             setManualDates([]); 
             
             if (!isDesktop) setIsFormOpen(false);
@@ -334,8 +349,6 @@ export default function TimeOffManager() {
         setDeleteModal({ show: true, id });
     };
 
-    // --- ЛОГІКА ДЛЯ ЗГОРТАННЯ ГАРМОШКИ ---
-    // Якщо користувач на мобільному скролить список або клікає на нього, закриваємо форму
     const handleListInteraction = () => {
         if (!isDesktop && isFormOpen) {
             setIsFormOpen(false);
@@ -378,19 +391,40 @@ export default function TimeOffManager() {
                             className="overflow-hidden"
                         >
                             <div className="px-6 pb-6 space-y-5 pt-2">
-                                {/* 1. Працівник */}
+                                
+                                {/* 3. ВИБІР ПРАЦІВНИКА (РІЗНИЙ ДЛЯ РОЛЕЙ) */}
                                 <div>
                                     <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Працівник</label>
-                                    <SearchableSelect 
-                                        options={employeeOptions}
-                                        value={formData.employeeId}
-                                        onChange={(val) => setFormData({...formData, employeeId: val})}
-                                        placeholder="Оберіть зі списку..."
-                                        icon={FaUser}
-                                    />
+                                    
+                                    {isInstaller ? (
+                                        // Блокований вигляд для монтажника (автовибір)
+                                        <div className="w-full flex items-center justify-between bg-gray-100 border border-gray-300 rounded-xl px-4 py-3 text-sm font-medium text-gray-500 cursor-not-allowed">
+                                            <span className="flex items-center gap-2 truncate">
+                                                <FaUser className="text-gray-400"/>
+                                                <span className="truncate flex items-center gap-2">
+                                                    {myCustomId ? (
+                                                        <>
+                                                            <span className="bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded text-xs font-mono">{myCustomId}</span>
+                                                            {employees.find(e => e.custom_id === myCustomId)?.name || 'Я'}
+                                                        </>
+                                                    ) : 'Завантаження...'}
+                                                </span>
+                                            </span>
+                                            <FaLock className="text-gray-400 text-xs"/>
+                                        </div>
+                                    ) : (
+                                        // Пошуковий селект для Адміна/Офісу
+                                        <SearchableSelect 
+                                            options={employeeOptions}
+                                            value={formData.employeeId}
+                                            onChange={(val) => setFormData({...formData, employeeId: val})}
+                                            placeholder="Оберіть зі списку..."
+                                            icon={FaUser}
+                                        />
+                                    )}
                                 </div>
 
-                                {/* 2. Тип */}
+                                {/* Тип */}
                                 <div>
                                     <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Причина</label>
                                     <div className="grid grid-cols-3 gap-2">
@@ -522,7 +556,6 @@ export default function TimeOffManager() {
             </div>
 
             {/* --- ПРАВА ПАНЕЛЬ: СПИСОК (Timeline) --- */}
-            {/* Додано обробники onScroll і onClick для автоматичного закриття форми на мобільному */}
             <div 
                 className="flex-1 bg-slate-50 overflow-y-auto p-4 md:p-8"
                 onScroll={handleListInteraction}
@@ -569,6 +602,10 @@ export default function TimeOffManager() {
                                                 if (rec.status === 'VACATION') config = { icon: FaPlane, text: 'Відпустка', bg: 'bg-blue-50', border: 'border-blue-100', textCol: 'text-blue-700' };
                                                 if (rec.status === 'SICK_LEAVE') config = { icon: FaNotesMedical, text: 'Лікарняний', bg: 'bg-orange-50', border: 'border-orange-100', textCol: 'text-orange-700' };
 
+                                                // 4. ПРАВА НА ВИДАЛЕННЯ
+                                                // Admin/Office - всі. Installer - тільки своє.
+                                                const canDelete = isAdminOrOffice || (isInstaller && rec.employee_custom_id === myCustomId);
+
                                                 return (
                                                     <motion.div 
                                                         key={rec.id}
@@ -592,12 +629,16 @@ export default function TimeOffManager() {
                                                             </div>
                                                         </div>
                                                         
-                                                        <button 
-                                                            onClick={(e) => { e.stopPropagation(); requestDelete(rec.id); }}
-                                                            className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
-                                                        >
-                                                            <FaTrash/>
-                                                        </button>
+                                                        {canDelete && (
+                                                            <button 
+                                                                onClick={(e) => { e.stopPropagation(); requestDelete(rec.id); }}
+                                                                // 5. ВИДАЛЕННЯ: Іконка постійно видима (без opacity-0)
+                                                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                                                title="Видалити запис"
+                                                            >
+                                                                <FaTrash/>
+                                                            </button>
+                                                        )}
                                                     </motion.div>
                                                 );
                                             })}
