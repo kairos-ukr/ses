@@ -97,8 +97,7 @@ export const AuthProvider = ({ children }) => {
   }, []); // <--- ОСЬ ТУТ ТЕПЕР ПУСТО! ЦЕ ГАРАНТУЄ ВІДСУТНІСТЬ ЦИКЛУ.
 
   const signOut = async () => {
-    await supabase.auth.signOut();
-    window.location.href = '/';
+    return supabase.auth.signOut();
   };
 
   const value = {

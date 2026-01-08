@@ -16,6 +16,7 @@ import Calculate from "./calc";
 import DocMen from "./DocumentManager";
 import ProjectDetailsPage from './ProjectDetailsPage';
 import Admin from './AdminPanel';
+import Sklad from "./WarehousePage"
 
 export default function App() {
   return (
@@ -36,7 +37,7 @@ export default function App() {
           <Route path="/calculate" element={<Calculate />} />
           <Route path="/documents" element={<DocMen />} />
           <Route path="/project/:id" element={<ProjectDetailsPage />} />
-          
+          <Route path="/sklad" element={<Sklad />} />
           {/* Пізніше ми захистимо цей маршрут, щоб сюди не міг зайти монтажник */}
           <Route path="/admin" element={<Admin />} />
         </Routes>

@@ -23,7 +23,7 @@ const Layout = ({ children }) => {
   // ЗМІНА 3: Використовуємо функцію з "хаком"
   const handleLogout = async () => {
     await signOut();
-    // navigate("/") тут вже не потрібен, бо signOut зробить редірект через window.location
+    navigate("/", { replace: true });
   };
 
   const menuItems = [
