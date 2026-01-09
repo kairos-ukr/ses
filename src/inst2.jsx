@@ -2,42 +2,36 @@ import React, { useState, useEffect, useCallback, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  FaProjectDiagram, FaMapMarkerAlt, FaUsers, FaPlus,
+  FaProjectDiagram, FaPlus,
   FaBolt, FaSearch, FaFilter, FaTools, FaMoneyBillWave,
   FaClock, FaCheckCircle, FaExclamationTriangle, FaPause, FaTimes,
   FaChevronLeft, FaChevronRight, FaCheck, FaInfoCircle, FaTrash, FaHardHat,
   FaUserFriends, FaUserTie,
   FaUserEdit, FaFolderOpen, FaRulerCombined, FaFileContract, FaFileSignature, FaWallet,
   FaShoppingCart, FaBoxOpen, FaShieldAlt, FaPlay, FaFlagCheckered, FaCalculator, FaCamera, FaPlug, FaHourglassHalf,
-  FaRegEye, FaTruck
+  FaRegEye, FaTruck, FaFileImport, FaWifi
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
 import ObjectDocumentsModal from "./ObjectDocumentsModal";
 import ProjectEquipmentModal from "./ProjectEquipmentModal"; 
-import { useAuth } from "./AuthProvider"; // 1. ІМПОРТ AUTH CONTEXT
+import { useAuth } from "./AuthProvider"; 
 
 // --- CONSTANTS ---
 const PROJECTS_PER_PAGE = 6;
 const ALLOWED_COMPANIES = ['Кайрос', 'Розумне збереження енергії'];
 
+// ОНОВЛЕНИЙ СПИСОК ЕТАПІВ (9 штук, як в ProjectDetailsPage)
 const WORKFLOW_STAGES = [
-    { value: 'survey', label: 'Тех. огляд (заміри)', icon: FaSearch, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
-    { value: 'waiting_project', label: 'Очікуємо проект', icon: FaClock, color: 'bg-yellow-50 text-yellow-700 border-yellow-200' },
-    { value: 'project_done', label: 'Проект зроблено', icon: FaRulerCombined, color: 'bg-orange-50 text-orange-700 border-orange-200' },
-    { value: 'project_approved', label: 'Проект погоджено', icon: FaCheckCircle, color: 'bg-orange-100 text-orange-800 border-orange-300' },
-    { value: 'kp_done', label: 'КП зроблено', icon: FaFileContract, color: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' },
-    { value: 'kp_approved', label: 'КП погоджено', icon: FaFileSignature, color: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300' },
+    { value: 'tech_review', label: 'Тех. Огляд (заміри)', icon: FaSearch, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+    { value: 'commercial_proposal', label: 'Комерційна пропозиція', icon: FaFileContract, color: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' },
+    { value: 'project_design', label: 'Проект', icon: FaRulerCombined, color: 'bg-orange-50 text-orange-700 border-orange-200' },
     { value: 'advance_payment', label: 'Аванс', icon: FaWallet, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-    { value: 'equipment_order', label: 'Замовлення обладнання', icon: FaShoppingCart, color: 'bg-amber-50 text-amber-700 border-amber-200' },
-    { value: 'waiting_equipment', label: 'Очікуємо обладнання', icon: FaHourglassHalf, color: 'bg-amber-100 text-amber-700 border-amber-300' },
-    { value: 'materials_packing', label: 'Комплектація матеріалів', icon: FaBoxOpen, color: 'bg-amber-100 text-amber-800 border-amber-300' },
-    { value: 'protection_packing', label: 'Компл. ел.захисту', icon: FaShieldAlt, color: 'bg-amber-200 text-amber-900 border-amber-400' },
-    { value: 'installation_start', label: 'Старт монтажу', icon: FaPlay, color: 'bg-blue-50 text-blue-700 border-blue-200' },
-    { value: 'res_connection', label: 'Очікуємо підключення РЕС', icon: FaPlug, color: 'bg-purple-100 text-purple-800 border-purple-300' },
-    { value: 'final_settlement', label: 'Розрахунок', icon: FaCalculator, color: 'bg-green-100 text-green-800 border-green-300' },
-    { value: 'final_report', label: 'Фотозвіт та залишки', icon: FaCamera, color: 'bg-slate-100 text-slate-700 border-slate-300' },
-    { value: 'installation_finish', label: 'Монтаж завершено', icon: FaFlagCheckered, color: 'bg-cyan-50 text-cyan-800 border-cyan-300' },
+    { value: 'equipment', label: 'Обладнання', icon: FaShoppingCart, color: 'bg-amber-50 text-amber-700 border-amber-200' },
+    { value: 'complectation', label: 'Комплектація', icon: FaBoxOpen, color: 'bg-blue-50 text-blue-700 border-blue-200' },
+    { value: 'installation', label: 'Монтаж', icon: FaTools, color: 'bg-blue-100 text-blue-800 border-blue-300' },
+    { value: 'grid_connection', label: 'Заведення потужності', icon: FaBolt, color: 'bg-purple-100 text-purple-800 border-purple-300' },
+    { value: 'monitoring_setup', label: 'Запуск та моніторинг', icon: FaCheckCircle, color: 'bg-cyan-50 text-cyan-800 border-cyan-300' },
 ];
 
 const useDebounce = (value, delay) => {
@@ -96,11 +90,7 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => {
 
 // --- MAIN PAGE ---
 export default function ProjectsPage() {
-    // 2. ОТРИМУЄМО РОЛЬ КОРИСТУВАЧА
     const { role } = useAuth();
-    
-    // 3. ВИЗНАЧАЄМО ПРАВА НА ВИДАЛЕННЯ
-    // Видаляти можуть тільки Адміни та Офіс. Монтажники (будь-якого Tier) - НІ.
     const canDelete = role === 'admin' || role === 'super_admin' || role === 'office';
 
     const [projects, setProjects] = useState([]);
@@ -130,12 +120,13 @@ export default function ProjectsPage() {
 
     const navigate = useNavigate();
 
+    // ОНОВЛЕНО: використовуємо workflow_stage замість current_stage
     const initialFormData = {
         name: '', working_company: '', bank: '', client_id: '', gps_link: '',
         latitude: '', longitude: '', mount_type: '', station_type: '',
         capacity_kw: '', responsible_emp_id: '', start_date: '', end_date: '',
         total_cost: '', payment_status: 'pending', paid_amount: '',
-        status: 'planning', workflow_stage: 'survey', notes: '', creator_email: ''
+        status: 'planning', workflow_stage: 'tech_review', notes: '', creator_email: ''
     };
 
     const [formData, setFormData] = useState(initialFormData);
@@ -163,7 +154,8 @@ export default function ProjectsPage() {
     };
 
     const getStageConfig = (val) => {
-        return WORKFLOW_STAGES.find(s => s.value === val) || { label: val, color: 'bg-gray-50 text-gray-500 border border-gray-200', icon: FaInfoCircle };
+        // Якщо значення не знайдено (наприклад старий етап), повертаємо дефолт
+        return WORKFLOW_STAGES.find(s => s.value === val) || { label: val || 'Не визначено', color: 'bg-gray-50 text-gray-500 border border-gray-200', icon: FaInfoCircle };
     };
 
     const getStatusInfo = (status) => ({
@@ -266,7 +258,6 @@ export default function ProjectsPage() {
     const handleEmployeeSelect = (employee) => { setFormData(prev => ({ ...prev, responsible_emp_id: employee.custom_id })); setEmployeeSearch(`${employee.name} (ID: ${employee.custom_id})`); };
 
     const handleDelete = (projectId, projectName) => {
-        // Додатковий захист, якщо користувач якось натиснув кнопку
         if (!canDelete) {
             showToast("У вас немає прав на видалення", "error");
             return;
@@ -431,6 +422,7 @@ export default function ProjectsPage() {
                             {projects.map((project) => {
                                 const statusInfo = getStatusInfo(project.status);
                                 const paymentInfo = getPaymentStatusInfo(project.payment_status);
+                                // ОНОВЛЕНО: беремо workflow_stage
                                 const workflowInfo = getStageConfig(project.workflow_stage);
                                 const StatusIcon = statusInfo.icon;
                                 const WorkflowIcon = workflowInfo.icon || FaInfoCircle;
@@ -549,9 +541,10 @@ export default function ProjectsPage() {
                                                 <option value="cancelled">Скасовано</option>
                                             </select>
                                         </div>
+                                        {/* ОНОВЛЕНО: SELECT ДЛЯ ЕТАПУ ЗБЕРІГАЄ В workflow_stage */}
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700 mb-2">Етап</label>
-                                            <select value={formData.workflow_stage || 'survey'} onChange={(e) => handleInputChange('workflow_stage', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white text-indigo-900 font-medium">
+                                            <select value={formData.workflow_stage || 'tech_review'} onChange={(e) => handleInputChange('workflow_stage', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white text-indigo-900 font-medium">
                                                 {WORKFLOW_STAGES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                                             </select>
                                         </div>

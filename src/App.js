@@ -4,7 +4,6 @@ import { AuthProvider } from "./AuthProvider";
 
 import AuthPage from "./AuthPage";
 import HomePage from "./homep";
-import SolCalc from "./sol_calc";
 import ProjectPage from "./inst2";
 import ClientsPage from "./cli1";
 import EmployeesPage from "./MainEmployeesPage";
@@ -12,11 +11,9 @@ import MicrotasksPage from "./microtask";
 import Reports from "./rep";
 import Equimpment from "./eq2";
 import Payments from "./pay";
-import Calculate from "./calc";
 import DocMen from "./DocumentManager";
 import ProjectDetailsPage from './ProjectDetailsPage';
 import Admin from './AdminPanel';
-import Sklad from "./WarehousePage"
 
 export default function App() {
   return (
@@ -26,7 +23,6 @@ export default function App() {
         <Routes>
           <Route path="/" element={<AuthPage />} />
           <Route path="/home" element={<HomePage />} />
-          <Route path="/calc" element={<SolCalc />} />
           <Route path="/installations" element={<ProjectPage />} />
           <Route path="/clients" element={<ClientsPage />} />
           <Route path="/employees" element={<EmployeesPage />} />
@@ -34,10 +30,8 @@ export default function App() {
           <Route path="/reports" element={<Reports />} />
           <Route path="/equipment" element={<Equimpment />} />
           <Route path="/payments" element={<Payments />} />
-          <Route path="/calculate" element={<Calculate />} />
           <Route path="/documents" element={<DocMen />} />
           <Route path="/project/:id" element={<ProjectDetailsPage />} />
-          <Route path="/sklad" element={<Sklad />} />
           {/* Пізніше ми захистимо цей маршрут, щоб сюди не міг зайти монтажник */}
           <Route path="/admin" element={<Admin />} />
         </Routes>
