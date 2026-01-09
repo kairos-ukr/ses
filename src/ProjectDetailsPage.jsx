@@ -10,13 +10,14 @@ import {
   FaCalculator, FaCamera, FaPlug, FaHourglassHalf, FaSearch,
   FaFolderOpen, FaStickyNote, FaHashtag, FaBan, FaHourglass, FaSpinner,
   FaPhone, FaCity, FaGlobe, FaChevronDown, FaChevronUp, FaHandshake, FaUserTie,
-  FaFileImport, FaWifi, FaCheckDouble, FaStepForward
+  FaFileImport, FaWifi, FaCheckDouble, FaStepForward, FaCommentDots, FaPaperPlane
 } from "react-icons/fa";
 
 import { supabase } from "./supabaseClient";
 import ObjectDocumentsModal from "./ObjectDocumentsModal";
 import ProjectEquipmentModal from "./ProjectEquipmentModal";
 import RoofMeasurementModal from "./RoofMeasurementModal";
+import AdditionalInfoModal from "./AdditionalInfoModal"; // Імпорт модального вікна
 import { useAuth } from "./AuthProvider";
 
 const ALLOWED_COMPANIES = ['Кайрос', 'Розумне збереження енергії'];
@@ -29,7 +30,7 @@ const PROJECT_STATUS_LABELS = {
   cancelled: 'Скасовано'
 };
 
-// === КОНФІГУРАЦІЯ ЕТАПІВ ===
+// ... (STAGE_CONFIG та WORKFLOW_ORDER залишаються без змін) ...
 const STAGE_CONFIG = {
   tech_review: {
     label: 'Тех. Огляд (заміри)',
@@ -224,13 +225,16 @@ export default function ProjectDetailPage() {
   const [saving, setSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   
+  // Accordion states
   const [isObjectInfoOpen, setIsObjectInfoOpen] = useState(false);
   const [isFinanceOpen, setIsFinanceOpen] = useState(false);
+  const [isAdditionalInfoOpen, setIsAdditionalInfoOpen] = useState(false); // <--- Для історії повідомлень
   
   const [formData, setFormData] = useState({});
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [employeeSearch, setEmployeeSearch] = useState('');
+  const [currentUser, setCurrentUser] = useState(null); // <--- Поточний юзер для модалки
   
   // === STAGE STATES ===
   const [stagesData, setStagesData] = useState({}); 
@@ -244,7 +248,10 @@ export default function ProjectDetailPage() {
   const [viewingDocs, setViewingDocs] = useState(false);
   const [viewingEquipment, setViewingEquipment] = useState(false);
   const [isRoofModalOpen, setIsRoofModalOpen] = useState(false);
+  const [isInfoModalOpen, setIsInfoModalOpen] = useState(false); // <--- Для модалки додаткової інфо
   
+  const [additionalInfo, setAdditionalInfo] = useState([]); // <--- Список повідомлень
+
   const [toast, setToast] = useState({ isVisible: false, message: '', type: 'success' });
   
   const showToast = useCallback((message, type = 'success') => 
@@ -261,10 +268,25 @@ export default function ProjectDetailPage() {
     }
   }, [loading, currentStage, isEditing]);
 
+  // === IDENTIFY CURRENT USER ===
+  useEffect(() => {
+    const identifyUser = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user && user.email) {
+            const { data: emp } = await supabase.from('employees').select('*').eq('email', user.email).maybeSingle();
+            if (emp) setCurrentUser(emp);
+            else setCurrentUser({ name: user.email }); // Fallback якщо не знайдено в employees
+        }
+    };
+    identifyUser();
+  }, []);
+
+  // === LOAD PROJECT DATA ===
   useEffect(() => {
     const loadProject = async () => {
       setLoading(true);
       try {
+        // 1. Основні дані
         const { data, error } = await supabase
           .from('installations')
           .select(`
@@ -290,7 +312,6 @@ export default function ProjectDetailPage() {
         
         setProject(data);
         setFormData(data); 
-        // 1. БЕРЕМО ПОТОЧНИЙ ЕТАП З КОЛОНКИ workflow_stage (або ставимо дефолт)
         setCurrentStage(data.workflow_stage || 'tech_review');
         
         if (data.project_stages && data.project_stages.length > 0) {
@@ -306,6 +327,15 @@ export default function ProjectDetailPage() {
         if (data.responsible_employee) {
           setEmployeeSearch(`${data.responsible_employee.name} (ID: ${data.responsible_employee.custom_id})`);
         }
+
+        // 2. Завантаження додаткової інформації (історія повідомлень)
+        const { data: infoData } = await supabase
+            .from('project_additional_info')
+            .select('*')
+            .eq('installation_custom_id', id)
+            .order('created_at', { ascending: false });
+        
+        setAdditionalInfo(infoData || []);
         
       } catch (error) {
         console.error(error);
@@ -349,7 +379,6 @@ export default function ProjectDetailPage() {
   const handleCancel = () => {
     setIsEditing(false);
     setFormData(project);
-    // Повертаємо початкове значення з проекту
     setCurrentStage(project.workflow_stage || 'tech_review');
     if (project.project_stages) {
        const stagesMap = project.project_stages.reduce((acc, stage) => {
@@ -389,11 +418,10 @@ export default function ProjectDetailPage() {
       });
 
       updates.payment_status = currentData.payment_status;
-      // 2. ЯВНО ОНОВЛЮЄМО ПОТОЧНИЙ ЕТАП В INSTALLATIONS (колонка workflow_stage)
       updates.workflow_stage = currentStage;
       updates.updated_at = new Date().toISOString();
-
-      // Оновлюємо таблицю INSTALLATIONS (тут живуть статус проекту і активний етап)
+      updates.topic_updated = true;
+      
       if (Object.keys(updates).length > 0) {
           const { error: mainError } = await supabase
             .from('installations')
@@ -402,27 +430,20 @@ export default function ProjectDetailPage() {
           if (mainError) throw mainError;
       }
 
-      // === ЗБЕРЕЖЕННЯ ЕТАПІВ (Project Stages) ===
       const stagesPayload = [];
-
-      // 3. ФОРМУВАННЯ ДАНИХ ДЛЯ PROJECT_STAGES
       
-      // Існуючі або змінені етапи
       Object.values(stagesData).forEach(stage => {
-          // !!! ВИПРАВЛЕННЯ ПОМИЛКИ NULL STATUS !!!
-          // Якщо status не задано, беремо дефолтний для цього етапу
           const statusValue = stage.status || STAGE_CONFIG[stage.stage_key]?.options[0].value || 'not_started';
 
           const payload = {
               installation_custom_id: parseInt(id),
               stage_key: stage.stage_key,
-              status: statusValue, // Вже не буде null
+              status: statusValue, 
               comment: stage.comment,
               responsible_emp_custom_id: stage.responsible_emp_custom_id || null,
               updated_at: new Date().toISOString()
           };
           
-          // ID додаємо тільки якщо він є
           if (stage.id) {
               payload.id = stage.id;
           }
@@ -430,19 +451,16 @@ export default function ProjectDetailPage() {
           stagesPayload.push(payload);
       });
 
-      // Додаємо відсутні етапи (для створення нових записів)
       WORKFLOW_ORDER.forEach(key => {
-          // Якщо етапу немає в stagesData, створюємо його з дефолтним статусом
           if (!stagesData[key]) {
-             stagesPayload.push({
-                 installation_custom_id: parseInt(id),
-                 stage_key: key,
-                 status: STAGE_CONFIG[key].options[0].value, // Дефолтний статус
-                 comment: null,
-                 responsible_emp_custom_id: null,
-                 updated_at: new Date().toISOString()
-                 // ID не передаємо
-             })
+              stagesPayload.push({
+                  installation_custom_id: parseInt(id),
+                  stage_key: key,
+                  status: STAGE_CONFIG[key].options[0].value, 
+                  comment: null,
+                  responsible_emp_custom_id: null,
+                  updated_at: new Date().toISOString()
+              })
           }
       });
 
@@ -549,11 +567,19 @@ export default function ProjectDetailPage() {
       {viewingDocs && <ObjectDocumentsModal project={project} onClose={() => setViewingDocs(false)} />}
       {viewingEquipment && <ProjectEquipmentModal project={project} onClose={() => setViewingEquipment(false)} showToast={showToast} />}
       
-      {/* --- МОДАЛКА ЗАМІРІВ --- */}
       <RoofMeasurementModal 
         isOpen={isRoofModalOpen} 
         onClose={() => setIsRoofModalOpen(false)} 
         objectNumber={project?.custom_id}
+      />
+
+      {/* --- МОДАЛКА ДЛЯ ДОДАТКОВОЇ ІНФОРМАЦІЇ --- */}
+      <AdditionalInfoModal 
+        isOpen={isInfoModalOpen}
+        onClose={() => setIsInfoModalOpen(false)}
+        project={project}
+        currentUser={currentUser} 
+        showToast={showToast}
       />
 
       {commentModal.isOpen && (
@@ -585,6 +611,15 @@ export default function ProjectDetailPage() {
             </div>
             
             <div className="flex items-center gap-2 flex-shrink-0">
+              {/* --- КНОПКА ДОДАТКОВОЇ ІНФОРМАЦІЇ (біля Редагувати) --- */}
+              <button 
+                onClick={() => setIsInfoModalOpen(true)} 
+                className="bg-white border border-gray-300 text-indigo-600 p-2.5 rounded-lg hover:bg-indigo-50 transition shadow-sm" 
+                title="Надіслати інформацію в чат"
+              >
+                 <FaCommentDots className="text-lg" />
+              </button>
+
               {canEdit && (
                 isEditing ? (
                   <>
@@ -620,6 +655,7 @@ export default function ProjectDetailPage() {
                    <FaHandshake /> Підряд: {project.client.contractor_company}
                 </div>
               )}
+              {/* ... Вміст інформації про клієнта без змін ... */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div><label className="text-sm font-medium text-gray-600 flex items-center gap-1"><FaHashtag className="text-xs" /> ID клієнта</label><p className="mt-1 font-semibold text-gray-800">#{project.client?.custom_id}</p></div>
                 {project.client?.company_name && (<div><label className="text-sm font-medium text-gray-600">Компанія / ФОП</label><p className="mt-1 font-semibold text-gray-800">{project.client.company_name}</p></div>)}
@@ -650,6 +686,7 @@ export default function ProjectDetailPage() {
                  {isObjectInfoOpen && (
                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="px-6 pb-6">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
+                        {/* ... Вміст форми без змін ... */}
                         <div className="md:col-span-2">
                           <label className="text-sm font-medium text-gray-600">Загальний статус</label>
                           {isEditing ? (
@@ -752,6 +789,43 @@ export default function ProjectDetailPage() {
                  )}
                </AnimatePresence>
             </div>
+
+            {/* --- БЛОК ІСТОРІЇ ДОДАТКОВОЇ ІНФОРМАЦІЇ --- */}
+            {additionalInfo.length > 0 && (
+                <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden md:bg-white/95 md:backdrop-blur-xl md:shadow-xl md:rounded-2xl">
+                    <div onClick={() => setIsAdditionalInfoOpen(!isAdditionalInfoOpen)} className="p-6 flex justify-between items-center cursor-pointer hover:bg-gray-50 transition-colors select-none">
+                        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                            <FaCommentDots className="text-indigo-500" /> Додаткова інформація ({additionalInfo.length})
+                        </h2>
+                        {isAdditionalInfoOpen ? <FaChevronUp className="text-gray-400"/> : <FaChevronDown className="text-gray-400"/>}
+                    </div>
+                    <AnimatePresence>
+                        {isAdditionalInfoOpen && (
+                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="px-6 pb-6">
+                                <div className="space-y-4 border-t pt-4 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+                                    {additionalInfo.map((info) => (
+                                        <div key={info.id} className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="font-bold text-sm text-gray-700">{info.author_name || 'Невідомо'}</span>
+                                                <span className="text-xs text-gray-400">{new Date(info.created_at).toLocaleString('uk-UA')}</span>
+                                            </div>
+                                            <p className="text-sm text-gray-800 whitespace-pre-wrap">{info.message_text}</p>
+                                            <div className="mt-2 flex justify-end">
+                                                {info.is_sent_to_telegram ? (
+                                                    <span className="text-[10px] text-green-600 flex items-center gap-1"><FaCheckCircle/> Надіслано в ТГ</span>
+                                                ) : (
+                                                    <span className="text-[10px] text-gray-400 flex items-center gap-1"><FaClock/> Очікує відправки</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </div>
+            )}
+
           </div>
 
           {/* Right Column - Workflow */}
@@ -774,6 +848,7 @@ export default function ProjectDetailPage() {
               </div>
 
               <div className="space-y-3 overflow-y-auto pr-2 flex-grow custom-scrollbar pb-10">
+                {/* ... Workflow items ... */}
                 {WORKFLOW_ORDER.map((stageKey) => {
                   const stageConfig = STAGE_CONFIG[stageKey];
                   const StageIcon = stageConfig.icon;
@@ -818,15 +893,12 @@ export default function ProjectDetailPage() {
                             )}
                           </div>
                         </div>
-                        {/* Status Icon always visible */}
                         {!isEditing && <StatusIcon className={`${statusInfo.color} text-xl flex-shrink-0 mt-2`} />}
                       </div>
                       
-                      {/* Expanded Section (Details) */}
                       {showDetails && (
                         <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="mt-3 space-y-3 overflow-visible border-t border-gray-200/60 pt-3">
                           
-                          {/* === КНОПКА ЗАМІРІВ ДЛЯ TECH_REVIEW === */}
                           {stageKey === 'tech_review' && (isCurrentStage || isEditing) && (
                               <button
                                 onClick={() => setIsRoofModalOpen(true)}
@@ -837,7 +909,6 @@ export default function ProjectDetailPage() {
                               </button>
                           )}
 
-                          {/* Status */}
                           <div className="flex items-center gap-2">
                               {isEditing ? (
                                 <>
@@ -851,7 +922,6 @@ export default function ProjectDetailPage() {
                                   </select>
                                 </>
                               ) : (
-                                // Read-only status view
                                 <div className="flex items-center gap-2 w-full">
                                    <StatusIcon className={`${statusInfo.color} text-sm`} />
                                    <span className={`text-xs font-semibold ${statusInfo.color}`}>{statusInfo.label}</span>
@@ -859,7 +929,6 @@ export default function ProjectDetailPage() {
                               )}
                           </div>
 
-                          {/* Responsible */}
                           {(isEditing || responsiblePerson) && (
                             <div className="flex items-center gap-2 relative">
                                 {isEditing ? (
@@ -906,7 +975,6 @@ export default function ProjectDetailPage() {
                             </div>
                           )}
                           
-                          {/* Comment */}
                           {stageData.comment && (
                             <div className="bg-blue-50/50 border border-blue-100 rounded-lg p-2.5 text-xs text-gray-700">
                               <FaComment className="inline mr-1.5 text-blue-500 mb-0.5" />
