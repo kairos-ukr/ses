@@ -9,9 +9,6 @@ import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
 import { useAuth } from "./AuthProvider"; // 1. ІМПОРТУЄМО AUTH CONTEXT
 
-// Supabase
-
-
 // Debounce hook
 const useDebounce = (value, delay) => {
   const [debouncedValue, setDebouncedValue] = useState(value);
@@ -241,7 +238,12 @@ export default function ClientsPage() {
       // Перевірка прав при спробі оновлення
       if (editingClient) {
         if (!canEdit) throw new Error("Немає прав на редагування");
-        result = await supabase.from('clients').update({ ...clientData, updated_at: new Date().toISOString() }).eq('custom_id', editingClient.custom_id);
+        // --- ТУТ ЗМІНЕНО ---
+        result = await supabase.from('clients').update({ 
+            ...clientData, 
+            updated_at: new Date().toISOString(),
+            telegram_synced: false // Додаємо цей рядок, щоб скинути статус синхронізації
+        }).eq('custom_id', editingClient.custom_id);
       } else {
         // Створення доступне всім
         result = await supabase.from('clients').insert([clientData]);

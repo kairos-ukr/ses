@@ -14,6 +14,7 @@ import Payments from "./pay";
 import DocMen from "./DocumentManager";
 import ProjectDetailsPage from './ProjectDetailsPage';
 import Admin from './AdminPanel';
+import Bulder from "./build.jsx"
 
 export default function App() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/project/:id" element={<ProjectDetailsPage />} />
           {/* Пізніше ми захистимо цей маршрут, щоб сюди не міг зайти монтажник */}
           <Route path="/admin" element={<Admin />} />
+          <Route path="/bild" element={<Bulder />} />
         </Routes>
       </Router>
     </AuthProvider>
