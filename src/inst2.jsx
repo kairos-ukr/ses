@@ -9,7 +9,9 @@ import {
   FaUserFriends, FaUserTie,
   FaUserEdit, FaFolderOpen, FaRulerCombined, FaFileContract, FaFileSignature, FaWallet,
   FaShoppingCart, FaBoxOpen, FaShieldAlt, FaPlay, FaFlagCheckered, FaCalculator, FaCamera, FaPlug, FaHourglassHalf,
-  FaRegEye, FaTruck, FaFileImport, FaWifi
+  FaRegEye, FaTruck, FaFileImport, FaWifi,
+  // Додані нові іконки для синхронізації з PWT.jsx
+  FaMapMarkerAlt, FaDraftingCompass, FaFileInvoiceDollar, FaTruckLoading, FaSolarPanel, FaBroadcastTower
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
@@ -21,18 +23,28 @@ import { useAuth } from "./AuthProvider";
 const PROJECTS_PER_PAGE = 6;
 const ALLOWED_COMPANIES = ['Кайрос', 'Розумне збереження енергії'];
 
-// ОНОВЛЕНИЙ СПИСОК ЕТАПІВ (9 штук, як в ProjectDetailsPage)
+// ОНОВЛЕНИЙ СПИСОК ЕТАПІВ (Синхронізовано з PWT.jsx)
+// value - це ключ, який ми хочемо бачити/записувати в ідеалі.
+// Старі ключі (commercial_proposal) будуть мапитись сюди через getStageConfig.
 const WORKFLOW_STAGES = [
-    { value: 'tech_review', label: 'Тех. Огляд (заміри)', icon: FaSearch, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
-    { value: 'commercial_proposal', label: 'Комерційна пропозиція', icon: FaFileContract, color: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' },
-    { value: 'project_design', label: 'Проект', icon: FaRulerCombined, color: 'bg-orange-50 text-orange-700 border-orange-200' },
-    { value: 'advance_payment', label: 'Аванс', icon: FaWallet, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-    { value: 'equipment', label: 'Обладнання', icon: FaShoppingCart, color: 'bg-amber-50 text-amber-700 border-amber-200' },
+    { value: 'tech_review', label: 'Заміри', icon: FaMapMarkerAlt, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+    { value: 'project', label: 'Проект', icon: FaDraftingCompass, color: 'bg-orange-50 text-orange-700 border-orange-200' },
+    { value: 'proposal', label: 'КП', icon: FaFileInvoiceDollar, color: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' },
+    { value: 'equipment', label: 'Обладнання', icon: FaTruckLoading, color: 'bg-amber-50 text-amber-700 border-amber-200' },
     { value: 'complectation', label: 'Комплектація', icon: FaBoxOpen, color: 'bg-blue-50 text-blue-700 border-blue-200' },
-    { value: 'installation', label: 'Монтаж', icon: FaTools, color: 'bg-blue-100 text-blue-800 border-blue-300' },
-    { value: 'grid_connection', label: 'Заведення потужності', icon: FaBolt, color: 'bg-purple-100 text-purple-800 border-purple-300' },
-    { value: 'monitoring_setup', label: 'Запуск та моніторинг', icon: FaCheckCircle, color: 'bg-cyan-50 text-cyan-800 border-cyan-300' },
+    { value: 'installation', label: 'Монтаж', icon: FaSolarPanel, color: 'bg-blue-100 text-blue-800 border-blue-300' },
+    { value: 'grid_connection', label: 'Мережа', icon: FaFileSignature, color: 'bg-purple-100 text-purple-800 border-purple-300' },
+    { value: 'monitoring_setup', label: 'Запуск', icon: FaBroadcastTower, color: 'bg-cyan-50 text-cyan-800 border-cyan-300' },
 ];
+
+// Словник для підтримки старих ключів з бази даних (Legacy Mapping)
+const STAGE_ALIASES = {
+    'project_design': 'project',
+    'commercial_proposal': 'proposal',
+    'advance_payment': 'proposal', // Аванс тепер частина КП
+    'tech_measurements': 'tech_review',
+    'mon_launch_station': 'monitoring_setup'
+};
 
 const useDebounce = (value, delay) => {
   const [debouncedValue, setDebouncedValue] = useState(value);
@@ -120,7 +132,6 @@ export default function ProjectsPage() {
 
     const navigate = useNavigate();
 
-    // ОНОВЛЕНО: використовуємо workflow_stage замість current_stage
     const initialFormData = {
         name: '', working_company: '', bank: '', client_id: '', gps_link: '',
         latitude: '', longitude: '', mount_type: '', station_type: '',
@@ -154,8 +165,18 @@ export default function ProjectsPage() {
     };
 
     const getStageConfig = (val) => {
-        // Якщо значення не знайдено (наприклад старий етап), повертаємо дефолт
-        return WORKFLOW_STAGES.find(s => s.value === val) || { label: val || 'Не визначено', color: 'bg-gray-50 text-gray-500 border border-gray-200', icon: FaInfoCircle };
+        // 1. Нормалізуємо ключ (перетворюємо старий ключ на новий, якщо треба)
+        const normalizedKey = STAGE_ALIASES[val] || val;
+        
+        // 2. Шукаємо в конфігурації
+        const config = WORKFLOW_STAGES.find(s => s.value === normalizedKey);
+        
+        // 3. Повертаємо конфіг або заглушку
+        return config || { 
+            label: val || 'Не визначено', 
+            color: 'bg-gray-50 text-gray-500 border border-gray-200', 
+            icon: FaInfoCircle 
+        };
     };
 
     const getStatusInfo = (status) => ({
@@ -334,9 +355,8 @@ export default function ProjectsPage() {
                         </button>
                     </div>
 
-                    {/* SEARCH & FILTERS ROW (OPTIMIZED FOR MOBILE) */}
+                    {/* SEARCH & FILTERS ROW */}
                     <div className="flex flex-col gap-3">
-                        {/* 1. ПОШУК (ВЕРХНІЙ РЯДОК) */}
                         <div className="relative w-full">
                             <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
                             <input 
@@ -348,10 +368,7 @@ export default function ProjectsPage() {
                             />
                         </div>
 
-                        {/* 2. НИЖНІЙ РЯДОК: ТУМБЛЕР ЗЛІВА, ФІЛЬТРИ СПРАВА */}
                         <div className="flex items-center justify-between gap-3">
-                            
-                            {/* ТУМБЛЕР (РОЗТЯГУЄТЬСЯ НА МОБІЛЬНОМУ) */}
                             {myEmployeeId ? (
                                 <div className="bg-white p-1 rounded-xl border border-slate-200 flex items-center shadow-sm flex-1 sm:flex-none">
                                     <button onClick={() => setOnlyMyProjects(false)} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-bold transition-all ${!onlyMyProjects ? 'bg-indigo-100 text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Всі</button>
@@ -422,8 +439,10 @@ export default function ProjectsPage() {
                             {projects.map((project) => {
                                 const statusInfo = getStatusInfo(project.status);
                                 const paymentInfo = getPaymentStatusInfo(project.payment_status);
-                                // ОНОВЛЕНО: беремо workflow_stage
+                                
+                                // ВИКОРИСТОВУЄМО ОНОВЛЕНИЙ КОНФІГ ЕТАПІВ
                                 const workflowInfo = getStageConfig(project.workflow_stage);
+                                
                                 const StatusIcon = statusInfo.icon;
                                 const WorkflowIcon = workflowInfo.icon || FaInfoCircle;
                                 const creator = employees.find(e => e.email === project.creator_email);
@@ -441,7 +460,6 @@ export default function ProjectsPage() {
                                         <div>
                                             <div className="flex justify-between items-start gap-3 mb-4">
                                                 <div className="pr-1 flex-1 min-w-0">
-                                                    {/* FIX: line-clamp-2 */}
                                                     <h3 className="text-lg font-bold text-slate-800 leading-tight line-clamp-2" title={project.name}>{project.name || project.client?.company_name || 'Без назви'}</h3>
                                                     <span className="text-xs font-mono font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded mt-1 inline-block">#{project.custom_id}</span>
                                                 </div>
@@ -486,7 +504,6 @@ export default function ProjectsPage() {
                                                 <button onClick={() => setViewingProjectEquipment(project)} className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-500 transition-colors"><FaTruck/></button>
                                                 <button onClick={() => setViewingProjectDocs(project)} className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-500 transition-colors"><FaFolderOpen className="text-indigo-500" /></button>
                                                 
-                                                {/* 4. КНОПКА ВИДАЛЕННЯ З ОБМЕЖЕННЯМ */}
                                                 {canDelete && (
                                                     <button onClick={() => handleDelete(project.custom_id, project.name)} className="w-9 h-9 flex items-center justify-center hover:bg-red-50 rounded-lg text-red-500 transition-colors">
                                                         <FaTrash/>
@@ -506,13 +523,13 @@ export default function ProjectsPage() {
                     <Pagination currentPage={currentPage} totalCount={totalCount} projectsPerPage={PROJECTS_PER_PAGE} onPageChange={setCurrentPage} />
                 </div>
 
-                {/* FORM MODAL (UNCHANGED) */}
+                {/* FORM MODAL */}
                 <AnimatePresence>
                     {showProjectForm && (
                         <motion.div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={handleCloseForm}>
                             <motion.div className="bg-white rounded-2xl p-4 sm:p-8 w-full max-w-lg md:max-w-4xl shadow-2xl border border-gray-200 my-8 max-h-[90vh] flex flex-col" initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} onClick={(e) => e.stopPropagation()}>
                                 <div className="mb-6"><h2 className="text-2xl sm:text-3xl font-bold text-slate-800">{editingProject ? 'Редагувати' : 'Новий проект'}</h2></div>
-                                {/* ... Form content same as before ... */}
+                                
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 overflow-y-auto pr-2 flex-grow">
                                     <div className="md:col-span-2 relative">
                                         <label className="block text-sm font-medium text-gray-700 mb-2">Клієнт <span className="text-red-500">*</span></label>
@@ -541,7 +558,8 @@ export default function ProjectsPage() {
                                                 <option value="cancelled">Скасовано</option>
                                             </select>
                                         </div>
-                                        {/* ОНОВЛЕНО: SELECT ДЛЯ ЕТАПУ ЗБЕРІГАЄ В workflow_stage */}
+                                        
+                                        {/* ОНОВЛЕНО: SELECT ДЛЯ ЕТАПУ З НОВИМИ НАЗВАМИ */}
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700 mb-2">Етап</label>
                                             <select value={formData.workflow_stage || 'tech_review'} onChange={(e) => handleInputChange('workflow_stage', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white text-indigo-900 font-medium">
