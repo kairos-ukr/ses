@@ -13,7 +13,7 @@ import {
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
 
-const WORKFLOW_UPLOADER_URL = "http://prem-eu1.bot-hosting.net:20174";
+const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 
 // ==================================================================================
 // 1. КОНФІГУРАЦІЯ (СТАРІ КЛЮЧІ В БАЗІ = КЛЮЧІ В КОДІ)
