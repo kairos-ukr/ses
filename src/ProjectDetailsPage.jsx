@@ -307,7 +307,17 @@ const handleSave = async () => {
                </button>
                <div>
                   <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
-                    {project.name || `Об'єкт #${project.custom_id}`}
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        value={formData.name ?? ""}
+                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                        placeholder={`Об'єкт #${project.custom_id}`}
+                        className="w-full max-w-[520px] bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400"
+                      />
+                    ) : (
+                      <span>{project.name || `Об'єкт #${project.custom_id}`}</span>
+                    )}
                     <span className="text-sm font-normal text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
                         #{project.custom_id}
                     </span>

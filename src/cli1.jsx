@@ -136,7 +136,7 @@ export default function ClientsPage() {
   const [notifications, setNotifications] = useState([]);
   
   const [formData, setFormData] = useState({
-    name: '', oblast: '', populated_place: '', phone: '+380', object_type: '',
+    name: '', oblast: '', populated_place: '', phone: '', object_type: '',
     company_name: '', is_subcontract: false, contractor_company: '', first_contact: '',
     notes: '', working_company: ''
   });
@@ -196,7 +196,7 @@ export default function ClientsPage() {
       setEditingClient(client);
       setFormData({
           name: client.name || '', oblast: client.oblast || '', populated_place: client.populated_place || '',
-          phone: client.phone || '+380', object_type: client.object_type || '', company_name: client.company_name || '',
+          phone: client.phone || '', object_type: client.object_type || '', company_name: client.company_name || '',
           is_subcontract: client.is_subcontract || false, contractor_company: client.contractor_company || '',
           first_contact: client.first_contact ? new Date(client.first_contact).toISOString().split('T')[0] : '', 
           notes: client.notes || '', working_company: client.working_company || ''
@@ -207,18 +207,38 @@ export default function ClientsPage() {
   const handleAddClient = () => {
       setEditingClient(null);
       setFormData({
-          name: '', oblast: '', populated_place: '', phone: '+380', object_type: '',
+          name: '', oblast: '', populated_place: '', phone: '', object_type: '',
           company_name: '', is_subcontract: false, contractor_company: '', first_contact: '',
           notes: '', working_company: ''
       });
       setShowForm(true);
   };
 
+  // Нормалізація телефону під стандарт України.
+  // Вимога: якщо користувач ввів з 0 (наприклад 0XXXXXXXXX) — додаємо +38 на початок.
+  const normalizeUaPhone = (raw) => {
+    const v = String(raw ?? '').trim();
+    if (!v) return '';
+
+    // прибираємо пробіли/дефіси/дужки
+    const cleaned = v.replace(/[\s\-()]/g, '');
+
+    // якщо вже в міжнародному форматі
+    if (cleaned.startsWith('+')) return '+' + cleaned.slice(1).replace(/\D/g, '');
+
+    // тільки цифри
+    const digits = cleaned.replace(/\D/g, '');
+    if (!digits) return '';
+
+    if (digits.startsWith('0')) return '+38' + digits;
+    if (digits.startsWith('380')) return '+' + digits;
+
+    // інші кейси залишаємо як є, але в +<digits>
+    return '+' + digits;
+  };
+
   const handleInputChange = (field, value) => {
-    if (field === 'phone') {
-        if (!value.startsWith('+380')) value = '+380' + value.replace(/^\+380/, '').replace(/[^\d]/g, '');
-        if (value.length > 13) value = value.substring(0, 13);
-    }
+    // У полі вводу телефону не форсуємо +380 — користувач вводить як зручно.
     setFormData(prev => ({ ...prev, [field]: value }));
     if (formErrors[field]) setFormErrors(prev => ({ ...prev, [field]: '' }));
   };
@@ -232,7 +252,11 @@ export default function ClientsPage() {
     
     setSubmitting(true);
     try {
-      const clientData = { ...formData, first_contact: formData.first_contact || null };
+      const clientData = {
+        ...formData,
+        first_contact: formData.first_contact || null,
+        phone: normalizeUaPhone(formData.phone)
+      };
       let result;
       
       // Перевірка прав при спробі оновлення
@@ -393,7 +417,7 @@ export default function ClientsPage() {
 
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Телефон</label>
-                                <input type="tel" value={formData.phone} onChange={e => handleInputChange('phone', e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-3 bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-500" placeholder="+380..."/>
+                                <input type="tel" value={formData.phone} onChange={e => handleInputChange('phone', e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-3 bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-500" placeholder="0XXXXXXXXX або +380XXXXXXXXX"/>
                             </div>
 
                             <div>

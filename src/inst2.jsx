@@ -7,16 +7,15 @@ import {
   FaClock, FaCheckCircle, FaExclamationTriangle, FaPause, FaTimes,
   FaChevronLeft, FaChevronRight, FaCheck, FaInfoCircle, FaTrash, FaHardHat,
   FaUserFriends, FaUserTie,
-  FaUserEdit, FaFolderOpen, FaRulerCombined, FaFileContract, FaFileSignature, FaWallet,
+  FaUserEdit, FaRulerCombined, FaFileContract, FaFileSignature, FaWallet,
   FaShoppingCart, FaBoxOpen, FaShieldAlt, FaPlay, FaFlagCheckered, FaCalculator, FaCamera, FaPlug, FaHourglassHalf,
-  FaRegEye, FaTruck, FaFileImport, FaWifi,
+  FaRegEye, FaWifi,
   // Додані нові іконки для синхронізації з PWT.jsx
   FaMapMarkerAlt, FaDraftingCompass, FaFileInvoiceDollar, FaTruckLoading, FaSolarPanel, FaBroadcastTower
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
-import ObjectDocumentsModal from "./ObjectDocumentsModal";
-import ProjectEquipmentModal from "./ProjectEquipmentModal"; 
+// NOTE: Кнопки "Документи" та "Обладнання" прибрані з картки об'єкта (за вимогою).
 import { useAuth } from "./AuthProvider"; 
 
 // --- CONSTANTS ---
@@ -109,7 +108,7 @@ export default function ProjectsPage() {
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
     const debouncedSearchTerm = useDebounce(searchTerm, 400);
-    const [viewingProjectDocs, setViewingProjectDocs] = useState(null);
+    // Документи/Обладнання прибрані з картки
     
     const [statusFilter, setStatusFilter] = useState("active"); 
     const [paymentStatusFilter, setPaymentStatusFilter] = useState("all");
@@ -121,7 +120,10 @@ export default function ProjectsPage() {
 
     const [showProjectForm, setShowProjectForm] = useState(false);
     const [editingProject, setEditingProject] = useState(null);
-    const [viewingProjectEquipment, setViewingProjectEquipment] = useState(null);
+    
+    // --- inline add client ---
+    const [showInlineClientForm, setShowInlineClientForm] = useState(false);
+    const [inlineClient, setInlineClient] = useState({ name: '', company_name: '', phone: '' });
 
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
 
@@ -134,10 +136,14 @@ export default function ProjectsPage() {
 
     const initialFormData = {
         name: '', working_company: '', bank: '', client_id: '', gps_link: '',
-        latitude: '', longitude: '', mount_type: '', station_type: '',
-        capacity_kw: '', responsible_emp_id: '', start_date: '', end_date: '',
+        mount_type: '', station_type: '', capacity_kw: '',
+        responsible_emp_id: '', start_date: '', end_date: '',
         total_cost: '', payment_status: 'pending', paid_amount: '',
-        status: 'planning', workflow_stage: 'tech_review', notes: '', creator_email: ''
+        // Статус/етап залишаємо як дефолтні значення (без ручного вибору при створенні)
+        status: 'planning', workflow_stage: 'tech_review',
+        // К-сть фаз (installations.quant_phase)
+        quant_phase: '',
+        notes: '', creator_email: ''
     };
 
     const [formData, setFormData] = useState(initialFormData);
@@ -272,8 +278,26 @@ export default function ProjectsPage() {
 
     // --- Handlers ---
     const handleDetailsClick = (project) => navigate(`/project/${project.custom_id}`); 
-    const handleAddProject = () => { setFormData(initialFormData); setEditingProject(null); setShowProjectForm(true); };
-    const handleCloseForm = () => { setShowProjectForm(false); setEditingProject(null); setFormData(initialFormData); };
+    const handleAddProject = () => {
+        setFormData(initialFormData);
+        setEditingProject(null);
+        setClientSearch('');
+        setEmployeeSearch('');
+        setFormErrors({});
+        setShowInlineClientForm(false);
+        setInlineClient({ name: '', company_name: '', phone: '' });
+        setShowProjectForm(true);
+    };
+    const handleCloseForm = () => {
+        setShowProjectForm(false);
+        setEditingProject(null);
+        setFormData(initialFormData);
+        setClientSearch('');
+        setEmployeeSearch('');
+        setFormErrors({});
+        setShowInlineClientForm(false);
+        setInlineClient({ name: '', company_name: '', phone: '' });
+    };
     const handleInputChange = (field, value) => { setFormData(prev => ({ ...prev, [field]: value })); };
     const handleClientSelect = (client) => { setFormData(prev => ({ ...prev, client_id: client.custom_id })); setClientSearch(`${client.company_name || client.name} (ID: ${client.custom_id})`); };
     const handleEmployeeSelect = (employee) => { setFormData(prev => ({ ...prev, responsible_emp_id: employee.custom_id })); setEmployeeSearch(`${employee.name} (ID: ${employee.custom_id})`); };
@@ -296,28 +320,74 @@ export default function ProjectsPage() {
     }
 
     const handleSubmit = async () => {
-        if (!formData.client_id) { setFormErrors({client_id: 'Оберіть клієнта'}); return; }
+        setFormErrors({});
         setSubmitting(true);
         try {
+            // 1) Якщо клієнта не обрано, але заповнили швидке створення — створюємо клієнта тут же.
+            let clientIdToUse = formData.client_id;
+            if (!clientIdToUse) {
+                const name = (inlineClient.name || '').trim();
+                if (!name) {
+                    setFormErrors({ client_id: 'Оберіть клієнта або додайте нового через "+"' });
+                    return;
+                }
+
+                const payload = {
+                    name,
+                    company_name: (inlineClient.company_name || '').trim() || null,
+                    phone: (inlineClient.phone || '').trim() || null,
+                };
+
+                const { data: created, error: createErr } = await supabase
+                    .from('clients')
+                    .insert([payload])
+                    .select('custom_id, name, company_name')
+                    .single();
+
+                if (createErr) throw createErr;
+                clientIdToUse = created.custom_id;
+
+                // оновлюємо локальний довідник клієнтів
+                setClients(prev => {
+                    const exists = prev.some(c => c.custom_id === created.custom_id);
+                    return exists ? prev : [created, ...prev];
+                });
+                setClientSearch(`${created.company_name || created.name} (ID: ${created.custom_id})`);
+            }
+
+            // 2) Готуємо payload для installations
             const { client, responsible_employee, ...projectData } = formData;
-            const sanitized = { ...projectData, payment_status: updatePaymentStatus(projectData.total_cost, projectData.paid_amount) };
-            for(let key in sanitized) if(sanitized[key] === '') sanitized[key] = null;
+            const sanitized = {
+                ...projectData,
+                client_id: clientIdToUse,
+                payment_status: updatePaymentStatus(projectData.total_cost, projectData.paid_amount),
+            };
+            for (let key in sanitized) if (sanitized[key] === '') sanitized[key] = null;
 
             if (editingProject) {
                 await supabase.from('installations').update(sanitized).eq('custom_id', editingProject.custom_id);
             } else {
                 const { data: { user } } = await supabase.auth.getUser();
-                if(user) sanitized.creator_email = user.email;
+                if (user) sanitized.creator_email = user.email;
                 await supabase.from('installations').insert([sanitized]);
             }
+
             showToast('Збережено', 'success');
             handleCloseForm();
             loadProjects();
-        } catch (e) { showToast(e.message, 'error'); }
-        finally { setSubmitting(false); }
+        } catch (e) {
+            showToast(e.message || 'Помилка збереження', 'error');
+        } finally {
+            setSubmitting(false);
+        }
     };
 
-    const filteredClients = clientSearch ? clients.filter(c => c.name?.toLowerCase().includes(clientSearch.toLowerCase())) : [];
+    const filteredClients = clientSearch
+        ? clients.filter(c => {
+            const t = clientSearch.toLowerCase();
+            return (c.name || '').toLowerCase().includes(t) || (c.company_name || '').toLowerCase().includes(t);
+        })
+        : [];
     const filteredEmployees = employeeSearch ? employees.filter(e => e.name?.toLowerCase().includes(employeeSearch.toLowerCase())) : [];
 
     const Pagination = ({ currentPage, totalCount, projectsPerPage, onPageChange }) => {
@@ -338,10 +408,7 @@ export default function ProjectsPage() {
                 <Toast message={toast.message} type={toast.type} isVisible={toast.isVisible} onClose={hideToast} />
                 <ConfirmationModal {...confirmModal} onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })} />
                 
-                <AnimatePresence>
-                    {viewingProjectEquipment && <ProjectEquipmentModal project={viewingProjectEquipment} onClose={() => setViewingProjectEquipment(null)} showToast={showToast} setConfirmModal={setConfirmModal} />}
-                    {viewingProjectDocs && <ObjectDocumentsModal project={viewingProjectDocs} onClose={() => setViewingProjectDocs(null)} />}
-                </AnimatePresence>
+                {/* Модалки "Документи" та "Обладнання" прибрані (за вимогою) */}
 
                 {/* --- HEADER --- */}
                 <div className="flex flex-col gap-4 flex-none">
@@ -501,8 +568,6 @@ export default function ProjectsPage() {
                                             <div className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${paymentInfo.color}`}>{paymentInfo.label}</div>
                                             <div className="flex items-center gap-1">
                                                 <button onClick={() => handleDetailsClick(project)} className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-500 hover:text-blue-600 transition-colors"><FaRegEye size={18}/></button>
-                                                <button onClick={() => setViewingProjectEquipment(project)} className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-500 transition-colors"><FaTruck/></button>
-                                                <button onClick={() => setViewingProjectDocs(project)} className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-500 transition-colors"><FaFolderOpen className="text-indigo-500" /></button>
                                                 
                                                 {canDelete && (
                                                     <button onClick={() => handleDelete(project.custom_id, project.name)} className="w-9 h-9 flex items-center justify-center hover:bg-red-50 rounded-lg text-red-500 transition-colors">
@@ -532,8 +597,32 @@ export default function ProjectsPage() {
                                 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 overflow-y-auto pr-2 flex-grow">
                                     <div className="md:col-span-2 relative">
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Клієнт <span className="text-red-500">*</span></label>
-                                        <input type="text" value={clientSearch} onChange={(e) => { setClientSearch(e.target.value); if(formData.client_id) handleInputChange('client_id', ''); }} placeholder="Пошук..." className={`w-full border rounded-xl px-4 py-3 ${formErrors.client_id ? 'border-red-500' : 'border-gray-300'}`} />
+                                        <div className="flex items-center justify-between mb-2">
+                                            <label className="block text-sm font-medium text-gray-700">Клієнт <span className="text-red-500">*</span></label>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowInlineClientForm(v => !v)}
+                                                className="flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                                                title="Додати клієнта швидко"
+                                            >
+                                                <FaPlus className="text-[10px]" />
+                                                <span>Додати клієнта</span>
+                                            </button>
+                                        </div>
+
+                                        <input
+                                            type="text"
+                                            value={clientSearch}
+                                            onChange={(e) => {
+                                                setClientSearch(e.target.value);
+                                                if (formData.client_id) handleInputChange('client_id', '');
+                                            }}
+                                            placeholder="Пошук..."
+                                            className={`w-full border rounded-xl px-4 py-3 ${formErrors.client_id ? 'border-red-500' : 'border-gray-300'}`}
+                                        />
+                                        {formErrors.client_id && (
+                                            <div className="mt-1 text-xs font-bold text-red-600">{formErrors.client_id}</div>
+                                        )}
                                         {clientSearch && filteredClients.length > 0 && !formData.client_id && (
                                             <div className="absolute z-20 w-full bg-white border border-gray-300 rounded-lg mt-1 shadow-lg max-h-60 overflow-y-auto">
                                                 {filteredClients.map(client => (
@@ -544,34 +633,84 @@ export default function ProjectsPage() {
                                                 ))}
                                             </div>
                                         )}
+                                        {showInlineClientForm && !editingProject && (
+                                            <div className="mt-3 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                                                <div className="flex items-center justify-between mb-3">
+                                                    <div className="text-sm font-bold text-slate-800">Швидке створення клієнта</div>
+                                                    <button type="button" onClick={() => setShowInlineClientForm(false)} className="text-slate-400 hover:text-slate-600"><FaTimes /></button>
+                                                </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                    <div className="md:col-span-2">
+                                                        <label className="block text-xs font-bold text-slate-500 mb-1">Ім'я / Назва клієнта <span className="text-red-500">*</span></label>
+                                                        <input
+                                                            type="text"
+                                                            value={inlineClient.name}
+                                                            onChange={(e) => setInlineClient(prev => ({ ...prev, name: e.target.value }))}
+                                                            placeholder="Напр. Петро Іванов або ТОВ 'Ромашка'"
+                                                            className="w-full border border-slate-300 rounded-xl px-4 py-3 bg-white"
+                                                        />
+                                                        <p className="mt-1 text-xs text-slate-400">Клієнт буде створений автоматично при натисканні “Зберегти”.</p>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-slate-500 mb-1">Компанія</label>
+                                                        <input
+                                                            type="text"
+                                                            value={inlineClient.company_name}
+                                                            onChange={(e) => setInlineClient(prev => ({ ...prev, company_name: e.target.value }))}
+                                                            placeholder="(необов'язково)"
+                                                            className="w-full border border-slate-300 rounded-xl px-4 py-3 bg-white"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-slate-500 mb-1">Телефон</label>
+                                                        <input
+                                                            type="tel"
+                                                            value={inlineClient.phone}
+                                                            onChange={(e) => setInlineClient(prev => ({ ...prev, phone: e.target.value }))}
+                                                            placeholder="+380... (необов'язково)"
+                                                            className="w-full border border-slate-300 rounded-xl px-4 py-3 bg-white"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="md:col-span-2"><label className="block text-sm font-medium text-gray-700 mb-2">Назва</label><input type="text" value={formData.name || ''} onChange={(e) => handleInputChange('name', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
                                     
-                                    <div className="md:col-span-2 bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
-                                            <select value={formData.status || ''} onChange={(e) => handleInputChange('status', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white">
-                                                <option value="planning">Планування</option>
-                                                <option value="in_progress">Виконується</option>
-                                                <option value="on_hold">Призупинено</option>
-                                                <option value="completed">Завершено</option>
-                                                <option value="cancelled">Скасовано</option>
-                                            </select>
+                                    {editingProject && (
+                                        <div className="md:col-span-2 bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
+                                                <select value={formData.status || ''} onChange={(e) => handleInputChange('status', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white">
+                                                    <option value="planning">Планування</option>
+                                                    <option value="in_progress">Виконується</option>
+                                                    <option value="on_hold">Призупинено</option>
+                                                    <option value="completed">Завершено</option>
+                                                    <option value="cancelled">Скасовано</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">Етап</label>
+                                                <select value={formData.workflow_stage || 'tech_review'} onChange={(e) => handleInputChange('workflow_stage', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white text-indigo-900 font-medium">
+                                                    {WORKFLOW_STAGES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                                                </select>
+                                            </div>
                                         </div>
-                                        
-                                        {/* ОНОВЛЕНО: SELECT ДЛЯ ЕТАПУ З НОВИМИ НАЗВАМИ */}
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Етап</label>
-                                            <select value={formData.workflow_stage || 'tech_review'} onChange={(e) => handleInputChange('workflow_stage', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white text-indigo-900 font-medium">
-                                                {WORKFLOW_STAGES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                                            </select>
-                                        </div>
-                                    </div>
+                                    )}
 
                                     <div><label className="block text-sm font-medium text-gray-700 mb-2">Компанія</label><select value={formData.working_company || ''} onChange={(e) => handleInputChange('working_company', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white"><option value="">Виберіть...</option>{ALLOWED_COMPANIES.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                                     <div><label className="block text-sm font-medium text-gray-700 mb-2">Банк?</label><select value={formData.bank || ''} onChange={(e) => handleInputChange('bank', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white"><option value="">Виберіть...</option><option value="Так">Так</option><option value="Ні">Ні</option></select></div>
                                     <div><label className="block text-sm font-medium text-gray-700 mb-2">GPS</label><input type="url" value={formData.gps_link || ''} onChange={(e) => handleInputChange('gps_link', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">Координати</label><div className="flex space-x-2"><input type="number" step="any" value={formData.latitude || ''} onChange={(e) => handleInputChange('latitude', e.target.value)} className="w-1/2 border border-gray-300 rounded-xl px-4 py-3" placeholder="Широта" /><input type="number" step="any" value={formData.longitude || ''} onChange={(e) => handleInputChange('longitude', e.target.value)} className="w-1/2 border border-gray-300 rounded-xl px-4 py-3" placeholder="Довгота" /></div></div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">К-сть фаз</label>
+                                        <select value={formData.quant_phase || ''} onChange={(e) => handleInputChange('quant_phase', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white">
+                                            <option value="">Виберіть...</option>
+                                            <option value="1">1</option>
+                                            <option value="2">2</option>
+                                            <option value="3">3</option>
+                                        </select>
+                                    </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-2">Тип монтажу</label>
                                         <select value={formData.mount_type || ''} onChange={(e) => handleInputChange('mount_type', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white">
