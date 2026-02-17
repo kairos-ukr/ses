@@ -15,6 +15,8 @@ import DocMen from "./DocumentManager";
 import ProjectDetailsPage from './ProjectDetailsPage';
 import Admin from './AdminPanel';
 import Bulder from "./build.jsx"
+import MyWorkflowDashboard from "./MyWorkflowDashboard";
+import PlannedVisitsPage from "./PlannedVisitsPage";
 
 export default function App() {
   return (
@@ -33,6 +35,9 @@ export default function App() {
           <Route path="/payments" element={<Payments />} />
           <Route path="/documents" element={<DocMen />} />
           <Route path="/project/:id" element={<ProjectDetailsPage />} />
+          <Route path="/my-workflow" element={<MyWorkflowDashboard />} />
+          <Route path="/plans" element={<PlannedVisitsPage />} />
+          
           {/* Пізніше ми захистимо цей маршрут, щоб сюди не міг зайти монтажник */}
           <Route path="/admin" element={<Admin />} />
           <Route path="/bild" element={<Bulder />} />

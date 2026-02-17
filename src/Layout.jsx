@@ -3,13 +3,12 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   FaBars, FaTimes, FaHome, FaUsers, FaUserTie, 
   FaTasks, FaCog, FaFolderOpen, FaSignOutAlt,
-  FaHardHat, FaMoneyBillWave 
+  FaHardHat, FaMoneyBillWave, FaProjectDiagram,
+  FaCalendarAlt
 } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// ЗМІНА 1: Імпортуємо useAuth замість supabase
 import { useAuth } from './AuthProvider'; 
-
 import logo from './logoCore1.png'; 
 
 const Layout = ({ children }) => {
@@ -17,10 +16,8 @@ const Layout = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
   
-  // ЗМІНА 2: Дістаємо функцію signOut з контексту
   const { signOut } = useAuth();
 
-  // ЗМІНА 3: Використовуємо функцію з "хаком"
   const handleLogout = async () => {
     await signOut();
     navigate("/", { replace: true });
@@ -30,6 +27,12 @@ const Layout = ({ children }) => {
       { path: '/home', label: 'Головна', icon: FaHome },
       { path: '/clients', label: 'Клієнти', icon: FaUsers },
       { path: '/installations', label: "Об'єкти", icon: FaHardHat },
+
+      { path: '/my-workflow', label: 'Мої етапи', icon: FaProjectDiagram },
+
+      // ✅ НОВЕ: Plans одразу після "Мої етапи"
+      { path: '/plans', label: 'Плани', icon: FaCalendarAlt },
+
       { path: '/employees', label: 'Працівники', icon: FaUserTie },
       { path: '/tasks', label: 'Задачі', icon: FaTasks },
       { path: '/equipment', label: 'Обладнання', icon: FaCog },
@@ -71,8 +74,10 @@ const Layout = ({ children }) => {
         </nav>
 
         <div className="p-4 border-t border-slate-100">
-            {/* Кнопка виходу тепер викликає handleLogout з хаком */}
-            <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all w-full text-sm font-medium">
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all w-full text-sm font-medium"
+            >
                 <FaSignOutAlt /> Вихід
             </button>
         </div>
@@ -125,8 +130,10 @@ const Layout = ({ children }) => {
               </nav>
 
               <div className="p-4 border-t border-slate-100 bg-slate-50 pb-safe">
-                  {/* Кнопка виходу мобільна */}
-                  <button onClick={() => { handleLogout(); setIsOpen(false); }} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white border border-slate-200 text-red-500 rounded-xl font-bold shadow-sm active:scale-95 transition-all">
+                  <button
+                    onClick={() => { handleLogout(); setIsOpen(false); }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white border border-slate-200 text-red-500 rounded-xl font-bold shadow-sm active:scale-95 transition-all"
+                  >
                       <FaSignOutAlt /> Вийти
                   </button>
               </div>
@@ -143,7 +150,10 @@ const Layout = ({ children }) => {
              alt="K-Core" 
              className="h-8 w-auto object-contain" 
            />
-           <button onClick={() => setIsOpen(true)} className="p-2.5 -mr-2 text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100">
+           <button
+             onClick={() => setIsOpen(true)}
+             className="p-2.5 -mr-2 text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100"
+           >
              <FaBars size={22} />
            </button>
         </header>

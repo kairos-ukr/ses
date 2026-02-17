@@ -6,7 +6,8 @@ import {
   FaFileSignature, FaBroadcastTower, FaImage, FaExclamationTriangle,
   FaTools, FaTrash, FaPlus, FaSpinner, FaThumbtack, FaCheckCircle,
   FaUserTie, FaSearch, FaArrowRight,
-  FaFileInvoiceDollar, FaDraftingCompass, FaTruckLoading, FaHandPointer
+  FaFileInvoiceDollar, FaDraftingCompass, FaTruckLoading, FaHandPointer,
+  FaFileAlt, FaDownload
 } from "react-icons/fa";
 
 // ✅ ПІДПРАВ ШЛЯХИ ПІД СВІЙ ПРОЄКТ
@@ -16,7 +17,7 @@ import { useAuth } from "./AuthProvider";
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 
 // ==================================================================================
-// 1. КОНФІГУРАЦІЯ (СТАРІ КЛЮЧІ В БАЗІ = КЛЮЧІ В КОДІ)
+// 1. КОНФІГУРАЦІЯ
 // ==================================================================================
 
 const STAGE_GROUPS = [
@@ -36,7 +37,8 @@ const DETAILED_TASKS = {
   ],
   project: [
     { id: "project_design", title: "Розробка 3D візуалізації (Завантаження)" }, 
-    { id: "project_approval", title: "Вибір та затвердження варіанту" } 
+    { id: "project_approval", title: "Вибір та затвердження варіанту" },
+    { id: "tech_project", title: "Технічний проект" } // <-- НОВИЙ ЕТАП
   ],
   proposal: [
     { id: "commercial_proposal", title: "Комерційна пропозиція" } 
@@ -63,12 +65,26 @@ const DETAILED_TASKS = {
   ]
 };
 
-// ТУТ ВИКОРИСТОВУЄМО СТАРІ СТАТУСИ З БАЗИ
+// Етапи, де дозволено завантаження файлів (документів)
+const STAGES_WITH_UPLOADS = new Set([
+  "commercial_proposal",
+  "tech_project",
+  "complectation",
+  "comp_protection"
+]);
+
 const STATUS_CONFIG = {
   default: [
     { key: "todo", label: "Не почато", color: "bg-slate-50 text-slate-500 border-slate-200" }, 
     { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" }, 
     { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" }, 
+  ],
+  // Конфіг для Технічного проекту
+  tech_project_group: [
+    { key: "todo", label: "Не почато", color: "bg-slate-50 text-slate-500 border-slate-200" },
+    { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
+    { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+    { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   ],
   proposal: [
     { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
@@ -127,9 +143,13 @@ const ALL_STATUS_LABELS = {
 // 2. HELPER FUNCTIONS
 // ==================================================================================
 
-const getStatusMeta = (stageGroupKey, statusKey) => {
+const getStatusMeta = (stageGroupKey, statusKey, taskId = null) => {
   let config = STATUS_CONFIG.default;
-  if (STATUS_CONFIG[stageGroupKey]) {
+
+  // Спеціальний конфіг для Технічного Проекту
+  if (taskId === "tech_project") {
+    config = STATUS_CONFIG.tech_project_group;
+  } else if (STATUS_CONFIG[stageGroupKey]) {
     config = STATUS_CONFIG[stageGroupKey];
   } else if (stageGroupKey === "installation") {
     config = STATUS_CONFIG.installation; 
@@ -147,13 +167,17 @@ const driveThumbUrl = (fileId, size = 240) =>
 const driveViewUrl = (fileId) =>
   `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w1600`;
 
-async function uploadWorkflowPhotos({ files, installationId, stageKey }) {
+function isImageFile(file) {
+  return (file?.type || "").startsWith("image/");
+}
+
+async function uploadWorkflowFiles({ files, installationId, stageKey }) {
   if (!files || files.length === 0) return { links: [], fileIds: [] };
 
   const fd = new FormData();
   files.forEach((f) => fd.append("files", f));
   fd.append("object_number", String(installationId));
-  fd.append("doc_type", "Фотозвіт");
+  fd.append("doc_type", "Файли етапу"); // Універсальний тип
   if (stageKey) fd.append("stage_key", stageKey);
 
   const url = `${WORKFLOW_UPLOADER_URL}/workflow/upload`;
@@ -319,7 +343,9 @@ function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoadi
   const [newComment, setNewComment] = useState("");
   
   let statusOptions = STATUS_CONFIG.default;
-  if (STATUS_CONFIG[stageGroupKey]) {
+  if (task.id === "tech_project") {
+    statusOptions = STATUS_CONFIG.tech_project_group;
+  } else if (STATUS_CONFIG[stageGroupKey]) {
     statusOptions = STATUS_CONFIG[stageGroupKey];
   } else if (stageGroupKey === "installation") {
     statusOptions = STATUS_CONFIG.installation;
@@ -331,7 +357,10 @@ function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoadi
   const [selectedFiles, setSelectedFiles] = useState([]);
   const fileInputRef = useRef(null);
 
-  const allowPhotos = !["equipment", "proposal"].includes(stageGroupKey);
+  // Перевірка, чи дозволені файли (документи)
+  const canUploadAnyFile = STAGES_WITH_UPLOADS.has(task.id);
+  // Перевірка, чи дозволені фото (більшість етапів, окрім equipment)
+  const canUploadPhotos = !["equipment", "proposal"].includes(stageGroupKey) || canUploadAnyFile;
 
   const hasChanges =
     newStatus !== task.status ||
@@ -343,25 +372,27 @@ function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoadi
     if (e.target.files) {
       const filesArray = Array.from(e.target.files).map((file) => ({
         file,
-        preview: URL.createObjectURL(file)
+        preview: isImageFile(file) ? URL.createObjectURL(file) : null,
+        isImage: isImageFile(file)
       }));
       setSelectedFiles((prev) => [...prev, ...filesArray]);
     }
   };
 
   const removePhoto = (index) => {
-    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+    setSelectedFiles((prev) => {
+        const item = prev[index];
+        if (item.preview) URL.revokeObjectURL(item.preview);
+        return prev.filter((_, i) => i !== index);
+    });
   };
 
   const handleSubmit = () => {
     if (!hasChanges) return;
 
-    let finalComment = newComment;
-
-
     onAddUpdate(task.id, {
       status: newStatus,
-      comment: finalComment,
+      comment: newComment,
       photos: [],
       rawFiles: selectedFiles.map(f => f.file),
       assigned_to: assignedEmpId
@@ -369,8 +400,14 @@ function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoadi
   };
 
   useEffect(() => {
-    return () => selectedFiles.forEach(f => URL.revokeObjectURL(f.preview));
+    return () => selectedFiles.forEach(f => { if(f.preview) URL.revokeObjectURL(f.preview) });
   }, [selectedFiles]);
+
+  const getEmployeeName = (customId) => {
+    if (!customId) return null;
+    const found = employees.find(e => String(e.custom_id) === String(customId));
+    return found?.name || customId;
+  };
 
   return (
     <div className="fixed inset-0 z-[50] flex items-end sm:items-center justify-center bg-slate-900/40 backdrop-blur-sm animate-fade-in p-0 sm:p-4">
@@ -430,14 +467,29 @@ function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoadi
               />
             </div>
 
-            {allowPhotos && (
+            {canUploadPhotos && (
               <div>
-                <input type="file" multiple accept="image/*" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
+                <input 
+                  type="file" 
+                  multiple 
+                  accept={canUploadAnyFile ? "*/*" : "image/*"} 
+                  ref={fileInputRef} 
+                  onChange={handleFileSelect} 
+                  className="hidden" 
+                />
+                
                 {selectedFiles.length > 0 && (
                   <div className="grid grid-cols-3 gap-2 mb-3">
                     {selectedFiles.map((fileObj, idx) => (
-                      <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-slate-200 group">
-                        <img src={fileObj.preview} alt="preview" className="w-full h-full object-cover" />
+                      <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-slate-200 group bg-slate-50">
+                        {fileObj.isImage ? (
+                           <img src={fileObj.preview} alt="preview" className="w-full h-full object-cover" />
+                        ) : (
+                           <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1">
+                               <FaFileAlt size={24} className="mb-1"/>
+                               <span className="text-[8px] text-center leading-tight truncate w-full px-1">{fileObj.file.name}</span>
+                           </div>
+                        )}
                         <button
                           onClick={() => removePhoto(idx)}
                           className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-90 hover:opacity-100 transition shadow-sm"
@@ -462,7 +514,8 @@ function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoadi
                     className="w-full py-2.5 border border-dashed border-indigo-200 text-indigo-600 bg-indigo-50/50 rounded-xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-50 transition"
                     type="button"
                   >
-                    <FaCamera /> Додати фото
+                    {canUploadAnyFile ? <FaPlus /> : <FaCamera />} 
+                    {canUploadAnyFile ? "Додати файли / фото" : "Додати фото"}
                   </button>
                 )}
               </div>
@@ -473,7 +526,12 @@ function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoadi
             <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2">
               <FaHistory /> Хронологія
             </h4>
-            <HistoryTimeline logs={task.history} stageGroupKey={stageGroupKey} />
+            <HistoryTimeline 
+                logs={task.history} 
+                stageGroupKey={stageGroupKey} 
+                task={task}
+                getEmployeeName={getEmployeeName}
+            />
           </div>
         </div>
 
@@ -510,7 +568,7 @@ function TaskDetailModal(props) {
 }
 
 // ==================================================================================
-// 4. UI HELPERS (Confirmation, EmployeeSelect, Viewer...)
+// 4. UI HELPERS
 // ==================================================================================
 
 function ConfirmationModal({ isOpen, onClose, onConfirm, title, message }) {
@@ -665,7 +723,7 @@ function PhotoViewerModal({ isOpen, onClose, fileIds, startIndex = 0 }) {
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl overflow-hidden">
         <div className="p-3 border-b border-slate-100 flex items-center justify-between">
-          <div className="text-xs font-bold text-slate-500">Фото {idx + 1} / {fileIds.length}</div>
+          <div className="text-xs font-bold text-slate-500">Файл {idx + 1} / {fileIds.length}</div>
           <div className="flex items-center gap-2">
             <button onClick={() => setIdx(Math.max(0, idx - 1))} disabled={idx === 0} className="px-3 py-2 rounded-xl border font-bold text-xs bg-white" type="button">
               Назад
@@ -678,15 +736,28 @@ function PhotoViewerModal({ isOpen, onClose, fileIds, startIndex = 0 }) {
             </button>
           </div>
         </div>
-        <div className="bg-black flex items-center justify-center">
-          <img src={driveViewUrl(currentId)} alt="Фото" className="max-h-[78vh] w-auto object-contain" />
+        <div className="bg-black flex items-center justify-center h-[78vh] bg-slate-50 relative">
+          <img 
+            src={driveViewUrl(currentId)} 
+            alt="Preview" 
+            className="max-h-full max-w-full object-contain" 
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+          />
+          {/* Фолбек, якщо картинка не завантажилась (наприклад, це PDF) */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 -z-10">
+             <FaFileAlt size={48} className="mb-2 opacity-50"/>
+             <span className="text-sm">Попередній перегляд недоступний</span>
+             <a href={driveViewUrl(currentId)} target="_blank" rel="noreferrer" className="mt-4 px-4 py-2 bg-white rounded-lg border shadow-sm font-bold text-sm text-indigo-600">
+               Завантажити / Відкрити
+             </a>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function HistoryTimeline({ logs, stageGroupKey }) {
+function HistoryTimeline({ logs, stageGroupKey, task, getEmployeeName }) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerIds, setViewerIds] = useState([]);
   const [viewerStart, setViewerStart] = useState(0);
@@ -704,10 +775,22 @@ function HistoryTimeline({ logs, stageGroupKey }) {
       <div className="space-y-4 mt-4">
         {logs.map((log) => {
           const hasStatusChange = log.old_status && log.new_status && log.old_status !== log.new_status;
-          const oldMeta = hasStatusChange ? getStatusMeta(stageGroupKey, log.old_status) : null;
-          const newMeta = hasStatusChange ? getStatusMeta(stageGroupKey, log.new_status) : null;
+          const oldMeta = hasStatusChange ? getStatusMeta(stageGroupKey, log.old_status, task.id) : null;
+          const newMeta = hasStatusChange ? getStatusMeta(stageGroupKey, log.new_status, task.id) : null;
+
+          const oldResp = log.old_responsible;
+          const newResp = log.new_responsible;
+          const hasRespInfo = oldResp != null || newResp != null;
+          const respChanged = String(oldResp ?? "") !== String(newResp ?? "");
 
           const fileIds = Array.isArray(log.photo_file_ids) ? log.photo_file_ids.filter(Boolean) : [];
+          const links = Array.isArray(log.photos) ? log.photos.filter(Boolean) : [];
+
+          // Об'єднуємо fileIds та links для відображення
+          const attachments = [
+            ...fileIds.map((id, i) => ({ fileId: id, link: links[i] || driveViewUrl(id), idx: i })),
+            ...links.slice(fileIds.length).map((link, i) => ({ fileId: null, link, idx: fileIds.length + i }))
+          ];
 
           return (
             <div key={log.id} className="flex gap-3 relative group">
@@ -729,32 +812,70 @@ function HistoryTimeline({ logs, stageGroupKey }) {
                   </div>
                 )}
 
+                {hasRespInfo && (
+                  <div className="mb-2 text-xs text-slate-600 bg-indigo-50/50 rounded-lg px-2 py-1.5 border border-indigo-100 flex items-center gap-2">
+                     <div className="p-1 bg-indigo-100 rounded text-indigo-600">
+                        <FaUserTie /> 
+                     </div>
+                     <div className="flex-1">
+                        <span className="font-semibold text-slate-500 mr-1">Призначено:</span>
+                        {respChanged ? (
+                          <>
+                            <span className="line-through opacity-60 mr-1">{getEmployeeName(oldResp)}</span>
+                            <FaArrowRight className="inline text-slate-300 text-[10px] mx-1" />
+                            <span className="font-bold text-slate-800">{getEmployeeName(newResp)}</span>
+                          </>
+                        ) : (
+                          <span className="font-bold text-slate-800">{getEmployeeName(newResp ?? oldResp)}</span>
+                        )}
+                     </div>
+                  </div>
+                )}
+
                 {log.comment && (
                   <p className="text-sm text-slate-700 mb-2 leading-relaxed whitespace-pre-line bg-slate-50/50 p-2 rounded-lg">
                     {log.comment}
                   </p>
                 )}
 
-                {fileIds.length > 0 && (
+                {attachments.length > 0 && (
                   <div className="flex gap-2 mt-2 flex-wrap">
-                    {fileIds.map((id, i) => (
-                      <button
-                        key={`${id}-${i}`}
-                        type="button"
-                        onClick={() => openViewer(fileIds, i)}
-                        className="block w-12 h-10 bg-slate-100 rounded border border-slate-200 overflow-hidden hover:bg-slate-200 transition"
-                      >
-                        <img
-                          src={driveThumbUrl(id)}
-                          alt="preview"
-                          className="w-full h-full object-cover"
-                          onError={(e) => { e.currentTarget.style.display = "none"; }}
-                        />
-                        <div className="w-full h-full flex items-center justify-center text-slate-400">
-                          <FaImage size={14} />
-                        </div>
-                      </button>
-                    ))}
+                    {attachments.map((att) => {
+                       if (att.fileId) {
+                         return (
+                            <div key={`att-${log.id}-${att.idx}`} className="flex items-center gap-1 group/file">
+                              <button
+                                type="button"
+                                onClick={() => openViewer(fileIds, att.idx)}
+                                className="block w-12 h-10 bg-slate-100 rounded border border-slate-200 overflow-hidden hover:bg-slate-200 transition relative"
+                              >
+                                <img
+                                  src={driveThumbUrl(att.fileId)}
+                                  alt="preview"
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => { 
+                                      e.currentTarget.style.display = "none"; 
+                                      // Показати іконку, якщо картинка не завантажилась (наприклад, документ)
+                                      e.currentTarget.parentElement.querySelector('.fallback-icon').style.display = 'flex';
+                                  }}
+                                />
+                                <div className="fallback-icon w-full h-full absolute inset-0 hidden items-center justify-center text-slate-400 bg-slate-50">
+                                   <FaFileAlt size={16} />
+                                </div>
+                              </button>
+                              <a href={att.link} target="_blank" rel="noreferrer" className="text-[10px] px-2 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 flex items-center gap-1">
+                                <FaDownload size={8} />
+                              </a>
+                            </div>
+                         );
+                       }
+                       // Якщо тільки посилання (старі логи)
+                       return (
+                          <a key={`link-${log.id}-${att.idx}`} href={att.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-200 bg-white text-slate-600 text-[11px]">
+                             <FaFileAlt /> Документ
+                          </a>
+                       )
+                    })}
                   </div>
                 )}
               </div>
@@ -774,7 +895,7 @@ function HistoryTimeline({ logs, stageGroupKey }) {
 }
 
 // ==================================================================================
-// 5. MAIN SCREEN (FRONT-ONLY: Supabase direct)
+// 5. MAIN SCREEN
 // ==================================================================================
 
 export default function FieldWorkflow({ project }) {
@@ -818,10 +939,11 @@ export default function FieldWorkflow({ project }) {
     setLoading(true);
 
     try {
+      // Завантажуємо статуси, відповідальних та історію
       const [stagesResp, eventsResp] = await Promise.all([
         supabase
           .from("project_stages")
-          .select("stage_key, status")
+          .select("stage_key, status, responsible_emp_custom_id")
           .eq("installation_custom_id", installationId),
 
         supabase
@@ -835,7 +957,10 @@ export default function FieldWorkflow({ project }) {
       if (eventsResp.error) throw eventsResp.error;
 
       const stagesDict = (stagesResp.data || []).reduce((acc, item) => {
-        acc[item.stage_key] = item.status;
+        acc[item.stage_key] = {
+            status: item.status,
+            responsibleId: item.responsible_emp_custom_id
+        };
         return acc;
       }, {});
 
@@ -849,9 +974,11 @@ export default function FieldWorkflow({ project }) {
       const mappedTasks = tasksTemplate.map(templateTask => {
         const taskKey = templateTask.id;
         
-        let statusFromDB = stagesDict?.[taskKey] || "todo"; 
+        let stageInfo = stagesDict?.[taskKey] || {};
+        let statusFromDB = stageInfo.status || "todo"; 
         
-        if (!stagesDict?.[taskKey]) {
+        // Фоллбеки для статусів, якщо в базі пусто
+        if (!stageInfo.status) {
             if (taskKey === "equipment") statusFromDB = "waiting";
             else if (taskKey === "project_design" || taskKey === "commercial_proposal") statusFromDB = "waiting";
             else statusFromDB = "todo";
@@ -862,7 +989,12 @@ export default function FieldWorkflow({ project }) {
         }
 
         const history = formattedHistory.filter(h => h.stage_key === taskKey);
-        return { ...templateTask, status: statusFromDB, history, responsibleId: null };
+        return { 
+            ...templateTask, 
+            status: statusFromDB, 
+            history, 
+            responsibleId: stageInfo.responsibleId || null
+        };
       });
 
       setTasks(mappedTasks);
@@ -889,7 +1021,7 @@ export default function FieldWorkflow({ project }) {
       let uploadedFileIds = [];
 
       if (updateData?.rawFiles?.length) {
-        const up = await uploadWorkflowPhotos({
+        const up = await uploadWorkflowFiles({
           files: updateData.rawFiles,
           installationId,
           stageKey: taskId
@@ -918,7 +1050,6 @@ export default function FieldWorkflow({ project }) {
         p_comment: updateData.comment || "",
         p_photos: photos,
         p_photo_file_ids: photo_file_ids,
-        // ✅ ВИПРАВЛЕНО: передаємо ID відповідального
         p_new_responsible: updateData.assigned_to || null,
         p_set_as_global_stage: false
       });
@@ -982,13 +1113,13 @@ export default function FieldWorkflow({ project }) {
     });
   };
 
-  const getStatusLabel = (stageKey, statusKey) => {
-    if (stageKey === "project" && activeTask?.id === "project_approval") {
+  const getStatusLabel = (stageKey, statusKey, taskId) => {
+    if (stageKey === "project" && taskId === "project_approval") {
       const selConfig = STATUS_CONFIG.project_selector;
       const item = selConfig.find(i => i.key === statusKey);
       return item || selConfig[0];
     }
-    const statusMeta = getStatusMeta(stageKey, statusKey);
+    const statusMeta = getStatusMeta(stageKey, statusKey, taskId);
     return statusMeta;
   };
 
@@ -1036,7 +1167,7 @@ export default function FieldWorkflow({ project }) {
               if (task.id === "project_approval") {
                 statusMeta = STATUS_CONFIG.project_selector.find(s => s.key === task.status) || STATUS_CONFIG.project_selector[0];
               } else {
-                statusMeta = getStatusLabel(activeStage, task.status);
+                statusMeta = getStatusLabel(activeStage, task.status, task.id);
               }
 
               const lastLog = task.history && task.history[0];
