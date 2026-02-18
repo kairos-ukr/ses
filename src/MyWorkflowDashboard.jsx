@@ -190,6 +190,16 @@ function normalizeStatus(status) {
 }
 
 /**
+ * ✅ Нормалізація custom_id працівника
+ * (важливо: в БД це integer, а з UI/інпутів може прилітати string/""/undefined)
+ */
+function normalizeEmployeeCustomId(val) {
+  if (val === null || val === undefined || val === "") return null;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * DONE_BY_GROUP — список статусів, при яких етап вважається завершеним
  */
 const DONE_BY_GROUP = {
@@ -636,7 +646,6 @@ function HistoryTimeline({ logs, stageKey, getEmployeeName }) {
                                 className="w-full h-full object-cover"
                                 onError={(e) => {
                                   e.currentTarget.style.display = "none";
-                                  // Пошукаємо sibling елемент (іконку) і покажемо його
                                   e.currentTarget.parentElement.querySelector('.fallback-icon').style.display = 'flex';
                                 }}
                               />
@@ -1184,6 +1193,9 @@ export default function MyWorkflowDashboard() {
     setErrorText("");
 
     try {
+      // ✅ Нормалізуємо відповідального до integer/null
+      const normalizedResponsibleId = normalizeEmployeeCustomId(payload?.assigned_to);
+
       let uploadedLinks = [];
       let uploadedFileIds = [];
 
@@ -1210,7 +1222,8 @@ export default function MyWorkflowDashboard() {
         p_comment: payload.comment || "",
         p_photos: photos,
         p_photo_file_ids: photo_file_ids,
-        p_new_responsible: payload.assigned_to ?? null,
+        // ✅ важливо: передаємо integer/null
+        p_new_responsible: normalizedResponsibleId,
         p_set_as_global_stage: false,
       });
 
@@ -1221,7 +1234,7 @@ export default function MyWorkflowDashboard() {
           .from("project_stages")
           .update({
             status: payload.status,
-            responsible_emp_custom_id: payload.assigned_to ?? null,
+            responsible_emp_custom_id: normalizedResponsibleId,
             updated_at: new Date().toISOString(),
           })
           .eq("installation_custom_id", quickItem.installation_custom_id)
@@ -1235,7 +1248,7 @@ export default function MyWorkflowDashboard() {
           old_status: quickItem.status,
           new_status: payload.status,
           old_responsible: quickItem.responsible_emp_custom_id ?? null,
-          new_responsible: payload.assigned_to ?? null,
+          new_responsible: normalizedResponsibleId,
           comment: payload.comment || "",
           actor: actorName,
           photos,
@@ -1247,10 +1260,27 @@ export default function MyWorkflowDashboard() {
         throw new Error(rpcData.message || "Оновлення не застосоване");
       }
 
+      // ✅ ГАРАНТІЯ: навіть якщо RPC не оновив responsible_emp_custom_id — фіксуємо окремо.
+      // Не чіпаємо інші поля, лише responsible_emp_custom_id (по унікальному конфлікту).
+      if (payload?.assigned_to !== undefined) {
+        const { error: respUpsertErr } = await supabase
+          .from("project_stages")
+          .upsert(
+            {
+              installation_custom_id: quickItem.installation_custom_id,
+              stage_key: quickItem.stage_key,
+              responsible_emp_custom_id: normalizedResponsibleId,
+            },
+            { onConflict: "installation_custom_id,stage_key" }
+          );
+
+        if (respUpsertErr) throw respUpsertErr;
+      }
+
       // ✅ Optimistic UI
       const newStatusDone = isCompletedForStage(quickItem.stage_key, payload.status);
       const reassignedAway =
-        payload.assigned_to != null && String(payload.assigned_to) !== String(employee.custom_id);
+        normalizedResponsibleId != null && String(normalizedResponsibleId) !== String(employee.custom_id);
 
       if (newStatusDone || reassignedAway) {
         setRows((prev) =>
@@ -1272,7 +1302,7 @@ export default function MyWorkflowDashboard() {
                   ...r,
                   status: payload.status,
                   updated_at: nowIso,
-                  responsible_emp_custom_id: payload.assigned_to ?? r.responsible_emp_custom_id,
+                  responsible_emp_custom_id: normalizedResponsibleId ?? r.responsible_emp_custom_id,
                 }
               : r
           )
