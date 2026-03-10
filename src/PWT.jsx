@@ -171,6 +171,13 @@ function isImageFile(file) {
   return (file?.type || "").startsWith("image/");
 }
 
+// Приводимо значення до integer (custom_id працівника) або null
+function toIntOrNull(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
 async function uploadWorkflowFiles({ files, installationId, stageKey }) {
   if (!files || files.length === 0) return { links: [], fileIds: [] };
 
@@ -395,7 +402,8 @@ function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoadi
       comment: newComment,
       photos: [],
       rawFiles: selectedFiles.map(f => f.file),
-      assigned_to: assignedEmpId
+      // Відправляємо саме custom_id працівника (integer)
+      assigned_to: toIntOrNull(assignedEmpId)
     });
   };
 
@@ -959,7 +967,8 @@ export default function FieldWorkflow({ project }) {
       const stagesDict = (stagesResp.data || []).reduce((acc, item) => {
         acc[item.stage_key] = {
             status: item.status,
-            responsibleId: item.responsible_emp_custom_id
+            // В БД зберігаємо саме employees.custom_id
+            responsibleId: toIntOrNull(item.responsible_emp_custom_id)
         };
         return acc;
       }, {});
@@ -1050,7 +1059,8 @@ export default function FieldWorkflow({ project }) {
         p_comment: updateData.comment || "",
         p_photos: photos,
         p_photo_file_ids: photo_file_ids,
-        p_new_responsible: updateData.assigned_to || null,
+        // 👇 важливо: сюди передаємо integer custom_id працівника
+        p_new_responsible: toIntOrNull(updateData.assigned_to),
         p_set_as_global_stage: false
       });
 

@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   FaBars, FaTimes, FaHome, FaUsers, FaUserTie, 
-  FaTasks, FaCog, FaFolderOpen, FaSignOutAlt,
-  FaHardHat, FaMoneyBillWave, FaProjectDiagram,
-  FaCalendarAlt
+  FaTasks, FaFolderOpen, FaSignOutAlt,
+  FaHardHat, FaProjectDiagram, FaCalendarAlt,
+  FaHandshake, FaBox // ✅ Додано іконку для Обладнання
 } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -27,16 +27,15 @@ const Layout = ({ children }) => {
       { path: '/home', label: 'Головна', icon: FaHome },
       { path: '/clients', label: 'Клієнти', icon: FaUsers },
       { path: '/installations', label: "Об'єкти", icon: FaHardHat },
-
+      { path: '/partners', label: 'Партнерство', icon: FaHandshake },
       { path: '/my-workflow', label: 'Мої етапи', icon: FaProjectDiagram },
-
-      // ✅ НОВЕ: Plans одразу після "Мої етапи"
       { path: '/plans', label: 'Плани', icon: FaCalendarAlt },
-
       { path: '/employees', label: 'Працівники', icon: FaUserTie },
       { path: '/tasks', label: 'Задачі', icon: FaTasks },
-      { path: '/equipment', label: 'Обладнання', icon: FaCog },
-      { path: '/payments', label: 'Платежі', icon: FaMoneyBillWave },
+      
+      // ✅ НОВЕ: Вкладка "Обладнання" під задачами
+      { path: '/equipment', label: 'Обладнання', icon: FaBox },
+      
       { path: '/documents', label: 'Документи', icon: FaFolderOpen },
   ];
 

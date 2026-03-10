@@ -42,7 +42,7 @@ const StatusBadge = ({ status }) => {
 const LoadingScreen = () => (
     <div className="flex-1 flex items-center justify-center min-h-[50vh]">
         <div className="text-center">
-            <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-sm mb-4 animate-pulse mx-auto border border-indigo-100">
+            <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4 animate-pulse mx-auto border border-indigo-100">
                 <FaTasks className="text-3xl" />
             </div>
             <p className="text-slate-500 font-medium">Завантаження задач...</p>
@@ -76,27 +76,21 @@ const FilterCards = ({ tasks, filter, setFilter }) => {
             const isActive = filter === cat.id;
             
             const colorStyles = {
-                indigo:  isActive ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-l-indigo-500 hover:bg-indigo-50/50',
-                amber:   isActive ? 'bg-amber-50 border-amber-500 text-amber-700' : 'border-l-amber-500 hover:bg-amber-50/50',
-                blue:    isActive ? 'bg-blue-50 border-blue-500 text-blue-700' : 'border-l-blue-500 hover:bg-blue-50/50',
-                red:     isActive ? 'bg-red-50 border-red-500 text-red-700' : 'border-l-red-500 hover:bg-red-50/50',
-                emerald: isActive ? 'bg-emerald-50 border-emerald-500 text-emerald-700' : 'border-l-emerald-500 hover:bg-emerald-50/50',
+                indigo:  isActive ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-l-indigo-500 hover:bg-slate-50',
+                amber:   isActive ? 'bg-amber-50 border-amber-500 text-amber-700' : 'border-l-amber-500 hover:bg-slate-50',
+                blue:    isActive ? 'bg-blue-50 border-blue-500 text-blue-700' : 'border-l-blue-500 hover:bg-slate-50',
+                red:     isActive ? 'bg-red-50 border-red-500 text-red-700' : 'border-l-red-500 hover:bg-slate-50',
+                emerald: isActive ? 'bg-emerald-50 border-emerald-500 text-emerald-700' : 'border-l-emerald-500 hover:bg-slate-50',
                 slate:   isActive ? 'bg-slate-100 border-slate-500 text-slate-700' : 'border-l-slate-400 hover:bg-slate-50',
             };
-
-            const baseStyle = colorStyles[cat.color];
 
             return (
                 <div 
                     key={cat.id} 
                     onClick={() => setFilter(cat.id)} 
-                    className={`
-                        relative overflow-hidden cursor-pointer rounded-xl p-3 sm:p-4 border shadow-sm transition-all duration-200 active:scale-95
-                        bg-white border-slate-100 border-l-4 ${baseStyle}
-                        ${isActive ? 'shadow-md ring-1 ring-black/5' : ''}
-                    `}
+                    className={`relative overflow-hidden cursor-pointer rounded-xl p-3 sm:p-4 border bg-white border-slate-200 border-l-4 ${colorStyles[cat.color]}`}
                 >
-                    <cat.icon className={`absolute -right-2 -bottom-2 text-4xl opacity-10 ${isActive ? 'scale-110' : 'scale-100'}`} />
+                    <cat.icon className={`absolute -right-2 -bottom-2 text-4xl opacity-10`} />
                     <div className="relative z-10">
                         <p className="text-xs font-bold uppercase tracking-wider opacity-70 mb-1">{cat.label}</p>
                         <p className="text-2xl font-extrabold">{count}</p>
@@ -108,15 +102,15 @@ const FilterCards = ({ tasks, filter, setFilter }) => {
   );
 };
 
-// 2. ОНОВЛЕНИЙ TASK CARD З ВІДОБРАЖЕННЯМ ДАТИ ВИКОНАННЯ
 const TaskCard = ({ task, employees, onEdit, onDelete, onUpdateStatus, formatDateTime, formatDate, isOverdue, canEdit, canDelete, canComplete }) => {
-    const creator = employees.find(e => e.email === task.creator_email);
-    const creatorName = creator ? creator.name : task.creator_email;
-    const assignee = employees.find(e => e.custom_id === task.assigned_to);
+    const creator = task.creator_email ? employees.find(e => e.email === task.creator_email) : null;
+    const creatorName = creator ? creator.name : (task.creator_email || 'Невідомо');
+    
+    const assignee = task.assigned_to ? employees.find(e => e.custom_id === task.assigned_to) : null;
     const assigneeName = assignee ? assignee.name : null;
 
     return (
-        <motion.div layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95 }} className="group bg-white rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-all flex flex-col md:flex-row overflow-hidden">
+        <div className="bg-white rounded-xl border border-slate-200 flex flex-col md:flex-row overflow-hidden mb-3">
             <div className="p-4 flex-1">
                 <div className="flex justify-between items-start mb-2">
                      <div className="flex items-center gap-2">
@@ -124,7 +118,6 @@ const TaskCard = ({ task, employees, onEdit, onDelete, onUpdateStatus, formatDat
                         <StatusBadge status={task.status} />
                      </div>
                      
-                     {/* --- МОБІЛЬНІ КНОПКИ --- */}
                      <div className="flex md:hidden items-center gap-2">
                         {task.status !== 'виконано' && canComplete && (
                             <button onClick={() => onUpdateStatus(task.custom_id, 'виконано')} className="p-2 text-emerald-600 bg-emerald-50 rounded-lg"><FaCheck size={14}/></button>
@@ -155,7 +148,6 @@ const TaskCard = ({ task, employees, onEdit, onDelete, onUpdateStatus, formatDat
                         </div>
                     )}
                     
-                    {/* НОВЕ: ВІДОБРАЖЕННЯ ДАТИ ВИКОНАННЯ */}
                     {task.data_complete && task.status === 'виконано' && (
                         <div className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded font-bold">
                             <FaCheck className="text-emerald-500"/>
@@ -167,35 +159,34 @@ const TaskCard = ({ task, employees, onEdit, onDelete, onUpdateStatus, formatDat
 
             <div className="bg-slate-50/50 p-4 border-t md:border-t-0 md:border-l border-slate-200 w-full md:w-64 flex flex-col justify-center gap-3">
                 <div className="flex items-start gap-2">
-                    <div className="mt-0.5 p-1.5 bg-white rounded-full shadow-sm text-slate-400 border border-slate-100"><FaUserEdit size={10}/></div>
+                    <div className="mt-0.5 p-1.5 bg-white rounded-full text-slate-400 border border-slate-200"><FaUserEdit size={10}/></div>
                     <div>
                         <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Від кого</p>
-                        <p className="text-xs font-bold text-slate-700">{creatorName || 'Невідомо'}</p>
+                        <p className="text-xs font-bold text-slate-700">{creatorName}</p>
                     </div>
                 </div>
                 
                 <div className="flex items-start gap-2">
-                    <div className={`mt-0.5 p-1.5 rounded-full shadow-sm border ${assigneeName ? 'bg-indigo-100 text-indigo-600 border-indigo-200' : 'bg-white text-slate-300 border-slate-100'}`}><FaUserTie size={10}/></div>
+                    <div className={`mt-0.5 p-1.5 rounded-full border ${assigneeName ? 'bg-indigo-100 text-indigo-600 border-indigo-200' : 'bg-white text-slate-300 border-slate-200'}`}><FaUserTie size={10}/></div>
                     <div>
                         <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Для кого</p>
                         <p className={`text-xs font-bold ${assigneeName ? 'text-indigo-700' : 'text-slate-400 italic'}`}>{assigneeName || 'Не призначено'}</p>
                     </div>
                 </div>
 
-                {/* --- ДЕСКТОПНІ КНОПКИ --- */}
                 <div className="hidden md:flex items-center justify-end gap-2 mt-auto pt-2">
                     {task.status !== 'виконано' && canComplete && (
-                        <button onClick={() => onUpdateStatus(task.custom_id, 'виконано')} className="p-2 text-emerald-600 hover:bg-emerald-100 rounded-lg transition-colors border border-transparent hover:border-emerald-200" title="Виконано"><FaCheck /></button>
+                        <button onClick={() => onUpdateStatus(task.custom_id, 'виконано')} className="p-2 text-emerald-600 hover:bg-emerald-100 rounded-lg border border-transparent hover:border-emerald-200" title="Виконано"><FaCheck /></button>
                     )}
                     {canEdit && (
-                        <button onClick={() => onEdit(task)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors border border-transparent hover:border-blue-200" title="Редагувати"><FaEdit /></button>
+                        <button onClick={() => onEdit(task)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg border border-transparent hover:border-blue-200" title="Редагувати"><FaEdit /></button>
                     )}
                     {canDelete && (
-                        <button onClick={() => onDelete(task.custom_id)} className="p-2 text-red-600 hover:bg-red-100 rounded-lg transition-colors border border-transparent hover:border-red-200" title="Видалити"><FaTrash /></button>
+                        <button onClick={() => onDelete(task.custom_id)} className="p-2 text-red-600 hover:bg-red-100 rounded-lg border border-transparent hover:border-red-200" title="Видалити"><FaTrash /></button>
                     )}
                 </div>
             </div>
-        </motion.div>
+        </div>
     );
 };
 
@@ -211,31 +202,29 @@ const InstallationSelector = ({ installations, selectedId, onChange }) => {
     
     return (
         <div className="relative">
-            <button type="button" onClick={() => setIsOpen(!isOpen)} className="w-full border border-slate-300 rounded-xl p-3 text-left bg-white flex justify-between items-center text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+            <button type="button" onClick={() => setIsOpen(!isOpen)} className="w-full border border-slate-300 rounded-xl p-3 text-left bg-white flex justify-between items-center text-sm outline-none">
                 <span className={!selectedId ? "text-slate-500" : ""}>{selectedInstallationName}</span>
-                <FaChevronDown className={`transition-transform text-slate-400 ${isOpen ? 'rotate-180' : ''}`} />
+                <FaChevronDown className={`text-slate-400 ${isOpen ? 'rotate-180' : ''}`} />
             </button>
-            <AnimatePresence>
-                {isOpen && (
-                    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-y-auto">
-                        <div className="p-2 sticky top-0 bg-white border-b border-slate-100">
-                            <div className="relative">
-                                <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                                <input type="text" placeholder="Пошук..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" autoFocus />
-                            </div>
+            {isOpen && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+                    <div className="p-2 sticky top-0 bg-white border-b border-slate-100">
+                        <div className="relative">
+                            <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input type="text" placeholder="Пошук..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm outline-none" autoFocus />
                         </div>
-                        <ul>
-                            <li onClick={() => { onChange(''); setIsOpen(false); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-sm text-slate-500 italic">Не вибрано</li>
-                            {filteredInstallations.map(inst => (
-                                <li key={inst.id} onClick={() => { onChange(inst.id); setIsOpen(false); }} className="px-4 py-2 hover:bg-indigo-50 cursor-pointer text-sm border-b border-slate-50 last:border-0">
-                                    {inst.name} <span className="text-slate-400 text-xs">(#{inst.custom_id})</span>
-                                </li>
-                            ))}
-                            {filteredInstallations.length === 0 && <li className="px-4 py-3 text-sm text-slate-400 text-center">Нічого не знайдено</li>}
-                        </ul>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    </div>
+                    <ul>
+                        <li onClick={() => { onChange(''); setIsOpen(false); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-sm text-slate-500 italic">Не вибрано</li>
+                        {filteredInstallations.map(inst => (
+                            <li key={inst.id} onClick={() => { onChange(inst.id); setIsOpen(false); }} className="px-4 py-2 hover:bg-indigo-50 cursor-pointer text-sm border-b border-slate-50 last:border-0">
+                                {inst.name} <span className="text-slate-400 text-xs">(#{inst.custom_id})</span>
+                            </li>
+                        ))}
+                        {filteredInstallations.length === 0 && <li className="px-4 py-3 text-sm text-slate-400 text-center">Нічого не знайдено</li>}
+                    </ul>
+                </div>
+            )}
         </div>
     ); 
 };
@@ -255,31 +244,29 @@ const EmployeeSelector = ({ employees, selectedCustomId, onChange }) => {
 
     return (
         <div className="relative">
-            <button type="button" onClick={() => setIsOpen(!isOpen)} className="w-full border border-slate-300 rounded-xl p-3 text-left bg-white flex justify-between items-center text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+            <button type="button" onClick={() => setIsOpen(!isOpen)} className="w-full border border-slate-300 rounded-xl p-3 text-left bg-white flex justify-between items-center text-sm outline-none">
                 <span className={!selectedCustomId ? "text-slate-500" : ""}>{selectedEmployeeName}</span>
-                <FaChevronDown className={`transition-transform text-slate-400 ${isOpen ? 'rotate-180' : ''}`} />
+                <FaChevronDown className={`text-slate-400 ${isOpen ? 'rotate-180' : ''}`} />
             </button>
-            <AnimatePresence>
-                {isOpen && (
-                    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-y-auto">
-                        <div className="p-2 sticky top-0 bg-white border-b border-slate-100">
-                            <div className="relative">
-                                <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                                <input type="text" placeholder="Ім'я або ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" autoFocus />
-                            </div>
+            {isOpen && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+                    <div className="p-2 sticky top-0 bg-white border-b border-slate-100">
+                        <div className="relative">
+                            <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input type="text" placeholder="Ім'я або ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm outline-none" autoFocus />
                         </div>
-                        <ul>
-                            <li onClick={() => { onChange(''); setIsOpen(false); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-sm text-slate-500 italic">Не призначено</li>
-                            {filteredEmployees.map(emp => (
-                                <li key={emp.id} onClick={() => { onChange(emp.custom_id); setIsOpen(false); }} className="px-4 py-2 hover:bg-indigo-50 cursor-pointer text-sm border-b border-slate-50 last:border-0">
-                                    {emp.name} <span className="text-slate-400 text-xs">(ID: {emp.custom_id})</span>
-                                </li>
-                            ))}
-                            {filteredEmployees.length === 0 && <li className="px-4 py-3 text-sm text-slate-400 text-center">Нічого не знайдено</li>}
-                        </ul>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    </div>
+                    <ul>
+                        <li onClick={() => { onChange(''); setIsOpen(false); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-sm text-slate-500 italic">Не призначено</li>
+                        {filteredEmployees.map(emp => (
+                            <li key={emp.id} onClick={() => { onChange(emp.custom_id); setIsOpen(false); }} className="px-4 py-2 hover:bg-indigo-50 cursor-pointer text-sm border-b border-slate-50 last:border-0">
+                                {emp.name} <span className="text-slate-400 text-xs">(ID: {emp.custom_id})</span>
+                            </li>
+                        ))}
+                        {filteredEmployees.length === 0 && <li className="px-4 py-3 text-sm text-slate-400 text-center">Нічого не знайдено</li>}
+                    </ul>
+                </div>
+            )}
         </div>
     );
 };
@@ -311,20 +298,76 @@ const TaskModal = ({ isOpen, onClose, onSubmit, task, installations, employees, 
 
   const handleSubmit = (e) => { e.preventDefault(); if (formData.task_text.trim()) { onSubmit(formData); } };
   
-  return (<AnimatePresence>{isOpen && (<motion.div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 z-50 overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}><motion.div className="bg-white rounded-2xl p-6 sm:p-8 w-full max-w-xl shadow-2xl relative my-8" initial={{ scale: 0.95, y: 20, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.95, y: 20, opacity: 0 }} onClick={e => e.stopPropagation()}><div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold text-slate-800">{task ? 'Редагувати задачу' : 'Створити задачу'}</h2><button onClick={onClose} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><FaTimes /></button></div><form onSubmit={handleSubmit} className="space-y-5">
-      
-      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Опис задачі <span className="text-red-500">*</span></label><textarea name="task_text" value={formData.task_text} onChange={handleChange} rows="4" required className="w-full border border-slate-300 rounded-xl p-3 focus:ring-2 focus:ring-indigo-500 outline-none resize-none" placeholder="Що треба зробити?"/></div>
-      
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-          <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Прив'язати до об'єкта</label><InstallationSelector installations={installations} selectedId={formData.installation_id} onChange={handleInstallationChange}/></div>
-          <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Виконавець</label><EmployeeSelector employees={employees} selectedCustomId={formData.assigned_to} onChange={handleAssigneeChange} /></div>
-      </div>
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div 
+            className="fixed inset-0 bg-slate-900/60 flex items-end sm:items-center justify-center sm:p-4 z-50" 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
+            onClick={onClose}
+        >
+          <motion.div 
+            className="bg-white w-full max-w-xl sm:rounded-xl rounded-t-xl flex flex-col max-h-[90vh] sm:max-h-[85vh]" 
+            initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 20, opacity: 0 }} transition={{ duration: 0.15 }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center p-4 sm:p-5 border-b border-slate-100 shrink-0">
+                <h2 className="text-xl font-bold text-slate-800">{task ? 'Редагувати задачу' : 'Створити задачу'}</h2>
+                <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 bg-slate-50 rounded-full"><FaTimes size={16} /></button>
+            </div>
+            
+            <div className="p-4 sm:p-5 overflow-y-auto shrink">
+                <form id="task-form" onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Опис задачі <span className="text-red-500">*</span></label>
+                        <textarea name="task_text" value={formData.task_text} onChange={handleChange} rows="4" required className="w-full border border-slate-300 rounded-xl p-3 outline-none resize-none" placeholder="Що саме потрібно зробити?"/>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Об'єкт</label>
+                            <InstallationSelector installations={installations} selectedId={formData.installation_id} onChange={handleInstallationChange}/>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Виконавець</label>
+                            <EmployeeSelector employees={employees} selectedCustomId={formData.assigned_to} onChange={handleAssigneeChange} />
+                        </div>
+                    </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5"><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Дедлайн</label><input type="date" name="due_date" value={formData.due_date} onChange={handleChange} className="w-full border border-slate-300 rounded-xl p-3 focus:ring-2 focus:ring-indigo-500 outline-none" /></div><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Статус</label><select name="status" value={formData.status} onChange={handleChange} className="w-full border border-slate-300 rounded-xl p-3 focus:ring-2 focus:ring-indigo-500 bg-white outline-none"><option value="нове">Нове</option><option value="в процесі">В процесі</option><option value="виконано">Виконано</option>{task && <option value="скасовано">Скасовано</option>}</select></div></div><div className="flex justify-end gap-3 pt-4 border-t border-slate-100 mt-4"><button type="button" onClick={onClose} className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-all">Скасувати</button><button type="submit" disabled={submitting} className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all shadow-lg active:scale-95 disabled:opacity-60">{submitting ? 'Збереження...' : (task ? 'Оновити' : 'Створити')}</button></div></form></motion.div></motion.div>)}</AnimatePresence>);
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Дедлайн</label>
+                            <input type="date" name="due_date" value={formData.due_date} onChange={handleChange} className="w-full border border-slate-300 rounded-xl p-3 outline-none" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Статус</label>
+                            <select name="status" value={formData.status} onChange={handleChange} className="w-full border border-slate-300 rounded-xl p-3 outline-none bg-white">
+                                <option value="нове">Нове</option>
+                                <option value="в процесі">В процесі</option>
+                                <option value="виконано">Виконано</option>
+                                {task && <option value="скасовано">Скасовано</option>}
+                            </select>
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            <div className="p-4 sm:p-5 border-t border-slate-100 flex flex-col-reverse sm:flex-row justify-end gap-3 shrink-0 bg-slate-50 sm:bg-white sm:rounded-b-xl">
+                <button type="button" onClick={onClose} className="w-full sm:w-auto px-5 py-2.5 bg-white sm:bg-slate-100 border border-slate-200 sm:border-transparent text-slate-700 rounded-xl font-bold">Скасувати</button>
+                <button type="submit" form="task-form" disabled={submitting} className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold disabled:opacity-60">
+                    {submitting ? 'Збереження...' : (task ? 'Оновити' : 'Створити')}
+                </button>
+            </div>
+
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 };
 
-const Notification = ({ message, type, onClose }) => { const isError = type === 'error'; return (<motion.div layout initial={{ opacity: 0, y: 50, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.9 }} className={`fixed top-20 right-5 z-[100] flex items-center p-4 rounded-xl shadow-xl text-white ${isError ? 'bg-red-500' : 'bg-emerald-500'}`}><div className="text-xl">{isError ? <FaExclamationTriangle /> : <FaCheck />}</div><p className="ml-3 font-bold text-sm">{message}</p><button onClick={onClose} className="ml-4 p-1 rounded-full hover:bg-white/20"><FaTimes /></button></motion.div>); };
-const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => { return (<AnimatePresence>{isOpen && (<motion.div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[90]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}><motion.div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl relative" initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} onClick={e => e.stopPropagation()}><div className="flex items-start gap-4"><div className="flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-full bg-red-100 text-red-600"><FaExclamationTriangle /></div><div><h3 className="text-lg font-bold text-slate-800">{title}</h3><p className="text-sm text-slate-500 mt-1">{message}</p></div></div><div className="mt-6 flex flex-row-reverse gap-3"><button onClick={onConfirm} type="button" className="w-full inline-flex justify-center rounded-xl px-4 py-2 bg-red-600 text-sm font-bold text-white hover:bg-red-700 shadow-lg">Видалити</button><button onClick={onClose} type="button" className="w-full inline-flex justify-center rounded-xl border border-slate-200 px-4 py-2 bg-white text-sm font-bold text-slate-700 hover:bg-slate-50">Скасувати</button></div></motion.div></motion.div>)}</AnimatePresence>); };
+const Notification = ({ message, type, onClose }) => { const isError = type === 'error'; return (<motion.div initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} transition={{ duration: 0.15 }} className={`fixed top-20 right-5 z-[100] flex items-center p-4 rounded-xl shadow-lg text-white ${isError ? 'bg-red-500' : 'bg-emerald-500'}`}><div className="text-xl">{isError ? <FaExclamationTriangle /> : <FaCheck />}</div><p className="ml-3 font-medium text-sm">{message}</p><button onClick={onClose} className="ml-4 p-1 rounded-full hover:bg-white/20"><FaTimes /></button></motion.div>); };
+const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => { return (<AnimatePresence>{isOpen && (<motion.div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-[90]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} onClick={onClose}><motion.div className="bg-white rounded-xl p-6 w-full max-w-sm" initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.15 }} onClick={e => e.stopPropagation()}><div className="flex items-start gap-4"><div className="flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-full bg-red-100 text-red-600"><FaExclamationTriangle size={18}/></div><div><h3 className="text-lg font-bold text-slate-800">{title}</h3><p className="text-sm text-slate-500 mt-1">{message}</p></div></div><div className="mt-6 flex flex-col sm:flex-row-reverse gap-3"><button onClick={onConfirm} type="button" className="w-full inline-flex justify-center rounded-xl px-4 py-2 bg-red-600 text-sm font-bold text-white">Видалити</button><button onClick={onClose} type="button" className="w-full inline-flex justify-center rounded-xl border border-slate-200 px-4 py-2 bg-white text-sm font-bold text-slate-700">Скасувати</button></div></motion.div></motion.div>)}</AnimatePresence>); };
 
 // --- ГОЛОВНИЙ КОМПОНЕНТ ---
 
@@ -340,7 +383,6 @@ export default function MicrotasksPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   
-  // 1. ЗМІНЕНО ДЕФОЛТНИЙ ФІЛЬТР НА 'нове'
   const [statusFilter, setStatusFilter] = useState('нове');
   const [roleFilter, setRoleFilter] = useState('all');
   
@@ -433,6 +475,16 @@ export default function MicrotasksPage() {
   const handleFormSubmit = async (formData) => {
     setSubmitting(true);
     try {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      
+      if (authError || !authData?.user?.email) {
+          showNotification('Помилка: Ваша сесія застаріла. Будь ласка, оновіть сторінку (F5)!', 'error');
+          setSubmitting(false);
+          return; 
+      }
+
+      const freshEmail = authData.user.email; 
+
       let result;
       const taskData = { 
         task_text: formData.task_text, 
@@ -442,7 +494,6 @@ export default function MicrotasksPage() {
         assigned_to: formData.assigned_to || null 
       };
 
-      // Якщо при редагуванні або створенні одразу ставимо статус "Виконано", записуємо дату
       if (formData.status === 'виконано') {
           taskData.data_complete = new Date().toISOString();
       }
@@ -450,7 +501,7 @@ export default function MicrotasksPage() {
       if (editingTask) {
         result = await supabase.from('microtasks').update(taskData).eq('custom_id', editingTask.custom_id).select('*, installations(id, name, custom_id)').single();
       } else {
-        if (myEmail) { taskData.creator_email = myEmail; }
+        taskData.creator_email = freshEmail; 
         result = await supabase.from('microtasks').insert(taskData).select('*, installations(id, name, custom_id)').single();
       }
 
@@ -460,12 +511,6 @@ export default function MicrotasksPage() {
       setTasks(prev => editingTask ? prev.map(t => t.custom_id === editingTask.custom_id ? updatedTask : t) : [updatedTask, ...prev]);
       closeModal();
       showNotification(editingTask ? 'Задачу успішно оновлено!' : 'Задачу успішно створено!');
-      
-      // Якщо це нове завдання, скидаємо фільтр на всі, щоб побачити його (опціонально, але тут залишаю як було)
-      if (!editingTask) { 
-        // setStatusFilter('всі'); // Можна розкоментувати, якщо хочеш перекидати на "Всі" після створення
-        // setRoleFilter('all'); 
-      }
 
     } catch (error) { 
       showNotification(`Помилка: ${error.message}`, 'error');
@@ -498,15 +543,9 @@ export default function MicrotasksPage() {
 
   const handleUpdateStatus = async (taskCustomId, newStatus) => {
     try {
-      // 3. ДОДАНО ЛОГІКУ: Якщо статус "Виконано", ставимо поточну дату. Інакше - обнуляємо (або залишаємо як є, але краще обнулити, якщо передумали).
       const updates = { status: newStatus };
-      
-      if (newStatus === 'виконано') {
-          updates.data_complete = new Date().toISOString();
-      } else if (newStatus === 'нове' || newStatus === 'в процесі') {
-          // Якщо повертаємо в роботу - прибираємо дату виконання
-          updates.data_complete = null;
-      }
+      if (newStatus === 'виконано') updates.data_complete = new Date().toISOString();
+      else if (newStatus === 'нове' || newStatus === 'в процесі') updates.data_complete = null;
 
       const { data, error } = await supabase.from('microtasks').update(updates).eq('custom_id', taskCustomId).select('*, installations(id, name, custom_id)').single();
       if (error) throw error;
@@ -535,8 +574,24 @@ export default function MicrotasksPage() {
   const openModalForCreate = () => { setEditingTask(null); setIsModalOpen(true); };
   const closeModal = () => { setIsModalOpen(false); };
 
-  const formatDateTime = (dateString) => { if (!dateString) return 'Не вказано'; return new Date(dateString).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); };
-  const formatDate = (dateString) => { if (!dateString) return 'Не вказано'; return new Date(dateString).toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric' }); };
+  const formatDateTime = (dateString) => { 
+      if (!dateString) return 'Не вказано'; 
+      let safeString = dateString;
+      if (!safeString.includes('Z') && !safeString.match(/[+-]\d{2}:\d{2}$/)) {
+          safeString = safeString.replace(' ', 'T') + 'Z';
+      }
+      return new Date(safeString).toLocaleString('uk-UA', { 
+          timeZone: 'Europe/Kyiv', 
+          day: '2-digit', month: '2-digit', year: 'numeric', 
+          hour: '2-digit', minute: '2-digit', hour12: false 
+      }); 
+  };
+
+  const formatDate = (dateString) => { 
+      if (!dateString) return 'Не вказано'; 
+      return new Date(dateString).toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric' }); 
+  };
+  
   const isOverdue = (dueDate, status) => status !== 'виконано' && dueDate && new Date(dueDate).setHours(0,0,0,0) < new Date().setHours(0,0,0,0);
   const sortOptions = [ { value: 'created_at', label: 'За датою створення' }, { value: 'due_date', label: 'За дедлайном' }, { value: 'status', label: 'За статусом' } ];
 
@@ -551,7 +606,7 @@ export default function MicrotasksPage() {
                     <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 tracking-tight">Мікрозадачі</h1>
                     <p className="text-slate-500 text-sm mt-1">Швидкі доручення та нотатки</p>
                 </div>
-                <button onClick={openModalForCreate} className="hidden sm:flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all w-full sm:w-auto">
+                <button onClick={openModalForCreate} className="hidden sm:flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold w-full sm:w-auto">
                     <FaPlus/> <span>Нова задача</span>
                 </button>
             </div>
@@ -559,9 +614,9 @@ export default function MicrotasksPage() {
             {/* FILTERS & SEARCH */}
             <div className="flex flex-col gap-3">
                 <div className="flex bg-slate-100 p-1 rounded-xl w-full sm:w-fit">
-                    <button onClick={() => setRoleFilter('all')} className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-bold transition-all ${roleFilter === 'all' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Всі</button>
-                    <button onClick={() => setRoleFilter('created_by_me')} className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${roleFilter === 'created_by_me' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><FaUserEdit className="text-xs"/> Від мене</button>
-                    <button onClick={() => setRoleFilter('assigned_to_me')} className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${roleFilter === 'assigned_to_me' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><FaUserTie className="text-xs"/> Для мене</button>
+                    <button onClick={() => setRoleFilter('all')} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-bold ${roleFilter === 'all' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}>Всі задачі</button>
+                    <button onClick={() => setRoleFilter('created_by_me')} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 ${roleFilter === 'created_by_me' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}><FaUserEdit className="text-sm"/> Від мене</button>
+                    <button onClick={() => setRoleFilter('assigned_to_me')} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 ${roleFilter === 'assigned_to_me' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}><FaUserTie className="text-sm"/> Для мене</button>
                 </div>
 
                 <FilterCards tasks={tasks} filter={statusFilter} setFilter={setStatusFilter} />
@@ -569,16 +624,16 @@ export default function MicrotasksPage() {
                 <div className="flex flex-col sm:flex-row gap-3">
                     <div className="relative flex-grow">
                         <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
-                        <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Пошук..." className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 transition shadow-sm text-sm outline-none" />
+                        <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Пошук..." className="w-full pl-11 pr-4 py-3 bg-white border border-slate-300 rounded-xl text-sm outline-none" />
                     </div>
                     <div className="flex gap-2">
                         <div className="relative flex-grow sm:flex-grow-0">
-                            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="w-full sm:w-auto pl-4 pr-8 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm appearance-none font-bold text-slate-700">
+                            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="w-full sm:w-auto pl-4 pr-9 py-3 bg-white border border-slate-300 rounded-xl outline-none text-sm appearance-none font-bold text-slate-700">
                                 {sortOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                             </select>
-                            <FaChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={12}/>
+                            <FaChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={12}/>
                         </div>
-                        <button onClick={() => setSortOrder(p => (p === 'asc' ? 'desc' : 'asc'))} className="p-3 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition shadow-sm">
+                        <button onClick={() => setSortOrder(p => (p === 'asc' ? 'desc' : 'asc'))} className="p-3 bg-white border border-slate-300 rounded-xl">
                             {sortOrder === 'asc' ? <FaSortAmountUp className="text-slate-600"/> : <FaSortAmountDown className="text-slate-600"/>}
                         </button>
                     </div>
@@ -590,14 +645,12 @@ export default function MicrotasksPage() {
         <div className="flex-1">
             {loading ? <LoadingScreen /> : 
              filteredTasks.length === 0 ? (
-                <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-300">
-                    <FaTasks className="text-slate-300 text-5xl mx-auto mb-4" />
-                    <p className="text-slate-500 font-bold">Задач не знайдено</p>
-                    {roleFilter !== 'all' && <p className="text-slate-400 text-xs mt-1">Змініть фільтр ролей</p>}
+                <div className="text-center py-16 bg-white rounded-xl border border-dashed border-slate-300">
+                    <FaTasks className="text-slate-300 text-4xl mx-auto mb-3" />
+                    <p className="text-slate-600 font-bold">Задач не знайдено</p>
                 </div>
              ) : (
-              <div className="space-y-3">
-                <AnimatePresence>
+              <div>
                   {filteredTasks.map(task => {
                     const isCreator = task.creator_email === myEmail;
                     const isAssignee = task.assigned_to === myCustomId;
@@ -621,13 +674,13 @@ export default function MicrotasksPage() {
                         />
                     );
                   })}
-                </AnimatePresence>
               </div>
             )}
         </div>
 
+        {/* Кнопка на мобільному телефоні */}
         <div className="sm:hidden fixed bottom-6 right-6 z-40">
-            <button onClick={openModalForCreate} className="w-14 h-14 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full flex items-center justify-center shadow-2xl shadow-indigo-400 active:scale-90 transition-transform">
+            <button onClick={openModalForCreate} className="w-14 h-14 bg-indigo-600 text-white rounded-full flex items-center justify-center shadow-lg">
                 <FaPlus size={24} />
             </button>
         </div>

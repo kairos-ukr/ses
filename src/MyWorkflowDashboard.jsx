@@ -4,7 +4,6 @@ import {
   FaSearch,
   FaSyncAlt,
   FaTasks,
-  FaClipboardList,
   FaUserCheck,
   FaChevronRight,
   FaTimes,
@@ -16,16 +15,15 @@ import {
   FaPlus,
   FaTrash,
   FaFileAlt,
-  FaImage,
   FaArrowRight,
   FaUserTie,
   FaDownload,
+  FaClipboardList
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
 import Layout from "./Layout";
 
-/** Якщо інший endpoint для upload — зміни тут */
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 
 /* =====================================================================================
@@ -33,7 +31,6 @@ const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.d
  * ===================================================================================== */
 
 const STAGE_META = {
-  // Групи
   tech_review: "Проведення замірів",
   project: "Проект",
   proposal: "КП",
@@ -42,33 +39,24 @@ const STAGE_META = {
   installation: "Монтаж",
   grid_connection: "Мережа",
   monitoring_setup: "Запуск",
-
-  // Детальні етапи
   project_design: "Розробка 3D візуалізації (Завантаження)",
   project_approval: "Вибір та затвердження варіанту",
-  tech_project: "Технічний проект", // <-- НОВИЙ ЕТАП
+  tech_project: "Технічний проект", 
   commercial_proposal: "Комерційна пропозиція",
   advance_payment: "Авансовий платіж",
-
-  equipment: "Закупівля обладнання",
-  complectation: "Комплектація матеріалів",
-  comp_protection: "Комплектація ел. захисту",
-
   inst_structure: "Монтаж конструкції",
   inst_panels: "Встановлення панелей",
   inst_cabling: "Прокладання траси DC",
   inst_grounding: "Заземлення",
   inst_inverter: "Підключення інвертора",
-
-  grid_connection: "Заведення потужності",
-  monitoring_setup: "Запуск станції",
+  comp_protection: "Комплектація ел. захисту",
 };
 
 const STAGE_ORDER = [
   "tech_review",
   "project_design",
   "project_approval",
-  "tech_project", // <-- Додано в порядок
+  "tech_project",
   "commercial_proposal",
   "advance_payment",
   "equipment",
@@ -83,7 +71,6 @@ const STAGE_ORDER = [
   "monitoring_setup",
 ];
 
-// Етапи, де дозволено завантаження файлів
 const STAGES_WITH_UPLOADS = new Set([
   "commercial_proposal",
   "tech_project",
@@ -93,24 +80,19 @@ const STAGES_WITH_UPLOADS = new Set([
 
 const STAGE_TO_GROUP = {
   tech_review: "tech_review",
-
   project: "project",
   project_design: "project",
   project_approval: "project_selector",
-  tech_project: "tech_project_group", // Спеціальна група для налаштування статусів
-
+  tech_project: "tech_project_group",
   proposal: "proposal",
   commercial_proposal: "proposal",
-
   equipment: "equipment",
-
   installation: "installation",
   inst_structure: "installation",
   inst_panels: "installation",
   inst_cabling: "installation",
   inst_grounding: "installation",
   inst_inverter: "installation",
-
   complectation: "default",
   comp_protection: "default",
   grid_connection: "default",
@@ -124,7 +106,6 @@ const STATUS_CONFIG = {
     { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
     { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   ],
-  // Конфіг для нового етапу "Технічний проект"
   tech_project_group: [
     { key: "todo", label: "Не почато", color: "bg-slate-50 text-slate-600 border-slate-200" },
     { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
@@ -158,8 +139,9 @@ const STATUS_CONFIG = {
     { key: "selected", label: "Обрано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   ],
   installation: [
-    { key: "todo", label: "Не почато", color: "bg-slate-50 text-slate-600 border-slate-200" },
-    { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+    { key: "waiting_start", label: "Очікуємо старт", color: "bg-slate-50 text-slate-600 border-slate-200" },
+    { key: "started", label: "Розпочато", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+    { key: "completed", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
     { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   ],
 };
@@ -189,50 +171,21 @@ function normalizeStatus(status) {
   return String(status || "").trim().toLowerCase();
 }
 
-/**
- * ✅ Нормалізація custom_id працівника
- * (важливо: в БД це integer, а з UI/інпутів може прилітати string/""/undefined)
- */
 function normalizeEmployeeCustomId(val) {
   if (val === null || val === undefined || val === "") return null;
   const n = Number(val);
   return Number.isFinite(n) ? n : null;
 }
 
-/**
- * DONE_BY_GROUP — список статусів, при яких етап вважається завершеним
- */
 const DONE_BY_GROUP = {
   default: new Set(["completed", "done", "виконано", "завершено"]),
-  tech_project_group: new Set(["done", "completed", "виконано"]), // Для тех. проекту
-  project: new Set([
-    "created",
-    "approved",
-    "completed",
-    "done",
-    "project_done",
-    "project_approved",
-    "kp_done",
-    "kp_approved",
-  ]),
-  proposal: new Set([
-    "created",
-    "approved",
-    "completed",
-    "done",
-    "kp_done",
-    "kp_approved",
-  ]),
+  tech_project_group: new Set(["done", "completed", "виконано"]),
+  project: new Set(["created", "approved", "completed", "done", "project_done", "project_approved", "kp_done", "kp_approved"]),
+  proposal: new Set(["created", "approved", "completed", "done", "kp_done", "kp_approved"]),
   project_selector: new Set(["selected"]),
   equipment: new Set(["arrived", "completed", "done"]),
   installation: new Set(["completed", "done"]),
-  tech_review: new Set([
-    "done_on_site",
-    "completed",
-    "done",
-    "виконано",
-    "завершено",
-  ]),
+  tech_review: new Set(["done_on_site", "completed", "done", "виконано", "завершено"]),
 };
 
 function isCompletedForStage(stageKey, status) {
@@ -280,21 +233,14 @@ function getStatusOptionsByStage(stageKey, currentStatus) {
 function formatDateTime(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleString("uk-UA", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
   });
 }
 
 function formatUkShort(iso) {
   if (!iso) return "";
   return new Date(iso).toLocaleString("uk-UA", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
   });
 }
 
@@ -514,18 +460,17 @@ function PhotoViewerModal({ isOpen, onClose, fileIds, startIndex = 0 }) {
               e.currentTarget.style.display = "none";
             }}
           />
-          {/* Фолбек, якщо це не картинка, а PDF/Doc */}
           <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 -z-10">
-             <FaFileAlt size={48} className="mb-2 opacity-50"/>
-             <span className="text-sm">Попередній перегляд недоступний для цього типу файлу.</span>
-             <a 
-               href={driveViewUrl(currentId)} 
-               target="_blank" 
-               rel="noreferrer"
-               className="mt-4 px-4 py-2 bg-white rounded-lg border shadow-sm font-bold text-sm text-indigo-600 hover:text-indigo-800"
-             >
-               Відкрити в новому вікні
-             </a>
+            <FaFileAlt size={48} className="mb-2 opacity-50" />
+            <span className="text-sm">Попередній перегляд недоступний для цього типу файлу.</span>
+            <a
+              href={driveViewUrl(currentId)}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-4 px-4 py-2 bg-white rounded-lg border shadow-sm font-bold text-sm text-indigo-600 hover:text-indigo-800"
+            >
+              Відкрити в новому вікні
+            </a>
           </div>
         </div>
       </div>
@@ -604,21 +549,21 @@ function HistoryTimeline({ logs, stageKey, getEmployeeName }) {
 
                 {hasRespInfo && (
                   <div className="mb-2 text-xs text-slate-600 bg-indigo-50/50 rounded-lg px-2 py-1.5 border border-indigo-100 flex items-center gap-2">
-                     <div className="p-1 bg-indigo-100 rounded text-indigo-600">
-                        <FaUserTie /> 
-                     </div>
-                     <div className="flex-1">
-                        <span className="font-semibold text-slate-500 mr-1">Призначено:</span>
-                        {respChanged ? (
-                          <>
-                            <span className="line-through opacity-60 mr-1">{getEmployeeName(oldResp)}</span>
-                            <FaArrowRight className="inline text-slate-300 text-[10px] mx-1" />
-                            <span className="font-bold text-slate-800">{getEmployeeName(newResp)}</span>
-                          </>
-                        ) : (
-                          <span className="font-bold text-slate-800">{getEmployeeName(newResp ?? oldResp)}</span>
-                        )}
-                     </div>
+                    <div className="p-1 bg-indigo-100 rounded text-indigo-600">
+                      <FaUserTie />
+                    </div>
+                    <div className="flex-1">
+                      <span className="font-semibold text-slate-500 mr-1">Призначено:</span>
+                      {respChanged ? (
+                        <>
+                          <span className="line-through opacity-60 mr-1">{getEmployeeName(oldResp)}</span>
+                          <FaArrowRight className="inline text-slate-300 text-[10px] mx-1" />
+                          <span className="font-bold text-slate-800">{getEmployeeName(newResp)}</span>
+                        </>
+                      ) : (
+                        <span className="font-bold text-slate-800">{getEmployeeName(newResp ?? oldResp)}</span>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -646,7 +591,9 @@ function HistoryTimeline({ logs, stageKey, getEmployeeName }) {
                                 className="w-full h-full object-cover"
                                 onError={(e) => {
                                   e.currentTarget.style.display = "none";
-                                  e.currentTarget.parentElement.querySelector('.fallback-icon').style.display = 'flex';
+                                  e.currentTarget.parentElement
+                                    .querySelector(".fallback-icon")
+                                    .style.display = "flex";
                                 }}
                               />
                               <div className="fallback-icon w-full h-full absolute inset-0 hidden items-center justify-center text-slate-400 bg-slate-50">
@@ -734,8 +681,6 @@ function QuickStageModal({
   if (!isOpen || !item) return null;
 
   const statusOptions = getStatusOptionsByStage(item.stage_key, item.status);
-  
-  // Перевірка чи дозволено завантаження файлів для цього етапу
   const canUploadFiles = STAGES_WITH_UPLOADS.has(item.stage_key);
 
   const handleFileSelect = (e) => {
@@ -839,7 +784,6 @@ function QuickStageModal({
               />
             </div>
 
-            {/* Блок завантаження відображаємо ЛИШЕ якщо дозволено для етапу */}
             {canUploadFiles && (
               <div>
                 <div className="text-[11px] font-bold text-slate-500 uppercase mb-2">Файли / Фото</div>
@@ -987,6 +931,15 @@ export default function MyWorkflowDashboard() {
     }
   }, []);
 
+  /**
+   * ЗАВАНТАЖЕННЯ ДАНИХ ІЗ ТАБЛИЦІ WORKFLOW_EVENTS 🚀
+   * Логіка:
+   * 1. Знаходимо всі об'єкти, де цей працівник КОЛИСЬ був призначений (new_responsible = employee.id)
+   * 2. Витягуємо всю історію подій по знайдених об'єктах.
+   * 3. Йдемо по історії З КІНЦЯ. Знаходимо останній статус і останнього відповідального.
+   * Якщо при зміні статусу new_responsible = null, алгоритм автоматично шукає його в старіших логах.
+   * 4. Залишаємо лише ті завдання, де відповідальний - це ви і статус - не виконано.
+   */
   const loadData = useCallback(async () => {
     if (!employee?.custom_id) return;
 
@@ -994,30 +947,80 @@ export default function MyWorkflowDashboard() {
     setErrorText("");
 
     try {
-      const { data: stageRows, error: stageErr } = await supabase
-        .from("project_stages")
-        .select(`
-          id,
-          installation_custom_id,
-          stage_key,
-          status,
-          updated_at,
-          responsible_emp_custom_id
-        `)
-        .eq("responsible_emp_custom_id", employee.custom_id)
-        .order("updated_at", { ascending: false });
+      // Крок 1: В яких об'єктах цей працівник взагалі брав участь
+      const { data: myAssignments, error: assignErr } = await supabase
+        .from("workflow_events")
+        .select("installation_custom_id")
+        .eq("new_responsible", employee.custom_id);
 
-      if (stageErr) throw stageErr;
+      if (assignErr) throw assignErr;
 
-      // ✅ Ключ: прибираємо "завершені" по правилах конкретного етапу/групи
-      const activeRows = (stageRows || []).filter((r) => !isCompletedForStage(r.stage_key, r.status));
+      const installationIds = [...new Set((myAssignments || []).map((r) => r.installation_custom_id))];
+
+      if (installationIds.length === 0) {
+        setRows([]);
+        return;
+      }
+
+      // Крок 2: Витягуємо всю історію цих об'єктів для точного прорахунку
+      const { data: allHistory, error: historyErr } = await supabase
+        .from("workflow_events")
+        .select("id, installation_custom_id, stage_key, new_status, new_responsible, created_at")
+        .in("installation_custom_id", installationIds)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false }); // Гарантуємо, що новіші ідентифікатори завжди вище, якщо час однаковий
+
+      if (historyErr) throw historyErr;
+
+      // Крок 3: Агрегуємо реальний поточний стан
+      const latestState = new Map(); // key -> { status, responsible, updated_at, id }
+
+      for (const ev of (allHistory || [])) {
+        const key = `${ev.installation_custom_id}__${ev.stage_key}`;
+
+        if (!latestState.has(key)) {
+          // Зустріли запис вперше - це найновіший запис для цього етапу
+          latestState.set(key, {
+            status: ev.new_status || "todo",
+            responsible: ev.new_responsible, // Може бути null!
+            updated_at: ev.created_at,
+            id: ev.id,
+          });
+        } else {
+          // Якщо ми вже маємо найновіший запис, але відповідальний там був null (не передавався),
+          // шукаємо його в старіших записах і присвоюємо.
+          const state = latestState.get(key);
+          if (state.responsible === null && ev.new_responsible !== null) {
+            state.responsible = ev.new_responsible;
+          }
+        }
+      }
+
+      // Крок 4: Фільтруємо - залишаємо тільки ті етапи, де реальний відповідальний - це ви, і етап НЕ завершено
+      const activeRows = [];
+      for (const [key, state] of latestState.entries()) {
+        const [instIdStr, stageKey] = key.split("__");
+        const instId = Number(instIdStr);
+
+        if (state.responsible === employee.custom_id && !isCompletedForStage(stageKey, state.status)) {
+          activeRows.push({
+            id: state.id,
+            installation_custom_id: instId,
+            stage_key: stageKey,
+            status: state.status,
+            updated_at: state.updated_at,
+            responsible_emp_custom_id: state.responsible,
+          });
+        }
+      }
 
       if (activeRows.length === 0) {
         setRows([]);
         return;
       }
 
-      const installationIds = [...new Set(activeRows.map((r) => r.installation_custom_id))];
+      // Крок 5: Довантажуємо дані по об'єктах та клієнтах
+      const activeInstIds = [...new Set(activeRows.map((r) => r.installation_custom_id))];
 
       const { data: installationRows, error: instErr } = await supabase
         .from("installations")
@@ -1033,7 +1036,7 @@ export default function MyWorkflowDashboard() {
             phone
           )
         `)
-        .in("custom_id", installationIds);
+        .in("custom_id", activeInstIds);
 
       if (instErr) throw instErr;
 
@@ -1116,25 +1119,6 @@ export default function MyWorkflowDashboard() {
     loadData();
   }, [loadData]);
 
-  useEffect(() => {
-    if (!employee?.custom_id) return;
-
-    const channel = supabase
-      .channel(`my-workflow-active-${employee.custom_id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "project_stages" }, (payload) => {
-        const newResp = payload.new?.responsible_emp_custom_id;
-        const oldResp = payload.old?.responsible_emp_custom_id;
-        if (newResp === employee.custom_id || oldResp === employee.custom_id) {
-          loadData();
-        }
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [employee?.custom_id, loadData]);
-
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
@@ -1193,7 +1177,6 @@ export default function MyWorkflowDashboard() {
     setErrorText("");
 
     try {
-      // ✅ Нормалізуємо відповідального до integer/null
       const normalizedResponsibleId = normalizeEmployeeCustomId(payload?.assigned_to);
 
       let uploadedLinks = [];
@@ -1222,26 +1205,14 @@ export default function MyWorkflowDashboard() {
         p_comment: payload.comment || "",
         p_photos: photos,
         p_photo_file_ids: photo_file_ids,
-        // ✅ важливо: передаємо integer/null
         p_new_responsible: normalizedResponsibleId,
         p_set_as_global_stage: false,
       });
 
       if (rpcError) {
-        console.warn("RPC update_workflow_stage failed, fallback:", rpcError);
+        console.warn("RPC failed, using direct DB insert:", rpcError);
 
-        const { error: updErr } = await supabase
-          .from("project_stages")
-          .update({
-            status: payload.status,
-            responsible_emp_custom_id: normalizedResponsibleId,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("installation_custom_id", quickItem.installation_custom_id)
-          .eq("stage_key", quickItem.stage_key);
-
-        if (updErr) throw updErr;
-
+        // Якщо RPC немає, просто пишемо напряму подію
         const { error: evErr } = await supabase.from("workflow_events").insert({
           installation_custom_id: quickItem.installation_custom_id,
           stage_key: quickItem.stage_key,
@@ -1256,59 +1227,9 @@ export default function MyWorkflowDashboard() {
         });
 
         if (evErr) throw evErr;
-      } else if (rpcData && rpcData.success === false) {
-        throw new Error(rpcData.message || "Оновлення не застосоване");
       }
 
-      // ✅ ГАРАНТІЯ: навіть якщо RPC не оновив responsible_emp_custom_id — фіксуємо окремо.
-      // Не чіпаємо інші поля, лише responsible_emp_custom_id (по унікальному конфлікту).
-      if (payload?.assigned_to !== undefined) {
-        const { error: respUpsertErr } = await supabase
-          .from("project_stages")
-          .upsert(
-            {
-              installation_custom_id: quickItem.installation_custom_id,
-              stage_key: quickItem.stage_key,
-              responsible_emp_custom_id: normalizedResponsibleId,
-            },
-            { onConflict: "installation_custom_id,stage_key" }
-          );
-
-        if (respUpsertErr) throw respUpsertErr;
-      }
-
-      // ✅ Optimistic UI
-      const newStatusDone = isCompletedForStage(quickItem.stage_key, payload.status);
-      const reassignedAway =
-        normalizedResponsibleId != null && String(normalizedResponsibleId) !== String(employee.custom_id);
-
-      if (newStatusDone || reassignedAway) {
-        setRows((prev) =>
-          prev.filter(
-            (r) =>
-              !(
-                r.installation_custom_id === quickItem.installation_custom_id &&
-                r.stage_key === quickItem.stage_key
-              )
-          )
-        );
-      } else {
-        const nowIso = new Date().toISOString();
-        setRows((prev) =>
-          prev.map((r) =>
-            r.installation_custom_id === quickItem.installation_custom_id &&
-            r.stage_key === quickItem.stage_key
-              ? {
-                  ...r,
-                  status: payload.status,
-                  updated_at: nowIso,
-                  responsible_emp_custom_id: normalizedResponsibleId ?? r.responsible_emp_custom_id,
-                }
-              : r
-          )
-        );
-      }
-
+      // Оновлюємо інтерфейс і перезавантажуємо дані
       closeQuickModal();
       await loadData();
     } catch (err) {
@@ -1392,8 +1313,8 @@ export default function MyWorkflowDashboard() {
           </div>
 
           {loading ? (
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 text-slate-600">
-              Завантаження етапів...
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 text-slate-600 flex items-center gap-3">
+               <FaSpinner className="animate-spin text-indigo-500" /> Завантаження ваших завдань...
             </div>
           ) : groupedSections.length === 0 ? (
             <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center">

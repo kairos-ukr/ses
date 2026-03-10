@@ -17,6 +17,10 @@ import Admin from './AdminPanel';
 import Bulder from "./build.jsx"
 import MyWorkflowDashboard from "./MyWorkflowDashboard";
 import PlannedVisitsPage from "./PlannedVisitsPage";
+import CalculateGeneration from "./calcpdf";
+import BaseEquipment from "./EquipmentBase.jsx"
+import PartnerPage from './PartnershipPage'
+import PartnerProjectDetailsPage from './PartnerProjectDetailsPage';
 
 export default function App() {
   return (
@@ -37,7 +41,10 @@ export default function App() {
           <Route path="/project/:id" element={<ProjectDetailsPage />} />
           <Route path="/my-workflow" element={<MyWorkflowDashboard />} />
           <Route path="/plans" element={<PlannedVisitsPage />} />
-          
+          <Route path="/calc" element={<CalculateGeneration />} />
+          <Route path="/base_equip" element={<BaseEquipment />} />
+          <Route path="/partners" element={<PartnerPage />} />
+          <Route path="/partner-project/:id" element={<PartnerProjectDetailsPage />} />
           {/* Пізніше ми захистимо цей маршрут, щоб сюди не міг зайти монтажник */}
           <Route path="/admin" element={<Admin />} />
           <Route path="/bild" element={<Bulder />} />

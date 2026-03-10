@@ -7,24 +7,17 @@ import {
   FaClock, FaCheckCircle, FaExclamationTriangle, FaPause, FaTimes,
   FaChevronLeft, FaChevronRight, FaCheck, FaInfoCircle, FaTrash, FaHardHat,
   FaUserFriends, FaUserTie,
-  FaUserEdit, FaRulerCombined, FaFileContract, FaFileSignature, FaWallet,
-  FaShoppingCart, FaBoxOpen, FaShieldAlt, FaPlay, FaFlagCheckered, FaCalculator, FaCamera, FaPlug, FaHourglassHalf,
-  FaRegEye, FaWifi,
-  // Додані нові іконки для синхронізації з PWT.jsx
-  FaMapMarkerAlt, FaDraftingCompass, FaFileInvoiceDollar, FaTruckLoading, FaSolarPanel, FaBroadcastTower
+  FaUserEdit, FaRegEye,
+  FaMapMarkerAlt, FaDraftingCompass, FaFileInvoiceDollar, FaTruckLoading, FaSolarPanel, FaBroadcastTower, FaBoxOpen, FaFileSignature
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
-// NOTE: Кнопки "Документи" та "Обладнання" прибрані з картки об'єкта (за вимогою).
 import { useAuth } from "./AuthProvider"; 
 
 // --- CONSTANTS ---
 const PROJECTS_PER_PAGE = 6;
 const ALLOWED_COMPANIES = ['Кайрос', 'Розумне збереження енергії'];
 
-// ОНОВЛЕНИЙ СПИСОК ЕТАПІВ (Синхронізовано з PWT.jsx)
-// value - це ключ, який ми хочемо бачити/записувати в ідеалі.
-// Старі ключі (commercial_proposal) будуть мапитись сюди через getStageConfig.
 const WORKFLOW_STAGES = [
     { value: 'tech_review', label: 'Заміри', icon: FaMapMarkerAlt, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
     { value: 'project', label: 'Проект', icon: FaDraftingCompass, color: 'bg-orange-50 text-orange-700 border-orange-200' },
@@ -36,11 +29,10 @@ const WORKFLOW_STAGES = [
     { value: 'monitoring_setup', label: 'Запуск', icon: FaBroadcastTower, color: 'bg-cyan-50 text-cyan-800 border-cyan-300' },
 ];
 
-// Словник для підтримки старих ключів з бази даних (Legacy Mapping)
 const STAGE_ALIASES = {
     'project_design': 'project',
     'commercial_proposal': 'proposal',
-    'advance_payment': 'proposal', // Аванс тепер частина КП
+    'advance_payment': 'proposal', 
     'tech_measurements': 'tech_review',
     'mon_launch_station': 'monitoring_setup'
 };
@@ -108,7 +100,6 @@ export default function ProjectsPage() {
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
     const debouncedSearchTerm = useDebounce(searchTerm, 400);
-    // Документи/Обладнання прибрані з картки
     
     const [statusFilter, setStatusFilter] = useState("active"); 
     const [paymentStatusFilter, setPaymentStatusFilter] = useState("all");
@@ -121,7 +112,6 @@ export default function ProjectsPage() {
     const [showProjectForm, setShowProjectForm] = useState(false);
     const [editingProject, setEditingProject] = useState(null);
     
-    // --- inline add client ---
     const [showInlineClientForm, setShowInlineClientForm] = useState(false);
     const [inlineClient, setInlineClient] = useState({ name: '', company_name: '', phone: '' });
 
@@ -137,11 +127,9 @@ export default function ProjectsPage() {
     const initialFormData = {
         name: '', working_company: '', bank: '', client_id: '', gps_link: '',
         mount_type: '', station_type: '', capacity_kw: '',
-        responsible_emp_id: '', start_date: '', end_date: '',
+        responsible_emp_id: '',
         total_cost: '', payment_status: 'pending', paid_amount: '',
-        // Статус/етап залишаємо як дефолтні значення (без ручного вибору при створенні)
         status: 'planning', workflow_stage: 'tech_review',
-        // К-сть фаз (installations.quant_phase)
         quant_phase: '',
         notes: '', creator_email: ''
     };
@@ -171,13 +159,9 @@ export default function ProjectsPage() {
     };
 
     const getStageConfig = (val) => {
-        // 1. Нормалізуємо ключ (перетворюємо старий ключ на новий, якщо треба)
         const normalizedKey = STAGE_ALIASES[val] || val;
-        
-        // 2. Шукаємо в конфігурації
         const config = WORKFLOW_STAGES.find(s => s.value === normalizedKey);
         
-        // 3. Повертаємо конфіг або заглушку
         return config || { 
             label: val || 'Не визначено', 
             color: 'bg-gray-50 text-gray-500 border border-gray-200', 
@@ -236,7 +220,10 @@ export default function ProjectsPage() {
             const from = (currentPage - 1) * PROJECTS_PER_PAGE;
             const to = from + PROJECTS_PER_PAGE - 1;
 
-            let query = supabase.from('installations').select(`*, client:clients(*), responsible_employee:employees(*)`, { count: 'exact' });
+            // Фільтруємо: відображаємо ТІЛЬКИ НЕ-підряди (is_subcontract = false або null)
+            let query = supabase.from('installations')
+                .select(`*, client:clients(*), responsible_employee:employees(*)`, { count: 'exact' })
+                .or('is_subcontract.eq.false,is_subcontract.is.null');
 
             if (onlyMyProjects && myEmployeeId) {
                 query = query.eq('responsible_emp_id', myEmployeeId);
@@ -323,12 +310,12 @@ export default function ProjectsPage() {
         setFormErrors({});
         setSubmitting(true);
         try {
-            // 1) Якщо клієнта не обрано, але заповнили швидке створення — створюємо клієнта тут же.
             let clientIdToUse = formData.client_id;
             if (!clientIdToUse) {
                 const name = (inlineClient.name || '').trim();
                 if (!name) {
                     setFormErrors({ client_id: 'Оберіть клієнта або додайте нового через "+"' });
+                    setSubmitting(false);
                     return;
                 }
 
@@ -347,7 +334,6 @@ export default function ProjectsPage() {
                 if (createErr) throw createErr;
                 clientIdToUse = created.custom_id;
 
-                // оновлюємо локальний довідник клієнтів
                 setClients(prev => {
                     const exists = prev.some(c => c.custom_id === created.custom_id);
                     return exists ? prev : [created, ...prev];
@@ -355,7 +341,6 @@ export default function ProjectsPage() {
                 setClientSearch(`${created.company_name || created.name} (ID: ${created.custom_id})`);
             }
 
-            // 2) Готуємо payload для installations
             const { client, responsible_employee, ...projectData } = formData;
             const sanitized = {
                 ...projectData,
@@ -408,8 +393,6 @@ export default function ProjectsPage() {
                 <Toast message={toast.message} type={toast.type} isVisible={toast.isVisible} onClose={hideToast} />
                 <ConfirmationModal {...confirmModal} onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })} />
                 
-                {/* Модалки "Документи" та "Обладнання" прибрані (за вимогою) */}
-
                 {/* --- HEADER --- */}
                 <div className="flex flex-col gap-4 flex-none">
                     <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
@@ -507,7 +490,6 @@ export default function ProjectsPage() {
                                 const statusInfo = getStatusInfo(project.status);
                                 const paymentInfo = getPaymentStatusInfo(project.payment_status);
                                 
-                                // ВИКОРИСТОВУЄМО ОНОВЛЕНИЙ КОНФІГ ЕТАПІВ
                                 const workflowInfo = getStageConfig(project.workflow_stage);
                                 
                                 const StatusIcon = statusInfo.icon;
@@ -724,9 +706,18 @@ export default function ProjectsPage() {
                                             <option value="Інше">Інше</option>
                                         </select>
                                     </div>
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">Тип станції</label><select value={formData.station_type || ''} onChange={(e) => handleInputChange('station_type', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white"><option value="">Виберіть...</option><option value="Мережева">Мережева</option><option value="Автономна">Автономна</option><option value="Гібридна">Гібридна</option></select></div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">Тип станції</label>
+                                        <select value={formData.station_type || ''} onChange={(e) => handleInputChange('station_type', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white">
+                                            <option value="">Виберіть...</option>
+                                            <option value="Мережева">Мережева</option>
+                                            <option value="Автономна">Автономна</option>
+                                            <option value="Гібридна">Гібридна</option>
+                                            <option value="Інвертор + АКБ">Інвертор + АКБ</option>
+                                        </select>
+                                    </div>
                                     <div><label className="block text-sm font-medium text-gray-700 mb-2">Потужність (кВт)</label><input type="number" step="0.1" min="0" value={formData.capacity_kw || ''} onChange={(e) => handleInputChange('capacity_kw', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
-                                    <div className="relative">
+                                    <div className="relative md:col-span-2">
                                         <label className="block text-sm font-medium text-gray-700 mb-2">Відповідальний</label>
                                         <input type="text" value={employeeSearch} onChange={(e) => {setEmployeeSearch(e.target.value); if(formData.responsible_emp_id) handleInputChange('responsible_emp_id', '');}} placeholder="Пошук..." className="w-full border border-gray-300 rounded-xl px-4 py-3" />
                                         {employeeSearch && filteredEmployees.length > 0 && !formData.responsible_emp_id && (
@@ -740,8 +731,6 @@ export default function ProjectsPage() {
                                             </div>
                                         )}
                                     </div>
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">Старт</label><input type="date" value={formData.start_date || ''} onChange={(e) => handleInputChange('start_date', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">Фініш</label><input type="date" value={formData.end_date || ''} onChange={(e) => handleInputChange('end_date', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
                                     <div><label className="block text-sm font-medium text-gray-700 mb-2">Вартість (USD)</label><input type="number" min="0" step="0.01" value={formData.total_cost || ''} onChange={(e) => handleInputChange('total_cost', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
                                     <div><label className="block text-sm font-medium text-gray-700 mb-2">Сплачено (USD)</label><input type="number" min="0" step="0.01" value={formData.paid_amount || ''} onChange={(e) => handleInputChange('paid_amount', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
                                     <div className="md:col-span-2"><label className="block text-sm font-medium text-gray-700 mb-2">Примітки</label><textarea rows="3" value={formData.notes || ''} onChange={(e) => handleInputChange('notes', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 resize-none"></textarea></div>
