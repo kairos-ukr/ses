@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Слайд Окупності СЕС</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: transparent; /* Щоб фон не заважав при вбудовуванні */
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Головний контейнер слайду (Суворо 595x842) */
+        .slide {
+            position: relative;
+            width: 595px;
+            height: 842px;
+            background: #F9F9F9;
+            color: #000000;
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+
+        .abs { position: absolute; letter-spacing: 0.01em; }
+
+        /* Заголовок та лінія */
+        .top-title { left: 48px; top: 32px; font-weight: 600; font-size: 20px; line-height: 24px; text-transform: uppercase; color: #151414; }
+        .line-3 { width: 410px; height: 0px; left: 99px; top: 76px; border-top: 3px solid #3A5F7D; }
+
+        /* Картки метрик (Фон) */
+        .metric-bg { width: 140px; height: 50px; background: rgba(217, 217, 217, 0.2); border: 1px solid #DAE2F2; border-radius: 10px; box-sizing: border-box; }
+        .rect-37 { left: 48px; top: 118px; }
+        .rect-39 { left: 209px; top: 118px; }
+        .rect-40 { left: 48px; top: 186px; }
+        .rect-41 { left: 209px; top: 186px; }
+
+        /* Зображення іконок */
+        .img-36 { width: 34px; height: 34px; left: 48.48px; top: 127.05px; transform: rotate(0.69deg); } 
+        .img-38 { width: 29px; height: 29px; left: 216px; top: 130px; } 
+        .img-39 { width: 33px; height: 33px; left: 58px; top: 197px; } 
+        .img-40 { width: 29px; height: 29px; left: 213px; top: 201px; } 
+
+        /* Підписи метрик */
+        .metric-label { font-weight: 400; font-size: 10px; line-height: 12px; text-align: right; }
+        .lbl-pow { left: 79px; top: 124px; width: 91px; }
+        .lbl-gen { left: 255px; top: 122px; width: 78px; }
+        .lbl-eco { left: 102px; top: 191px; width: 75px; }
+        .lbl-roi { left: 235px; top: 191px; width: 108px; }
+
+        /* Значення метрик */
+        .val-pow { left: 117px; top: 141px; font-weight: 600; font-size: 14px; white-space: nowrap; }
+        .val-gen { left: 270px; top: 136px; font-weight: 600; font-size: 12px; white-space: nowrap; text-align: right; }
+        .unit-gen { left: 295px; top: 151px; font-weight: 400; font-size: 10px; }
+        .val-eco { left: 104px; top: 211px; font-weight: 500; font-size: 14px; white-space: nowrap; }
+        .val-roi { left: 272px; top: 210px; font-weight: 600; font-size: 14px; white-space: nowrap; }
+
+        /* Блок Накопиченої Економії */
+        .frame-17 { width: 189px; height: 135px; left: 370px; top: 108px; }
+        .f17-rect-58 { width: 169px; height: 24px; left: 0px; top: 7px; background: rgba(217, 217, 217, 0.2); border: 1px solid #DAE2F2; border-radius: 5px; box-sizing: border-box; }
+        .f17-icon { width: 27px; height: 27px; left: 6px; top: 0px; }
+        .f17-lbl-main { left: 37px; top: 11px; font-weight: 400; font-size: 10px; line-height: 12px; text-align: right; white-space: nowrap; }
+        
+        .f17-lbl-yr { font-weight: 400; font-size: 10px; line-height: 12px; text-align: right; }
+        .f17-lbl-3y { left: 6px; top: 40px; }
+        .f17-lbl-7y { left: 7px; top: 67px; }
+        .f17-lbl-10y{ left: 4px; top: 92px; }
+        
+        /* Стовпці економії (Ідеально всередині) */
+        .sav-track { position: absolute; height: 16px; background: rgba(217, 217, 217, 0.2); border: 1px solid #DAE2F2; border-radius: 5px; box-sizing: border-box; }
+        .sav-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; box-sizing: border-box; }
+        .sav-val { font-weight: 600; font-size: 10px; color: #F38217; white-space: nowrap; }
+
+        .f17-note { width: 182px; left: 7px; top: 112px; font-weight: 300; font-size: 8px; line-height: 10px; }
+
+        /* Заголовки графіків та лінії */
+        .chart-title-1 { width: 258px; left: 48px; top: 283px; font-weight: 600; font-size: 14px; line-height: 17px; color: #1F1F1F; }
+        .chart-title-2 { width: 184px; left: 369px; top: 283px; font-weight: 600; font-size: 14px; line-height: 17px; color: #1F1F1F; }
+        .line-23 { width: 253px; height: 0px; left: 49px; top: 327px; border-top: 2px solid rgba(104, 104, 104, 0.52); }
+        .line-24 { width: 168px; height: 0px; left: 369px; top: 326px; border-top: 2px solid rgba(104, 104, 104, 0.52); transform: rotate(0.34deg); }
+
+        /* Місяці */
+        .month-lbl { left: 49px; font-weight: 500; font-size: 14px; line-height: 17px; color: #767171; }
+
+        /* Графік стовпців генерації (Ідеально всередині) */
+        .frame-16 { width: 225px; height: 409px; left: 97px; top: 356px; }
+        .bar-bg { height: 20px; left: 0px; background: #93C5FD; border-radius: 3px; position: absolute; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; box-sizing: border-box; min-width: 35px; }
+        .bar-val { font-weight: 500; font-size: 12px; color: #1E3A8A; }
+
+        /* Кругова діаграма */
+        .donut { width: 156px; height: 156px; left: 369px; top: 347px; }
+        .donut-val { left: 369px; top: 405px; width: 156px; text-align: center; font-weight: 600; font-size: 20px; line-height: 24px; text-transform: uppercase; }
+        .donut-lbl { left: 369px; top: 433px; width: 156px; font-weight: 400; font-size: 15px; line-height: 18px; text-align: center; color: #686868; }
+
+        /* Легенда під діаграмою */
+        .leg-bg-1 { width: 186px; height: 32px; left: 357px; top: 519px; background: rgba(217, 217, 217, 0.2); border: 1px solid #DAE2F2; border-radius: 10px; box-sizing: border-box; }
+        .leg-bg-2 { width: 186px; height: 34px; left: 357px; top: 560px; background: rgba(217, 217, 217, 0.2); border: 1px solid #DAE2F2; border-radius: 10px; box-sizing: border-box; }
+        .leg-dot-1 { width: 10px; height: 10px; left: 363px; top: 531px; background: #F38217; border-radius: 50%; }
+        .leg-dot-2 { width: 10px; height: 10px; left: 363px; top: 572px; background: rgba(147, 197, 253, 0.65); border-radius: 50%; }
+        
+        .leg-lbl { font-weight: 400; font-size: 10px; line-height: 12px; }
+        .leg-val { font-weight: 400; font-size: 10px; line-height: 12px; text-align: center; }
+
+        /* Нижній текст */
+        .footer-note { width: 192px; left: 356px; top: 609px; font-weight: 300; font-size: 10px; line-height: 120%; color: #767171; }
+    </style>
+</head>
+<body>
+
+<div class="slide" id="report">
+    <div class="abs top-title">ПОКАЗНИКИ ЕФЕКТИВНОСТІ СОНЯЧНОЇ СТАНЦІЇ</div>
+    <div class="abs line-3"></div>
+
+    <div class="abs metric-bg rect-37"></div>
+    <div class="abs metric-bg rect-39"></div>
+    <div class="abs metric-bg rect-40"></div>
+    <div class="abs metric-bg rect-41"></div>
+
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACMAAAAjCAYAAAAe2bNZAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAALzSURBVHgB7ZdfSFNRHMe/596zmUvlNnVzrhfBCJR6qdASa0FShm9CLz304FtBaT30Fhnhcy8mBvVQVEiCFNZDISGlEepTofgWmOKfxC23trmzc7p3Y9LQbfdct3zxC2P33nN+93zO93f+XWBPuyNC30xPmK1MUTgR+jUaxDp3GNf6T+QKKBgMHWdR/JhTedDfYzaGoACiX2Icc/OAowSsrcLoMDcTpyDPouMbIgFidJQiABPpyTdMwmE6FhX4uSAS94IL8X3iqgxMPtKUGJx0LCwwvySQeqdTE+ycJtXZnTqTBPkc0h1ZTN0ntRGYhqR2AmM0TOindd2RZf0qzWTBhp5fg6SspomgttZOn0xFsLi2tbRSAzurSb/bijMKDjeV0MeT4W1BDP1a+gALHZWFUXC+Q6N9wwEs+bdvjChgj7qNFJmeRZuhEnVVdPa7aGv7PALBzHGVLj1FDkvpNxukoqu3hrZcmkUwlN1NwRncbgr+bzUBUlWMWB3J2p6ZvYni9rN6evrCVE4QQ0ShWF5Jf6aV8tj9e4eQHBY8c0PZpdKe1w040jiKUEiFFTlLBXt6x4UXvX7k2KOywtBbvSdR1zCKcNjaelR1AKzrcgmmhiMwsVnmGjOKevNhG6iqgBTZUWSz6elXUd94lyhqTcYooU+k6nKw5rJUJ0zNLEujng7OfAQv9mUoFvBWE9ZkT6zQKPiurbl92xfolhz0pkCSYBKShlEfjHZgNbC1ES44PK4YO2WzfBKQDSR0JBLD6qK6BcTr/s2aHU5YWHlTknPmhM+NwGp6DOdxeMoXdgpiSMYZQgdn34IXtW4+icfjpGLft1iL9xhMnnOzScYZgXJXGgg8+0d0kOP5AJGCUbuH2rG8lkwDj8eF0z7AfFUXDSzkSWbTROh7vx9+f5k+RrjwaH3xM84b+QQxZM4Z91EH/kRK9URxFNt7dJDr+QYxK2J7OTtAX80x5d1KJwrwrSUl20xUqP2TV3YdBMbBKv1/T/9dfwFN3PgGPeMtzgAAAABJRU5ErkJggg==" class="abs img-36" alt="Потужність">
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAB0AAAAdCAYAAABWk2cPAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAJCSURBVHgBzZbPaxNBFMffzO7EaH7UxJiARKxKXQOlVnIQ9eLJv0M8KYjpwVRoUbAqCAXxoBc9CLb+C96E4s2DUlG09iAireDBxF/RNJvd50xaWgi7+2Z3S+nnEJbwfe87O+/NmwWIB4Ot5MilxysQEQ4Rwa4NUYlsGgfu899m1UrlMbwM+kGrNuMCAQL8JCTMGnuq8pC5NgJqswjRUYYqPvSOSeOZ/sDV52pVZMsn8wBnzCiG1EpYavhEsfXu5Tf5zCvjz6ZEfv+E86fBEB1gjIGZ2Ytux7739trxutQ4uUPVgeanV7+gV4Fopuu60ekFt9NYRhnhGSNy++BNvaKVT0fER6c/OJ3mV1Iodkvj8YpqzsB+IM/psduvJ6WhVlPZP5ahMvn8LhAvQw8HQ0yBdhkYiHShBhpvGpiw22pAGJxWg8HgYDJIo1oerctPbMf+t7ESvgMXH5xLlEbOptB1IAyICJnk4dRv+NweuvDwOzLMruc1BF+8f94kt234+gt0wwx3zuH9rRsCYK7ro2BkTY1dOQiDmS7I37mg7UHS9O+Xhau9PdMCQZbjDhCNpHlOP650mksmJUzkyzB/xVI6J65pT7c6kZawN/v6kS+Y2FNm0pAcDApqe1ny4KkDKtF8/ahh7MxOiEwRmCH7RHozwwQxUMJuu3lTGqp7E9OlkSLEIPC2KFinMz6L5mu30+YaasWHNObW2CxpqPE16HUf+4t1hEMXH7WBhoNHCbyOQZzPlH5cv5VsOZFNmUiQw2Jb8R90w7YeztWG6wAAAABJRU5ErkJggg==" class="abs img-38" alt="Генерація">
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACEAAAAhCAYAAABX5MJvAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAN+SURBVHgBxZd5SFRBHMd/8+bt6bGuea2L7VJrkVR/ZGERlFlkB0YRQdkdadlBBdEf/ZP9Y/1R0QEdGNQWFBkZRVGRxQZWJHRQkWnPKzXLYz3W3XXd92Z6qy7qYvHEfesXHm+O3/zeZ34z82YGYFDarJ0HKYyDGH/CbE6JFARhWFnIIcZT4w2BYJwhUEz2uVnJt3odskJEpOfG6LdenS8m8QjVVJ+VW0ZcDS9YkFFxm469JiRqsnZq2urGozOeiEXCQBW2FPFdCGOmasOkNbJGggkzTEGMt0EZbbpnLPiyHPojgpLvNJ+hLjeuvLBIIeaprBBCDw+N1w9lYJ3rZj9I+fK4Hda5fJtmX29Lex7YbH3/JdmGI3JtQRpiCXhKr1VzpddyLbd/g1IwFivnrmOwqqWkZo/JKpoRn61skdClrdmOsMo/Bwi3ISEX67utKoMGc1tNy/wAPskWCUVs/CrBXvV2SBHhshNzxHdOoK1skcDqSIO7rqZQiq08EGazWnBScL66+FiKebAg0NB3bGZBOqOh4Ci73yalcbAg6LRnhEalb9P5QMKmz8kDQlxSGwcFYrK1usRT2wNxewvbfUBsVNISvrX+udT2Y4ZQp26eSNzxGfYPtxb6vE0qdPwkXtC6KsouSfUxVgicdORGHY4gjR1Xdpa2X8iOQApsBB6gueSYTaqT0UDg5Ntd9ZrdZ4wD7RjT+eY80u3s5TZGJIl50mK76/bUclkqswqA4zxSHUuFQJabdcVCF5NgnLerRpO+P9H3UUVs+Fmq7LwKg1u10JA/81n5UoRgFJICgc1XOg/wjuiVnR8fZmIVLU/ccaLafO7XO4ZV4OrNxn0wuEVDQDooECh66Z5EhsEnFfHodNvlbFvF+vBZWAXfgFHP7njzKBOCKfG0nbBi+34aCJZc5CGWG63lAeVs/OEXGRCkJf6/DQxPKSJucbTRjy0xKWJ+6J2E/3Nq8UsIkv7VE2Sx1hSTXieqXMugAICga8RIGI9/2iS4Jqx0fH6+GPpBCYRCw+dEqiIp/+t6CNGVwB8Jps3b6UX9y1vs9Xuoz59e5K8DeUVQVs5BKvB8X87rcROlOoyhNDTR9wljliKDwaDl9frIcJbVpaQu+P72wVMdTlBqIQSilCKv09nDNjU1uUB8tKZpiIpnErud6wY7dEEIxQxSOXswi30TM3RjMaC/ReY4aave73UAAAAASUVORK5CYII=" class="abs img-39" alt="Економія">
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAB0AAAAdCAYAAABWk2cPAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAASBSURBVHgBxVZrTFtVHD/nnntvH9Bubd1qGRLGdE4GYbIhkUeBoSx8IE6HRoXsg8ZHXEic0ZjFaeamRmOyTTMSdW4kDEEjuCgmOiQBtoxsg60QBV8LDIotbaVggbW9r+M5zA84uO2tYvwlTc/93//7dQ8A/wPgTc+M3W43+DhOASsEhyxDr9cbJUd5WaMbdr9TllJc2wkhw4AVAsYyCP14IXfwcLVrWaP0ueCYqxuLsoL01m0QcclKdKpDkSQeaATDcmGkt1UqojAvR4N9kNezvXuySsir+NkrOPZ9n7PBh8mRBYmBpXKFRF6NIUYaoYIlEYDMzMRSvXUrBLJExJEEEjWqSNFfAFbA2tvvt4AEsMaUYcOKTOTFETUe1dSFfr3SasvZUZuSU/mY/6v3jhISHPDPumfDsu5m3mSIQ3enWe6gvq7fsbea0mZGhz5X0w2BOhjnyUmJN/OhzmqrlSo8P4GVSHipjM4AQFEqXKBvb54V5PAc1/OkQ1V3rHphzsR7IsFZ8+YXPs2mDq4yzLuXMFGjILSQyg2PvlEQDU0hqEPuOAGpw5pfY3ae8MrlzVNksA9QB9mLP4+eHgxi7CK/gWmMz4/MnCF0RBqIK2+ZFp0nPAooLY3Z8fG8YUobJ54Wr0v1fJIZA8S92fW46RChL+5MmH/4wgG9NX2/Eo1gZDC92L3b9j6IMZdaUoByD/bssm7Kbo7OzCGj4xZwpspIo6aZRRXtYSnsDWDOnATmxkYfuvTytnawaOX9W8CyTzytxcfHlby3e1+jhKKPru0v/nAMlzVNtP0VgKY6JjL4uKsmpRoiHhrWrtu5IMzCByGrA121qbvAjcixFkVajS5EUdLkacOiACQR0shA2O/+EisCLmlytyWgS1tN7zniqkpypH0hheaBwb4GdjxgoN1J6wYr2q8rYe/vQLfKJAdHhmqu7CtqBXFqGs87prhxqo43WlpxVFKEkOcQMcgsUoo7qowsm2w5KAkYGC3rmosbJp4C/3RGF0DmzXnSK29vCUp0DqkTn53tf3UgEJmmc3opIMyduya+Am6sU4bOs/Njj2LNrzTHUhvLI1h2yj8uzs+nTPa2FKWOd/TVt3UKk0G0RM6xWsHPPVzOB3Kf3WzZdK9LbzV5yOq8Dag0Vsw0kG2EkT5Z7Kox8cMBSfHOIFV+u1XGWTaWua8tOCP8IZjPPnErjX7ZBaFa0+znT+3Esghm3UN7z41NHo1lkMIXRPDr/p/eDQ5efB1LAsx85niVGq+q0eT0rEfo/3jTW61JJnsd0IC0jI11EwPfNtPz6rtyqxM2ynC69ZBBwK/7LcgijTPIQN5/9btpcrEDZGncqcam+jUgtzgWIvL68mXccOSDfEd6RiHEjPrGQQzQGQ09YHhYASxp9ChWLceSe29h/Q89shCRWJ01D3J8khIJfCNLsgFoBGJZgdHZKkg/zEmRYD/Dc0zvnpwysKip/mZ0y0unt5g35rnIpQqsFDBWFG9PY/nVpn3dyxqljjocDp0XIU2LWwvsosj4fL4w0HLv/S/xJyoe0UP/gaSOAAAAAElFTkSuQmCC" class="abs img-40" alt="Окупність">
+
+    <div class="abs metric-label lbl-pow">Потужність СЕС</div>
+    <div class="abs metric-label lbl-gen">Річна генерація</div>
+    <div class="abs metric-label lbl-eco">Річна економія</div>
+    <div class="abs metric-label lbl-roi">Орієнтовна окупність</div>
+
+    <div class="abs metric-val val-pow" id="out-power">0 кВт</div>
+    <div class="abs metric-val val-gen" id="out-gen">0</div>
+    <div class="abs unit-gen">кВт*год</div>
+    <div class="abs metric-val val-eco" id="out-save">0 грн</div>
+    <div class="abs metric-val val-roi" id="out-roi">0 роки</div>
+
+    <div class="abs frame-17">
+        <div class="abs f17-rect-58"></div>
+        <img src="data:image/png;base64,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" class="abs f17-icon" alt="Гроші">
+
+        <div class="abs f17-lbl-main">Накопичена економія, грн</div>
+        
+        <div class="abs f17-lbl-yr f17-lbl-3y">3 роки</div>
+        <div class="abs sav-track" style="left: 47px; top: 38px; width: 60px;">
+            <div class="sav-fill" style="width: 100%;"><span class="sav-val" id="out-sav-3y">0</span></div>
+        </div>
+        
+        <div class="abs f17-lbl-yr f17-lbl-7y">7 років</div>
+        <div class="abs sav-track" style="left: 48px; top: 65px; width: 86px;">
+            <div class="sav-fill" style="width: 100%;"><span class="sav-val" id="out-sav-7y">0</span></div>
+        </div>
+
+        <div class="abs f17-lbl-yr f17-lbl-10y">10 років</div>
+        <div class="abs sav-track" style="left: 51px; top: 92px; width: 115px;">
+            <div class="sav-fill" style="width: 100%;"><span class="sav-val" id="out-sav-10y">0</span></div>
+        </div>
+        
+        <div class="abs f17-note" id="out-tariff-note">*при умові що ціна на е\енергію становитиме 0 грн\кВт весь період</div>
+    </div>
+
+    <div class="abs chart-title-1">Прогноз середньомісячної генерації (кВт·год)</div>
+    <div class="abs chart-title-2">Розподіл згенерованої енергії</div>
+    <div class="abs line-23"></div>
+    <div class="abs line-24"></div>
+
+    <div class="abs month-lbl" style="top: 356px;">Січ</div>
+    <div class="abs month-lbl" style="top: 391px;">Лют</div>
+    <div class="abs month-lbl" style="top: 428px;">Бер</div>
+    <div class="abs month-lbl" style="top: 463px;">Квіт</div>
+    <div class="abs month-lbl" style="top: 497px;">Трав</div>
+    <div class="abs month-lbl" style="top: 530px;">Черв</div>
+    <div class="abs month-lbl" style="top: 565px;">Лип</div>
+    <div class="abs month-lbl" style="top: 603px;">Серп</div>
+    <div class="abs month-lbl" style="top: 638px;">Вер</div>
+    <div class="abs month-lbl" style="top: 671px;">Жовт</div>
+    <div class="abs month-lbl" style="top: 705px;">Лист</div>
+    <div class="abs month-lbl" style="top: 742px;">Груд</div>
+
+    <div class="abs frame-16" id="monthly-bars"></div>
+
+    <div class="abs donut" id="donut-chart"></div>
+    <div class="abs donut-val" id="out-self-percent">0%</div>
+    <div class="abs donut-lbl">власне<br>споживання</div>
+
+    <div class="abs leg-bg-1"></div>
+    <div class="abs leg-bg-2"></div>
+    <div class="abs leg-dot-1"></div>
+    <div class="abs leg-dot-2"></div>
+    
+    <div class="abs leg-lbl" style="left: 377px; top: 524px;">Покриття власного<br>споживання</div>
+    <div class="abs leg-lbl" style="left: 377px; top: 562px;">невикористано<br>(надлишок)</div>
+    
+    <div class="abs leg-val" style="left: 493px; top: 524px;"><span id="out-self-kwh">0</span><br>кВт*год</div>
+    <div class="abs leg-val" style="left: 493px; top: 562px;"><span id="out-excess-kwh">0</span><br>кВт*год</div>
+
+    <div class="abs footer-note" id="footer-text">Зверніть увагу...</div>
+</div>
+
+<script>
+    const genProfile = [
+        {k: 0.022}, {k: 0.029}, {k: 0.051},
+        {k: 0.077}, {k: 0.079}, {k: 0.085},
+        {k: 0.084}, {k: 0.076}, {k: 0.048},
+        {k: 0.038}, {k: 0.027}, {k: 0.020}
+    ];
+
+    // Ця функція лише приймає дані ззовні і оновлює цифри та графіки
+    function updateData(data) {
+        const power = Number(data.powerKw) || 0;
+        const costUSD = Number(data.systemCostUsd) || 0;
+        const rate = Number(data.exchangeRate) || 40;
+        const tariff = Number(data.tariff) || 4.32;
+        const monthlyConsumption = Number(data.monthlyConsumption) || 500;
+
+        const totalGen = Math.round(power * 1230);
+        const annualConsumption = monthlyConsumption * 12;
+        const selfKwh = Math.min(annualConsumption, totalGen); 
+        const excessKwh = totalGen - selfKwh;
+        const selfPct = totalGen > 0 ? Math.round((selfKwh / totalGen) * 100) : 0;
+
+        const annualSavingsUAH = Math.round(selfKwh * tariff);
+        const costUAH = costUSD * rate;
+        const roi = annualSavingsUAH > 0 ? (costUAH / annualSavingsUAH).toFixed(1) : 0;
+
+        document.getElementById('out-power').innerText = power + ' кВт';
+        document.getElementById('out-gen').innerText = totalGen.toLocaleString('uk-UA');
+        document.getElementById('out-save').innerText = annualSavingsUAH.toLocaleString('uk-UA') + ' грн';
+        document.getElementById('out-roi').innerText = roi + ' роки';
+        
+        document.getElementById('out-self-percent').innerText = selfPct + '%';
+        document.getElementById('out-self-kwh').innerText = selfKwh.toLocaleString('uk-UA');
+        document.getElementById('out-excess-kwh').innerText = excessKwh.toLocaleString('uk-UA');
+        document.getElementById('out-tariff-note').innerText = `*при умові що ціна на е/енергію становитиме ${tariff} грн/кВт весь період`;
+        
+        document.getElementById('footer-text').innerText = `Зверніть увагу: всі наведені розрахунки та показники генерації є орієнтовними прогнозами. Фактичний виробіток електроенергії залежить від реальних погодних умов (кількості сонячних днів, рівня хмарності), кута нахилу та орієнтації сонячних панелей відносно півдня, а також відсутності фізичних затінень. Економія розрахована на основі вказаного тарифу (${tariff} грн/кВт·год) за умови максимального споживання енергії в момент її генерації.`;
+
+        const sav3 = annualSavingsUAH * 3;
+        const sav7 = annualSavingsUAH * 7;
+        const sav10 = annualSavingsUAH * 10;
+        
+        document.getElementById('out-sav-3y').innerText = sav3.toLocaleString('uk-UA');
+        document.getElementById('out-sav-7y').innerText = sav7.toLocaleString('uk-UA');
+        document.getElementById('out-sav-10y').innerText = sav10.toLocaleString('uk-UA');
+
+        // SVG Кругова діаграма
+        const donut = document.getElementById('donut-chart');
+        const r = 70.5; 
+        const circumference = 2 * Math.PI * r;
+        const dashValue = (selfPct / 100) * circumference;
+        
+        donut.innerHTML = `
+            <svg width="156" height="156" viewBox="0 0 156 156">
+                <circle cx="78" cy="78" r="${r}" fill="none" stroke="rgba(147, 197, 253, 0.65)" stroke-width="15" />
+                <circle cx="78" cy="78" r="${r}" fill="none" stroke="#F38217" stroke-width="15" 
+                        stroke-dasharray="${dashValue} ${circumference}" 
+                        transform="rotate(-90 78 78)" />
+            </svg>
+        `;
+
+        // Стовпчики генерації
+        const barContainer = document.getElementById('monthly-bars');
+        barContainer.innerHTML = '';
+        const maxMonth = Math.round(totalGen * 0.085);
+        const tops = [0, 35, 70, 105, 140, 175, 210, 245, 280, 315, 350, 385];
+
+        genProfile.forEach((item, index) => {
+            const val = Math.round(totalGen * item.k);
+            let width = maxMonth > 0 ? (val / maxMonth) * 225 : 0; 
+            if(width > 225) width = 225;
+
+            // Зверніть увагу, як стоїть span. Тільки ідеальний flex-end, як у робочій версії!
+            barContainer.innerHTML += `
+                <div class="bar-bg" style="width: ${width}px; top: ${tops[index]}px;">
+                    <span class="bar-val">${val}</span>
+                </div>
+            `;
+        });
+    }
+
+    // "Слухаємо" повідомлення від React
+    window.addEventListener('message', (event) => {
+        // Очікуємо об'єкт { powerKw, systemCostUsd, exchangeRate, tariff, monthlyConsumption }
+        if (event.data && typeof event.data.powerKw !== 'undefined') {
+            updateData(event.data);
+        }
+    });
+</script>
+
+</body>
+</html>
