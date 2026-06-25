@@ -7,17 +7,18 @@ import {
   FaTools, FaTrash, FaPlus, FaSpinner, FaThumbtack, FaCheckCircle,
   FaUserTie, FaSearch, FaArrowRight, FaClipboardList,
   FaFileInvoiceDollar, FaDraftingCompass, FaTruckLoading, FaHandPointer,
-  FaFileAlt, FaDownload, FaFilePdf
+  FaFileAlt, FaDownload, FaFilePdf, FaMagic, FaUpload, FaInfoCircle
 } from "react-icons/fa";
+import { motion, AnimatePresence } from 'framer-motion';
 
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
-import SpecificationManager from "./SpecificationManager";
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
+const OCR_API_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev/parse-pdf';
 
 // ==================================================================================
-// 1. КОНФІГУРАЦІЯ (БЕЗ "МЕРЕЖІ")
+// 1. КОНФІГУРАЦІЯ
 // ==================================================================================
 
 const STAGE_GROUPS = [
@@ -130,9 +131,7 @@ const getStatusMeta = (stageGroupKey, statusKey, taskId = null) => {
 
   const item = config.find(i => i.key === statusKey);
   if (item) return item;
-  
-  const label = ALL_STATUS_LABELS[statusKey] || statusKey;
-  return { label, color: "bg-slate-100 text-slate-500 border-slate-200" };
+  return { label: ALL_STATUS_LABELS[statusKey] || statusKey, color: "bg-slate-100 text-slate-500 border-slate-200" };
 };
 
 const driveThumbUrl = (fileId, size = 400) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}-h${size}`;
@@ -149,6 +148,8 @@ function getDocTypeLabel(stageKey) {
     case "tech_project": return "Технічне рішення";
     case "tech_review": return "Заміри";
     case "project_design": return "3D Візуалізація";
+    case "complectation": return "Специфікація";
+    case "comp_protection": return "Специфікація захисту";
     default: return "Файли етапу";
   }
 }
@@ -192,10 +193,231 @@ const getEmployeeNameStr = (customId, employees) => {
 };
 
 // ==================================================================================
-// 3. СУПЕР-ВІДЖЕТ СПЕЦИФІКАЦІЇ (ДЛЯ КОМПЛЕКТАЦІЇ)
+// 3. UI КОМПОНЕНТИ ТА ВІДЖЕТИ
 // ==================================================================================
 
-function SpecificationSummaryWidget({ installationId }) {
+const NomenclatureSelect = ({ options, value, onChange, placeholder, hasError }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [search, setSearch] = useState('');
+    const wrapperRef = useRef(null);
+
+    useEffect(() => {
+        const handleClickOutside = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setIsOpen(false); };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const selectedOption = options.find(o => o.id === value);
+    const filtered = options.filter(o => o.fullName.toLowerCase().includes(search.toLowerCase()) || (o.sku && o.sku.toLowerCase().includes(search.toLowerCase())));
+
+    return (
+        <div className="relative w-full" ref={wrapperRef}>
+            <div 
+                className={`w-full px-3 py-2 bg-white border rounded-lg flex justify-between items-center cursor-pointer text-sm transition-colors ${hasError ? 'border-red-400 bg-red-50/30' : 'border-slate-300 hover:border-indigo-400'}`}
+                onClick={() => setIsOpen(!isOpen)}
+            >
+                <div className="truncate pr-2">
+                    {selectedOption ? <span className="font-bold text-slate-800">{selectedOption.fullName}</span> : <span className={hasError ? "text-red-400 font-medium" : "text-slate-400"}>{placeholder}</span>}
+                </div>
+                <FaChevronDown className="text-slate-400 text-[10px] flex-shrink-0" />
+            </div>
+            <AnimatePresence>
+                {isOpen && (
+                    <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} className="absolute z-[100] w-[400px] right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-64 flex flex-col overflow-hidden">
+                        <div className="p-2 border-b border-slate-100 bg-slate-50"><input autoFocus type="text" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-400" placeholder="Пошук по базі..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+                        <div className="overflow-y-auto custom-scrollbar flex-1 p-1">
+                            {filtered.length > 0 ? filtered.map(o => (
+                                <div key={o.id} className={`px-3 py-2 cursor-pointer text-sm rounded-lg mb-0.5 transition-colors ${o.id === value ? 'bg-indigo-50 border border-indigo-100' : 'hover:bg-slate-50 border border-transparent'}`} onClick={() => { onChange(o.id); setIsOpen(false); setSearch(''); }}>
+                                    <div className="font-bold text-slate-800 leading-tight">{o.fullName}</div>
+                                    {o.sku && <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 rounded mt-1 inline-block">SKU: {o.sku}</span>}
+                                </div>
+                            )) : <div className="px-4 py-4 text-sm text-slate-400 text-center">Нічого не знайдено</div>}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
+};
+
+function SpecOcrMappingModal({ file, installationId, onClose, onSuccess, nomenclatures, employee }) {
+    const [isParsing, setIsParsing] = useState(true);
+    const [mappedItems, setMappedItems] = useState([]);
+    const [error, setError] = useState(null);
+
+    const autoMatchItem = useCallback((originalName) => {
+        if (!originalName) return '';
+        const lowerName = originalName.toLowerCase();
+        let match = nomenclatures.find(n => n.fullName.toLowerCase().includes(lowerName) || lowerName.includes(n.name.toLowerCase()));
+        if (match) return match.id;
+
+        const words = lowerName.split(/[\s,.-]+/);
+        let bestMatch = null;
+        let maxScore = 0;
+        for (const nom of nomenclatures) {
+            const nomWords = nom.fullName.toLowerCase();
+            let score = 0;
+            words.forEach(w => { if (w.length > 2 && nomWords.includes(w)) score++; });
+            if (score > maxScore) { maxScore = score; bestMatch = nom; }
+        }
+        return maxScore >= 2 && bestMatch ? bestMatch.id : '';
+    }, [nomenclatures]);
+
+    useEffect(() => {
+        const parseFile = async () => {
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const response = await fetch(OCR_API_URL, { method: 'POST', body: formData });
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.detail || errData.error || 'Помилка OCR сервісу');
+                }
+                const data = await response.json();
+                if (data.items && data.items.length > 0) {
+                    const initialMapping = data.items.map(item => ({
+                        id: Math.random().toString(36).substr(2, 9),
+                        original_name: item.original_name + (item.technical_chars ? ` (${item.technical_chars})` : ''),
+                        quantity: parseFloat(item.quantity) || 1,
+                        unit: item.unit || 'шт',
+                        nomenclature_id: autoMatchItem(item.original_name + (item.technical_chars ? ` ${item.technical_chars}` : ''))
+                    }));
+                    setMappedItems(initialMapping);
+                } else {
+                    setError('Не вдалося знайти таблицю специфікації у PDF файлі.');
+                }
+            } catch (err) {
+                setError(err.message);
+            } finally {
+                setIsParsing(false);
+            }
+        };
+        parseFile();
+    }, [file, autoMatchItem]);
+
+    const handleConfirm = async () => {
+        const unmapped = mappedItems.filter(item => !item.nomenclature_id);
+        if (unmapped.length > 0) return alert(`Залишилось ${unmapped.length} неідентифікованих позицій! Оберіть товар або видаліть рядок.`);
+        if (mappedItems.length === 0) return alert('Специфікація порожня!');
+
+        setIsParsing(true);
+        try {
+            const { data: existing } = await supabase.from('specifications').select('version').eq('installation_custom_id', installationId);
+            const nextVersion = existing && existing.length > 0 ? Math.max(...existing.map(s => s.version)) + 1 : 1;
+
+            if (existing && existing.length > 0) {
+                await supabase.from('specifications').update({ status: 'archived' }).eq('installation_custom_id', installationId);
+            }
+
+            const { data: newSpec, error: hErr } = await supabase.from('specifications').insert([{
+                installation_custom_id: installationId, version: nextVersion, status: 'confirmed',
+                name: `Специфікація V.${nextVersion} (${file.name})`, confirmed_at: new Date().toISOString(), created_by: employee?.id
+            }]).select().single();
+            if (hErr) throw hErr;
+
+            const itemsPayload = mappedItems.map(item => ({
+                specification_id: newSpec.id, nomenclature_id: item.nomenclature_id,
+                quantity: item.quantity, original_name: item.original_name, created_by: employee?.id
+            }));
+            const { error: iErr } = await supabase.from('specification_items').insert(itemsPayload);
+            if (iErr) throw iErr;
+
+            onSuccess(file);
+        } catch (err) {
+            alert(err.message);
+            setIsParsing(false);
+        }
+    };
+
+    return (
+        <AnimatePresence>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[90]">
+                <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[95vh]" onClick={e => e.stopPropagation()}>
+                    <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-indigo-50 rounded-t-2xl flex-shrink-0">
+                        <div>
+                            <h2 className="text-xl font-bold text-indigo-900 flex items-center gap-2"><FaMagic className="text-indigo-500"/> Студія оцифрування (Мапінг)</h2>
+                            <p className="text-xs text-indigo-700 mt-1 font-medium">Перевірте, як система зв'язала позиції з PDF з нашою складською базою.</p>
+                        </div>
+                        <button onClick={onClose} disabled={isParsing} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm disabled:opacity-50"><FaTimes/></button>
+                    </div>
+
+                    {isParsing ? (
+                        <div className="p-20 flex flex-col items-center justify-center text-indigo-600">
+                            <FaSpinner className="animate-spin text-5xl mb-4" />
+                            <p className="font-bold">Аналізуємо PDF файл та підбираємо товари...</p>
+                        </div>
+                    ) : error ? (
+                        <div className="p-10 text-center flex flex-col items-center">
+                            <FaExclamationTriangle className="text-red-500 text-4xl mb-3" />
+                            <p className="text-slate-700 font-bold mb-4">{error}</p>
+                            <button onClick={onClose} className="px-6 py-2 bg-slate-200 hover:bg-slate-300 rounded-xl font-bold text-sm">Повернутися</button>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="bg-white p-4 flex items-center gap-3 border-b border-slate-100 flex-shrink-0">
+                                <div className="flex-1 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center gap-3">
+                                    <FaInfoCircle className="text-amber-500 text-xl flex-shrink-0"/>
+                                    <p className="text-xs text-amber-800 leading-relaxed font-medium">
+                                        Зліва — текст із PDF, справа — товар на складі. Система підбирає автоматично. <strong className="text-amber-900">Якщо поле червоне — оберіть товар вручну!</strong>
+                                    </p>
+                                </div>
+                                <div className="text-center px-6 py-2 bg-slate-50 rounded-xl border border-slate-200">
+                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Позицій</div>
+                                    <div className="text-2xl font-black text-slate-800">{mappedItems.length}</div>
+                                </div>
+                            </div>
+                            <div className="overflow-y-auto custom-scrollbar flex-1 bg-slate-50/50">
+                                <table className="w-full text-left border-collapse">
+                                    <thead className="sticky top-0 bg-slate-100 shadow-sm z-10">
+                                        <tr className="text-[10px] uppercase tracking-wider text-slate-500">
+                                            <th className="px-4 py-3 font-bold border-b border-slate-200 w-1/3">Прочитано з PDF (Оригінал)</th>
+                                            <th className="px-4 py-3 font-bold border-b border-slate-200 text-center w-24">К-сть</th>
+                                            <th className="px-4 py-3 font-bold border-b border-slate-200 border-l border-slate-200 bg-indigo-50/50"><FaBoxOpen className="inline mr-1 text-indigo-400"/> Товар у базі (Склад)</th>
+                                            <th className="px-4 py-3 font-bold border-b border-slate-200 text-center w-12">Дія</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-200">
+                                        {mappedItems.map((item, index) => {
+                                            const hasError = !item.nomenclature_id;
+                                            return (
+                                                <tr key={item.id} className={`transition-colors ${hasError ? 'bg-red-50/30' : 'bg-white hover:bg-slate-50'}`}>
+                                                    <td className="px-4 py-4 align-middle border-r border-dashed border-slate-200">
+                                                        <div className="text-sm font-bold text-slate-700 leading-tight mb-1">{item.original_name}</div>
+                                                    </td>
+                                                    <td className="px-2 py-4 align-middle border-r border-slate-200 text-center">
+                                                        <div className="inline-flex items-center gap-1 bg-slate-100 px-2 py-1 rounded border border-slate-200">
+                                                            <input type="number" min="0" step="0.01" value={item.quantity} onChange={e => { const newArr = [...mappedItems]; newArr[index].quantity = e.target.value; setMappedItems(newArr); }} className="w-12 text-center text-sm font-black text-indigo-700 bg-transparent outline-none"/>
+                                                            <span className="text-[10px] text-slate-400 font-bold uppercase">{item.unit}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-4 py-4 align-middle border-l-2 border-indigo-100">
+                                                        <NomenclatureSelect options={nomenclatures} value={item.nomenclature_id} hasError={hasError} placeholder="Натисніть та оберіть товар" onChange={val => { const newArr = [...mappedItems]; newArr[index].nomenclature_id = val; setMappedItems(newArr); }}/>
+                                                    </td>
+                                                    <td className="px-4 py-4 align-middle text-center">
+                                                        <button onClick={() => { const newArr = mappedItems.filter((_, i) => i !== index); setMappedItems(newArr); }} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><FaTrash size={16}/></button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div className="p-5 border-t border-slate-100 flex justify-between items-center bg-white rounded-b-2xl flex-shrink-0">
+                                <button type="button" onClick={() => setMappedItems([...mappedItems, { id: Math.random().toString(), original_name: 'Додано вручну', quantity: 1, unit: 'шт', nomenclature_id: '' }])} className="text-indigo-600 font-bold text-sm hover:underline">+ Додати пропущений рядок</button>
+                                <div className="flex gap-3">
+                                    <button onClick={onClose} className="px-6 py-3 bg-slate-100 border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-colors text-sm">Скасувати</button>
+                                    <button onClick={handleConfirm} disabled={mappedItems.length === 0} className="px-8 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all text-sm flex items-center gap-2 disabled:opacity-50 active:scale-95">Затвердити специфікацію</button>
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </motion.div>
+            </motion.div>
+        </AnimatePresence>
+    );
+}
+
+function SpecificationSummaryWidget({ installationId, refreshTrigger }) {
     const [specData, setSpecData] = useState(null);
     const [loading, setLoading] = useState(true);
 
@@ -208,7 +430,7 @@ function SpecificationSummaryWidget({ installationId }) {
                     .select(`
                         id, status, version, created_at,
                         specification_items (
-                            id, quantity,
+                            id, quantity, original_name,
                             nomenclature (name, brand)
                         )
                     `)
@@ -226,7 +448,7 @@ function SpecificationSummaryWidget({ installationId }) {
             }
         };
         fetchSpec();
-    }, [installationId]);
+    }, [installationId, refreshTrigger]);
 
     if (loading) return <div className="h-32 flex items-center justify-center text-slate-400"><FaSpinner className="animate-spin text-2xl" /></div>;
 
@@ -235,15 +457,13 @@ function SpecificationSummaryWidget({ installationId }) {
             <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl p-8 text-center w-full flex flex-col items-center justify-center">
                 <FaClipboardList className="text-4xl text-slate-300 mb-3" />
                 <h4 className="font-bold text-slate-600 text-sm mb-1">Специфікація порожня</h4>
-                <p className="text-xs text-slate-400 max-w-sm">Завантажте PDF-рахунок через менеджер специфікацій, щоб оцифрувати матеріали для цього об'єкту.</p>
+                <p className="text-xs text-slate-400 max-w-sm">Натисніть "Оцифрувати PDF", щоб автоматично створити специфікацію та закрити це завдання.</p>
             </div>
         );
     }
 
-    const items = specData.specification_items;
+    const items = specData.specification_items || [];
     const totalItems = items.length;
-    // Беремо перші 9 для широкого прев'ю (по 3 в ряд)
-    const previewItems = items.slice(0, 9);
 
     return (
         <div className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden w-full flex flex-col">
@@ -258,35 +478,25 @@ function SpecificationSummaryWidget({ installationId }) {
                     {specData.status === 'confirmed' ? 'Затверджено' : specData.status}
                 </div>
             </div>
-            
             <div className="p-5">
-                <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Завантажені позиції ({totalItems})</div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
-                    {previewItems.map(item => (
-                        <div key={item.id} className="flex justify-between items-center text-xs py-2 border-b border-slate-50 last:border-0">
-                            <span className="font-medium text-slate-700 truncate pr-2">
-                                {item.nomenclature?.name || 'Невідома позиція'} 
-                                {item.nomenclature?.brand && <span className="text-slate-400 ml-1">({item.nomenclature.brand})</span>}
-                            </span>
-                            <span className="font-bold text-slate-900 shrink-0 bg-slate-100 px-2.5 py-1 rounded">{item.quantity} шт</span>
-                        </div>
-                    ))}
-                </div>
-                {totalItems > 9 && (
-                    <div className="text-center mt-5 pt-4 border-t border-slate-100">
-                        <span className="text-[11px] font-bold text-indigo-500 bg-indigo-50 px-4 py-1.5 rounded-full">
-                            + ще {totalItems - 9} позицій
-                        </span>
+                <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Всі завантажені позиції ({totalItems})</div>
+                <div className="max-h-[400px] overflow-y-auto custom-scrollbar pr-2 border border-slate-100 rounded-xl p-3 bg-slate-50/30">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
+                        {items.map(item => (
+                            <div key={item.id} className="flex justify-between items-center text-xs py-2 border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors px-2 rounded">
+                                <span className="font-medium text-slate-700 truncate pr-2" title={item.nomenclature?.name || item.original_name}>
+                                    {item.nomenclature?.name || item.original_name || 'Невідома позиція'} 
+                                    {item.nomenclature?.brand && <span className="text-slate-400 ml-1">({item.nomenclature.brand})</span>}
+                                </span>
+                                <span className="font-bold text-slate-900 shrink-0 bg-white border border-slate-200 shadow-sm px-2.5 py-1 rounded">{item.quantity} шт</span>
+                            </div>
+                        ))}
                     </div>
-                )}
+                </div>
             </div>
         </div>
     );
 }
-
-// ==================================================================================
-// 4. UI COMPONENTS (ШИРОКИЙ МАКЕТ + ВІДЖЕТИ)
-// ==================================================================================
 
 function DesignVariantInline({ installationId }) {
   const [variants, setVariants] = useState([]);
@@ -352,9 +562,8 @@ function DesignVariantInline({ installationId }) {
   );
 }
 
-function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId }) {
+function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId, nomenclatures }) {
   const [newComment, setNewComment] = useState("");
-  const [showSpecManager, setShowSpecManager] = useState(false);
   
   let statusOptions = STATUS_CONFIG.default;
   if (task.id === "tech_project") statusOptions = STATUS_CONFIG.tech_project_group;
@@ -365,7 +574,10 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
   const [newStatus, setNewStatus] = useState(initialStatus);
   const [assignedEmpId, setAssignedEmpId] = useState(task.responsibleId);
   const [selectedFiles, setSelectedFiles] = useState([]);
+  
   const fileInputRef = useRef(null);
+  const ocrFileInputRef = useRef(null);
+  const [ocrFile, setOcrFile] = useState(null);
 
   const canUploadAnyFile = STAGES_WITH_UPLOADS.has(task.id);
   const canUploadPhotos = !["equipment", "proposal"].includes(stageGroupKey) || canUploadAnyFile;
@@ -378,12 +590,6 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
     }
   }, [selectedFiles.length, initialStatus, newStatus, task.id, currentUserEmpId]);
 
-  const handleOpenSpecManager = () => {
-    setShowSpecManager(true);
-    if (initialStatus === newStatus && AUTO_STATUS_MAP[task.id]) setNewStatus(AUTO_STATUS_MAP[task.id]);
-    if (currentUserEmpId) setAssignedEmpId(currentUserEmpId);
-  };
-
   const hasChanges = newStatus !== task.status || newComment.trim().length > 0 || selectedFiles.length > 0 || String(assignedEmpId) !== String(task.responsibleId);
 
   const handleFileSelect = (e) => {
@@ -393,6 +599,13 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
       }));
       setSelectedFiles((prev) => [...prev, ...filesArray]);
     }
+  };
+
+  const handleOcrFileSelect = (e) => {
+    if (e.target.files && e.target.files[0]) {
+        setOcrFile(e.target.files[0]);
+    }
+    e.target.value = '';
   };
 
   const removePhoto = (index) => {
@@ -416,10 +629,7 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
 
   return (
     <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex flex-col gap-6">
-      
-      {/* ВЕРХНЯ ЧАСТИНА: 2 Колонки (Форма зліва, Історія справа) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        
         {/* Форма (Ліва колонка) */}
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-4">
@@ -442,13 +652,21 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
                   <EmployeeSelect label="Відповідальний" employees={employees} selectedId={assignedEmpId} onSelect={setAssignedEmpId} />
                   
                   {isComplectationTask ? (
-                    <button onClick={handleOpenSpecManager} className="w-full h-full py-3 bg-white border-2 border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-400 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
-                        <div className="flex items-center gap-1"><FaPlus className="text-indigo-400 text-xs" /><FaFilePdf className="text-red-500 text-2xl" /></div>
-                        <span>Оцифрувати PDF</span>
-                    </button>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 h-full">
+                        <button onClick={() => ocrFileInputRef.current?.click()} className="w-full h-full min-h-[60px] py-3 bg-white border-2 border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-400 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
+                            <div className="flex items-center gap-1"><FaMagic className="text-indigo-400 text-xs" /><FaFilePdf className="text-red-500 text-xl" /></div>
+                            <span>Оцифрувати PDF</span>
+                        </button>
+                        <input type="file" accept=".pdf" ref={ocrFileInputRef} onChange={handleOcrFileSelect} className="hidden" />
+
+                        <button onClick={() => fileInputRef.current?.click()} className="w-full h-full min-h-[60px] py-3 bg-indigo-50/50 border-2 border-dashed border-indigo-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-300 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
+                            <FaUpload className="text-xl opacity-70" />
+                            <span className="text-center">Прикріпити файл</span>
+                        </button>
+                    </div>
                   ) : (
                     canUploadPhotos && (
-                        <button onClick={() => fileInputRef.current?.click()} className="w-full h-full py-3 bg-indigo-50/50 border-2 border-dashed border-indigo-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-300 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
+                        <button onClick={() => fileInputRef.current?.click()} className="w-full h-full min-h-[60px] py-3 bg-indigo-50/50 border-2 border-dashed border-indigo-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-300 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
                             <FaCamera className="text-2xl opacity-70" />
                             <span>{canUploadAnyFile ? "Завантажити файли" : "Додати фотографії"}</span>
                         </button>
@@ -462,8 +680,7 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
             <textarea value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Вкажіть важливі деталі по етапу..." className="w-full p-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none min-h-[100px] font-medium text-slate-700 shadow-sm" />
           </div>
 
-          {/* Приховані інпути та прев'юшки завантажених */}
-          {!isComplectationTask && canUploadPhotos && (
+          {canUploadPhotos && (
             <div>
               <input type="file" multiple accept={canUploadAnyFile ? "*/*" : "image/*"} ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
               {selectedFiles.length > 0 && (
@@ -495,38 +712,55 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
 
       </div>
 
-      {/* НИЖНЯ ЧАСТИНА: Віджет Специфікації на всю ширину (ТІЛЬКИ ДЛЯ КОМПЛЕКТАЦІЇ) */}
       {isComplectationTask && (
           <div className="w-full">
-              <SpecificationSummaryWidget installationId={installationId} />
+              <SpecificationSummaryWidget installationId={installationId} refreshTrigger={task.history.length} />
           </div>
       )}
 
-      {showSpecManager && <SpecificationManager installationId={installationId} onClose={() => setShowSpecManager(false)} />}
+      {ocrFile && (
+          <SpecOcrMappingModal
+              file={ocrFile}
+              installationId={installationId}
+              nomenclatures={nomenclatures}
+              onClose={() => setOcrFile(null)}
+              onSuccess={(processedFile) => {
+                  setOcrFile(null);
+                  const finalStatus = AUTO_STATUS_MAP[task.id] || "done";
+                  setNewStatus(finalStatus);
+                  if (currentUserEmpId) setAssignedEmpId(currentUserEmpId);
+
+                  // Відправляємо все на сервер однією дією
+                  onAddUpdate(task.id, {
+                      status: finalStatus,
+                      comment: "✅ Специфікацію успішно оцифровано, перевірено та затверджено.",
+                      photos: [],
+                      rawFiles: [processedFile],
+                      assigned_to: currentUserEmpId || assignedEmpId
+                  });
+              }}
+          />
+      )}
     </div>
   );
 }
 
-function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId }) {
+function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId, nomenclatures }) {
   const isDone = ["done", "launched", "approved", "selected", "completed", "done_on_site", "arrived", "created"].includes(task.status);
-  
   let statusMeta;
   if (task.id === "project_approval") statusMeta = STATUS_CONFIG.project_selector.find(s => s.key === task.status) || STATUS_CONFIG.project_selector[0];
   else statusMeta = getStatusMeta(stageGroupKey, task.status, task.id);
-
   const assignedName = getEmployeeNameStr(task.responsibleId, employees);
 
   return (
     <div className={`bg-white rounded-2xl border transition-all duration-300 overflow-hidden ${isExpanded ? "border-indigo-300 shadow-lg shadow-indigo-100/50 my-5" : "border-slate-200 shadow-sm hover:border-indigo-200 mb-3 hover:shadow-md"}`}>
       <button onClick={onToggle} className="w-full flex items-center justify-between p-5 md:px-6 md:py-5 text-left focus:outline-none relative overflow-hidden group bg-white" type="button">
         {isDone && <FaCheckCircle className="absolute -right-8 -top-8 text-8xl text-emerald-500/5 pointer-events-none" />}
-        
         <div className="flex-1 flex flex-col md:flex-row md:items-center gap-3 md:gap-8 relative z-10">
           <div className="flex-1">
             <h3 className={`font-extrabold text-lg md:text-xl transition-colors tracking-tight ${isExpanded ? "text-indigo-700" : (isDone ? "text-slate-600" : "text-slate-900")}`}>
               {task.title}
             </h3>
-            
             <div className="flex flex-wrap items-center gap-3 mt-2">
                 <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border ${statusMeta.color}`}>
                   {statusMeta.label}
@@ -544,7 +778,6 @@ function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpd
             </div>
           </div>
         </div>
-
         <div className={`shrink-0 ml-4 p-2.5 rounded-full transition-all duration-300 relative z-10 ${isExpanded ? "bg-indigo-600 text-white rotate-180 shadow-md shadow-indigo-200" : "bg-slate-50 text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-500 border border-slate-100"}`}>
           <FaChevronDown size={14} />
         </div>
@@ -555,18 +788,13 @@ function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpd
           {task.id === "project_approval" ? (
              <DesignVariantInline installationId={installationId} />
           ) : (
-             <TaskInlineEditor task={task} stageGroupKey={stageGroupKey} onAddUpdate={onAddUpdate} isLoading={isLoading} employees={employees} installationId={installationId} currentUserEmpId={currentUserEmpId} />
+             <TaskInlineEditor task={task} stageGroupKey={stageGroupKey} onAddUpdate={onAddUpdate} isLoading={isLoading} employees={employees} installationId={installationId} currentUserEmpId={currentUserEmpId} nomenclatures={nomenclatures} />
           )}
         </div>
       </div>
     </div>
   );
 }
-
-
-// ==================================================================================
-// 5. РАЗДІЛ СТЕПЕРА (РОЗТЯГНУТИЙ НА ВСЮ ШИРИНУ)
-// ==================================================================================
 
 function StageNavigatorStepper({ activeStage, onSelect }) {
   const scrollRef = useRef(null);
@@ -583,15 +811,9 @@ function StageNavigatorStepper({ activeStage, onSelect }) {
 
   return (
     <div className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
-        {/* Зовнішній контейнер для плавного скролінгу по всій ширині */}
         <div ref={scrollRef} className="w-full overflow-x-auto no-scrollbar scroll-smooth">
-          
-          {/* Внутрішній контейнер: центрується на великих екранах, або тягнеться в довжину на мобільних */}
           <div className="max-w-7xl mx-auto min-w-max px-4 sm:px-8 py-5 relative flex items-start sm:items-center justify-between gap-8">
-            
-            {/* З'єднувальна лінія прогресу (тепер всередині контейнера скролу) */}
             <div className="absolute top-[44px] left-[5%] right-[5%] h-[2px] bg-slate-100 -z-10 hidden sm:block"></div>
-
             {STAGE_GROUPS.map((s) => {
               const isActive = s.key === activeStage;
               const currentIndex = STAGE_GROUPS.findIndex(x => x.key === activeStage);
@@ -618,10 +840,6 @@ function StageNavigatorStepper({ activeStage, onSelect }) {
     </div>
   );
 }
-
-// ==================================================================================
-// 6. UI ДОПОМІЖНІ (Модалки, Історія)
-// ==================================================================================
 
 function ConfirmationModal({ isOpen, onClose, onConfirm, title, message }) {
   if (!isOpen) return null;
@@ -797,7 +1015,7 @@ function HistoryTimeline({ logs, stageGroupKey, task, getEmployeeName }) {
 }
 
 // ==================================================================================
-// 7. MAIN SCREEN (ШИРОКИЙ МАКЕТ)
+// 7. MAIN SCREEN 
 // ==================================================================================
 
 export default function FieldWorkflow({ project }) {
@@ -807,6 +1025,7 @@ export default function FieldWorkflow({ project }) {
   const [activeStage, setActiveStage] = useState(project?.workflow_stage || "tech_review");
   const [tasks, setTasks] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [nomenclatures, setNomenclatures] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   
@@ -816,11 +1035,27 @@ export default function FieldWorkflow({ project }) {
   const installationId = project?.custom_id;
   const currentUserEmpId = employee?.custom_id || null;
 
-  const loadEmployees = useCallback(async () => {
+  const loadDictionaries = useCallback(async () => {
     try {
-      const { data } = await supabase.from("employees").select("id, custom_id, name, position").order("custom_id", { ascending: true }).limit(300);
-      setEmployees(Array.isArray(data) ? data : []);
-    } catch (e) { setEmployees([]); }
+      const [empRes, nomRes, catRes] = await Promise.all([
+          supabase.from("employees").select("id, custom_id, name, position").order("custom_id", { ascending: true }).limit(300),
+          supabase.from('nomenclature').select('id, name, sku, category_id, unit:units(name)').eq('is_active', true),
+          supabase.from('categories').select('*')
+      ]);
+      setEmployees(Array.isArray(empRes.data) ? empRes.data : []);
+
+      const cats = catRes.data || [];
+      const processedNom = (nomRes.data || []).map(item => {
+          let path = [];
+          let currentId = item.category_id;
+          while (currentId) {
+              const cat = cats.find(c => c.id === currentId);
+              if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break;
+          }
+          return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim() };
+      });
+      setNomenclatures(processedNom);
+    } catch (e) { console.error(e); }
   }, []);
 
   const loadWorkflowData = useCallback(async () => {
@@ -864,7 +1099,7 @@ export default function FieldWorkflow({ project }) {
     finally { setLoading(false); }
   }, [installationId, activeStage]);
 
-  useEffect(() => { loadEmployees(); }, [loadEmployees]);
+  useEffect(() => { loadDictionaries(); }, [loadDictionaries]);
   useEffect(() => { loadWorkflowData(); }, [loadWorkflowData]);
 
   const handleAddUpdate = async (taskId, updateData) => {
@@ -963,6 +1198,7 @@ export default function FieldWorkflow({ project }) {
                   onAddUpdate={handleAddUpdate}
                   isLoading={saveLoading}
                   employees={employees}
+                  nomenclatures={nomenclatures}
                   installationId={installationId}
                   currentUserEmpId={currentUserEmpId}
                 />
