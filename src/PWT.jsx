@@ -7,7 +7,7 @@ import {
   FaTools, FaTrash, FaPlus, FaSpinner, FaThumbtack, FaCheckCircle,
   FaUserTie, FaSearch, FaArrowRight, FaClipboardList,
   FaFileInvoiceDollar, FaDraftingCompass, FaTruckLoading, FaHandPointer,
-  FaFileAlt, FaDownload, FaFilePdf, FaMagic, FaUpload, FaInfoCircle
+  FaFileAlt, FaDownload, FaFilePdf, FaMagic
 } from "react-icons/fa";
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -222,7 +222,7 @@ const NomenclatureSelect = ({ options, value, onChange, placeholder, hasError })
                 className={`w-full px-3 py-2 bg-white border rounded-lg flex justify-between items-center cursor-pointer text-sm transition-colors ${hasError ? 'border-red-400 bg-red-50/30' : 'border-slate-300 hover:border-indigo-400'}`}
                 onClick={() => setIsOpen(!isOpen)}
             >
-                <div className="truncate pr-2">
+                <div className="truncate pr-2 flex-1 min-w-0">
                     {selectedOption ? (
                         <div className="flex flex-col leading-tight">
                             {selectedOption.categoryPath && (
@@ -388,7 +388,7 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
             const { error: iErr } = await supabase.from('specification_items').insert(itemsPayload);
             if (iErr) throw iErr;
 
-            onSuccess(file);
+            onSuccess();
         } catch (err) {
             alert(err.message);
             setIsParsing(false);
@@ -400,10 +400,7 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[90]">
                 <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[95vh]" onClick={e => e.stopPropagation()}>
                     <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-indigo-50 rounded-t-2xl flex-shrink-0">
-                        <div>
-                            <h2 className="text-xl font-bold text-indigo-900 flex items-center gap-2"><FaMagic className="text-indigo-500"/> Студія оцифрування (Мапінг)</h2>
-                            <p className="text-xs text-indigo-700 mt-1 font-medium">Перевірте, як система зв'язала позиції з PDF з нашою складською базою.</p>
-                        </div>
+                        <h2 className="text-xl font-bold text-indigo-900 flex items-center gap-2"><FaMagic className="text-indigo-500"/> Оцифрування специфікації</h2>
                         <button onClick={onClose} disabled={isParsing} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm disabled:opacity-50"><FaTimes/></button>
                     </div>
 
@@ -420,16 +417,11 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
                         </div>
                     ) : (
                         <>
-                            <div className="bg-white p-4 flex items-center gap-3 border-b border-slate-100 flex-shrink-0">
-                                <div className="flex-1 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center gap-3">
-                                    <FaInfoCircle className="text-amber-500 text-xl flex-shrink-0"/>
-                                    <p className="text-xs text-amber-800 leading-relaxed font-medium">
-                                        Зліва — текст із PDF, справа — товар на складі. Система підбирає автоматично. <strong className="text-amber-900">Якщо поле червоне — оберіть товар вручну!</strong>
-                                    </p>
-                                </div>
-                                <div className="text-center px-6 py-2 bg-slate-50 rounded-xl border border-slate-200">
-                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Позицій</div>
-                                    <div className="text-2xl font-black text-slate-800">{mappedItems.length}</div>
+                            <div className="bg-white px-5 py-3 flex items-center justify-between border-b border-slate-100 flex-shrink-0">
+                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Позиції специфікації</span>
+                                <div className="text-center px-4 py-1.5 bg-slate-50 rounded-xl border border-slate-200">
+                                    <span className="text-xs font-bold text-slate-400 mr-2">Всього:</span>
+                                    <span className="text-lg font-black text-slate-800">{mappedItems.length}</span>
                                 </div>
                             </div>
                             <div className="overflow-y-auto custom-scrollbar flex-1 bg-slate-50/50">
@@ -447,8 +439,13 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
                                             const hasError = !item.nomenclature_id;
                                             return (
                                                 <tr key={item.id} className={`transition-colors ${hasError ? 'bg-red-50/30' : 'bg-white hover:bg-slate-50'}`}>
-                                                    <td className="px-4 py-4 align-middle border-r border-dashed border-slate-200">
-                                                        <div className="text-sm font-bold text-slate-700 leading-tight mb-1">{item.original_name}</div>
+                                                    <td className="px-4 py-3 align-middle border-r border-dashed border-slate-200">
+                                                        <input
+                                                            type="text"
+                                                            value={item.original_name}
+                                                            onChange={e => { const newArr = [...mappedItems]; newArr[index].original_name = e.target.value; setMappedItems(newArr); }}
+                                                            className="w-full text-sm font-medium text-slate-700 bg-transparent border-0 border-b border-dashed border-slate-200 focus:border-indigo-400 outline-none py-1 leading-tight"
+                                                        />
                                                     </td>
                                                     <td className="px-2 py-4 align-middle border-r border-slate-200 text-center">
                                                         <div className="inline-flex items-center gap-1 bg-slate-100 px-2 py-1 rounded border border-slate-200">
@@ -483,7 +480,7 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
     );
 }
 
-function SpecificationSummaryWidget({ installationId, taskId, refreshTrigger }) {
+function SpecificationSummaryWidget({ installationId, taskId, refreshTrigger, nomenclatures = [] }) {
     const [specData, setSpecData] = useState(null);
     const [loading, setLoading] = useState(true);
 
@@ -563,16 +560,26 @@ function SpecificationSummaryWidget({ installationId, taskId, refreshTrigger }) 
             <div className="p-5">
                 <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Всі завантажені позиції ({totalItems})</div>
                 <div className="max-h-[400px] overflow-y-auto custom-scrollbar pr-2 border border-slate-100 rounded-xl p-3 bg-slate-50/30">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
-                        {items.map(item => (
-                            <div key={item.id} className="flex justify-between items-center text-xs py-2 border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors px-2 rounded">
-                                <span className="font-medium text-slate-700 truncate pr-2" title={item.nomenclature?.name || item.original_name}>
-                                    {item.nomenclature?.name || item.original_name || 'Невідома позиція'} 
-                                    {item.nomenclature?.brand && <span className="text-slate-400 ml-1">({item.nomenclature.brand})</span>}
-                                </span>
-                                <span className="font-bold text-slate-900 shrink-0 bg-white border border-slate-200 shadow-sm px-2.5 py-1 rounded">{item.quantity} шт</span>
-                            </div>
-                        ))}
+                    <div className="flex flex-col gap-1">
+                        {items.map(item => {
+                            const nomEntry = nomenclatures.find(n => n.id === item.nomenclature?.id);
+                            const categoryPath = nomEntry?.categoryPath || null;
+                            const displayName = item.nomenclature?.name || item.original_name || 'Невідома позиція';
+                            return (
+                                <div key={item.id} className="flex justify-between items-start text-xs py-2 border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors px-2 rounded gap-3">
+                                    <div className="flex flex-col flex-1 min-w-0">
+                                        {categoryPath && (
+                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider truncate">{categoryPath}</span>
+                                        )}
+                                        <span className="font-medium text-slate-800 leading-tight">{displayName}</span>
+                                        {item.nomenclature?.brand && (
+                                            <span className="text-[10px] text-slate-400">{item.nomenclature.brand}</span>
+                                        )}
+                                    </div>
+                                    <span className="font-bold text-slate-900 shrink-0 bg-white border border-slate-200 shadow-sm px-2.5 py-1 rounded whitespace-nowrap">{item.quantity} шт</span>
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
             </div>
@@ -683,13 +690,6 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
     }
   };
 
-  const handleOcrFileSelect = (e) => {
-    if (e.target.files && e.target.files[0]) {
-        setOcrFile(e.target.files[0]);
-    }
-    e.target.value = '';
-  };
-
   const removePhoto = (index) => {
     setSelectedFiles((prev) => {
         const item = prev[index];
@@ -734,17 +734,27 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
                   <EmployeeSelect label="Відповідальний" employees={employees} selectedId={assignedEmpId} onSelect={setAssignedEmpId} />
                   
                   {isComplectationTask ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 h-full">
-                        <button onClick={() => ocrFileInputRef.current?.click()} className="w-full h-full min-h-[60px] py-3 bg-white border-2 border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-400 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
-                            <div className="flex items-center gap-1"><FaMagic className="text-indigo-400 text-xs" /><FaFilePdf className="text-red-500 text-xl" /></div>
-                            <span>Оцифрувати PDF</span>
+                    <div className="h-full">
+                        <button onClick={() => ocrFileInputRef.current?.click()} className="w-full h-full min-h-[70px] py-3 bg-white border-2 border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-400 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
+                            <div className="flex items-center gap-1.5"><FaMagic className="text-indigo-400 text-sm" /><FaFilePdf className="text-red-500 text-2xl" /></div>
+                            <span>Завантажити специфікацію (PDF)</span>
+                            <span className="text-[10px] font-medium text-slate-400">Оцифрування + збереження</span>
                         </button>
-                        <input type="file" accept=".pdf" ref={ocrFileInputRef} onChange={handleOcrFileSelect} className="hidden" />
-
-                        <button onClick={() => fileInputRef.current?.click()} className="w-full h-full min-h-[60px] py-3 bg-indigo-50/50 border-2 border-dashed border-indigo-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-300 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
-                            <FaUpload className="text-xl opacity-70" />
-                            <span className="text-center">Прикріпити файл</span>
-                        </button>
+                        <input
+                            type="file"
+                            accept=".pdf"
+                            ref={ocrFileInputRef}
+                            onChange={(e) => {
+                                if (e.target.files && e.target.files[0]) {
+                                    const f = e.target.files[0];
+                                    // Add to selectedFiles so it gets saved as attachment too
+                                    setSelectedFiles(prev => [...prev, { file: f, preview: null, isImage: false }]);
+                                    setOcrFile(f);
+                                }
+                                e.target.value = '';
+                            }}
+                            className="hidden"
+                        />
                     </div>
                   ) : (
                     canUploadPhotos && (
@@ -796,7 +806,7 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
 
       {isComplectationTask && (
           <div className="w-full">
-              <SpecificationSummaryWidget installationId={installationId} taskId={task.id} refreshTrigger={task.history.length} />
+              <SpecificationSummaryWidget installationId={installationId} taskId={task.id} refreshTrigger={task.history.length} nomenclatures={nomenclatures} />
           </div>
       )}
 
@@ -807,20 +817,21 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
               taskId={task.id}
               nomenclatures={nomenclatures}
               onClose={() => setOcrFile(null)}
-              onSuccess={(processedFile) => {
+              onSuccess={() => {
                   setOcrFile(null);
                   const finalStatus = AUTO_STATUS_MAP[task.id] || "done";
                   setNewStatus(finalStatus);
                   if (currentUserEmpId) setAssignedEmpId(currentUserEmpId);
 
-                  // Відправляємо все на сервер однією дією
+                  // PDF вже є в selectedFiles — передаємо їх разом зі статусом
                   onAddUpdate(task.id, {
                       status: finalStatus,
                       comment: "✅ Специфікацію успішно оцифровано, перевірено та затверджено.",
                       photos: [],
-                      rawFiles: [processedFile],
+                      rawFiles: selectedFiles.map(f => f.file),
                       assigned_to: currentUserEmpId || assignedEmpId
                   });
+                  setSelectedFiles([]);
               }}
           />
       )}
