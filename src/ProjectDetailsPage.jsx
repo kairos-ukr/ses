@@ -3,16 +3,16 @@ import { useParams, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaArrowLeft, FaSave, FaEdit, FaUsers, FaMapMarkerAlt,
-  FaBolt, FaMoneyBillWave, FaCheckCircle, FaTimes, FaCheck,
-  FaCommentDots, FaPhone, FaStickyNote, FaHandshake, FaFileAlt, FaTools, 
+  FaBolt, FaCheckCircle, FaTimes, FaCheck,
+  FaCommentDots, FaPhone, FaHandshake, FaFileAlt, FaTools, 
   FaExclamationTriangle, FaCalendarAlt, FaGlobe, FaChevronDown, FaChevronUp,
-  FaClock
+  FaClock, FaUniversity, FaSearch
 } from "react-icons/fa";
 
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
 
-// Імпорт модалки
+// Імпорт компонентів
 import AdditionalInfoModal from "./AdditionalInfoModal";
 import ProjectDocuments from "./ProjectDocumentsPage";
 import ProjectWorkflow from "./PWT"
@@ -35,28 +35,28 @@ const Toast = ({ message, type = 'success', isVisible, onClose }) => {
   }, [isVisible, onClose]);
 
   const styles = {
-    success: 'bg-green-600 text-white',
+    success: 'bg-emerald-600 text-white',
     error: 'bg-red-600 text-white',
-    info: 'bg-blue-600 text-white',
+    info: 'bg-indigo-600 text-white',
   };
   
   return (
     <AnimatePresence>
       {isVisible && (
         <motion.div
-          initial={{ opacity: 0, x: 300 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 300 }}
-          className="fixed top-4 right-4 z-[100] max-w-[90vw]"
+          initial={{ opacity: 0, y: -20, x: '-50%' }}
+          animate={{ opacity: 1, y: 0, x: '-50%' }}
+          exit={{ opacity: 0, y: -20, x: '-50%' }}
+          className="fixed top-6 left-1/2 z-[100] min-w-[300px]"
         >
-          <div className={`${styles[type]} rounded-lg shadow-lg p-4 min-w-[280px] border border-white/10`}>
+          <div className={`${styles[type]} rounded-2xl shadow-2xl p-4 border border-white/10 flex items-center justify-between`}>
             <div className="flex items-center space-x-3">
               {type === 'success' ? <FaCheck /> : <FaExclamationTriangle />}
-              <span className="font-medium text-sm">{message}</span>
-              <button onClick={onClose} className="ml-auto text-white/80 hover:text-white">
-                <FaTimes />
-              </button>
+              <span className="font-bold text-sm">{message}</span>
             </div>
+            <button onClick={onClose} className="ml-4 text-white/80 hover:text-white transition-colors">
+              <FaTimes />
+            </button>
           </div>
         </motion.div>
       )}
@@ -78,9 +78,8 @@ export default function ProjectDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   
-  // Додано стейт для списку додаткової інформації
   const [additionalInfoList, setAdditionalInfoList] = useState([]);
-  const [isInfoExpanded, setIsInfoExpanded] = useState(true); // Для згортання/розгортання блоку
+  const [isInfoExpanded, setIsInfoExpanded] = useState(true); 
 
   const [currentUser, setCurrentUser] = useState(null);
   const [formData, setFormData] = useState({});
@@ -111,7 +110,6 @@ export default function ProjectDetailPage() {
   const loadProjectData = useCallback(async () => {
       setLoading(true);
       try {
-        // 1. Завантаження основного проекту
         const { data: projectData, error: projectError } = await supabase
           .from('installations')
           .select(`
@@ -133,13 +131,12 @@ export default function ProjectDetailPage() {
         }
         
         setProject(projectData);
-        setFormData(projectData);
+        setFormData(projectData); // Тут зберігається і об'єкт, і вкладений client
         
         if (projectData.responsible_employee) {
           setEmployeeSearch(`${projectData.responsible_employee.name} (ID: ${projectData.responsible_employee.custom_id})`);
         }
 
-        // 2. Завантаження історії додаткової інформації (НОВА ЛОГІКА)
         const { data: infoData, error: infoError } = await supabase
             .from('project_additional_info')
             .select('*')
@@ -160,7 +157,6 @@ export default function ProjectDetailPage() {
 
   useEffect(() => {
     loadProjectData();
-    
     const loadEmployees = async () => {
         const { data } = await supabase.from('employees').select('*').order('name');
         setEmployees(data || []);
@@ -168,7 +164,6 @@ export default function ProjectDetailPage() {
     loadEmployees();
   }, [loadProjectData]);
 
-  // Функція оновлення списку після додавання коментаря (передається в модалку)
   const refreshAdditionalInfo = async () => {
       const { data } = await supabase
             .from('project_additional_info')
@@ -185,7 +180,7 @@ export default function ProjectDetailPage() {
     setEmployeeSearch(project.responsible_employee ? `${project.responsible_employee.name} (ID: ${project.responsible_employee.custom_id})` : '');
   };
 
-const handleSave = async () => {
+  const handleSave = async () => {
     if (!canEdit) {
       showToast('У вас немає прав на редагування', 'error');
       return;
@@ -193,43 +188,48 @@ const handleSave = async () => {
 
     setSaving(true);
     try {
-      const cost = parseFloat(formData.total_cost || 0);
-      const paid = parseFloat(formData.paid_amount || 0);
-      let payStatus = 'pending';
-      if (cost > 0 && paid >= cost) payStatus = 'paid';
-      else if (paid > 0) payStatus = 'partial';
+      // 1. Оновлення даних Об'єкта (Installations)
+      const instUpdates = {};
+      const ignoredInstKeys = ['client', 'responsible_employee', 'project_stages', 'id', 'created_at', 'updated_at', 'client_id', 'topic_updated'];
 
-      const currentData = { ...formData, payment_status: payStatus };
-      const updates = {};
-      const ignoredKeys = ['client', 'responsible_employee', 'project_stages', 'id', 'created_at', 'updated_at', 'client_id', 'topic_updated']; // Додаємо topic_updated сюди, щоб не порівнювати його зі старим значенням
-
-      // Перевіряємо, що змінилось
-      Object.keys(currentData).forEach(key => {
-        if (ignoredKeys.includes(key)) return;
-        const oldValue = project[key];
-        const newValue = currentData[key];
-        // Порівнюємо значення
-        if (String(oldValue) !== String(newValue)) {
-          updates[key] = newValue;
+      Object.keys(formData).forEach(key => {
+        if (ignoredInstKeys.includes(key)) return;
+        if (String(project[key] || '') !== String(formData[key] || '')) {
+          instUpdates[key] = formData[key];
         }
       });
 
-      // Примусово оновлюємо статус оплати та час
-      updates.payment_status = payStatus;
-      updates.updated_at = new Date().toISOString();
-      
-      // === ГОЛОВНА ЗМІНА ТУТ ===
-      // Якщо є хоч якісь зміни, ставимо прапорець для бота
-      if (Object.keys(updates).length > 0) {
-          updates.topic_updated = true; // <--- Додаємо цей рядок
-
-          const { error } = await supabase
-            .from('installations')
-            .update(updates)
-            .eq('custom_id', id);
+      let instUpdated = false;
+      if (Object.keys(instUpdates).length > 0) {
+          instUpdates.topic_updated = true;
+          instUpdates.updated_at = new Date().toISOString();
+          const { error } = await supabase.from('installations').update(instUpdates).eq('custom_id', id);
           if (error) throw error;
-      } else {
-         // Якщо змін не було, можна просто вийти або повідомити користувача
+          instUpdated = true;
+      }
+
+      // 2. Оновлення даних Клієнта (Clients)
+      const clientUpdates = {};
+      const ignoredClientKeys = ['id', 'created_at', 'updated_at', 'custom_id'];
+      
+      if (formData.client) {
+          Object.keys(formData.client).forEach(key => {
+              if (ignoredClientKeys.includes(key)) return;
+              if (String(project.client[key] || '') !== String(formData.client[key] || '')) {
+                  clientUpdates[key] = formData.client[key];
+              }
+          });
+      }
+
+      let clientUpdated = false;
+      if (Object.keys(clientUpdates).length > 0) {
+          clientUpdates.updated_at = new Date().toISOString();
+          const { error } = await supabase.from('clients').update(clientUpdates).eq('custom_id', project.client.custom_id);
+          if (error) throw error;
+          clientUpdated = true;
+      }
+
+      if (!instUpdated && !clientUpdated) {
          showToast('Немає змін для збереження', 'info');
          setIsEditing(false);
          setSaving(false);
@@ -238,11 +238,11 @@ const handleSave = async () => {
       
       showToast('Зміни успішно збережено!', 'success');
       setIsEditing(false);
-      // Оновлюємо локальний стейт
       setProject({ 
           ...project, 
-          ...updates, 
-          responsible_employee: employees.find(e => e.custom_id === updates.responsible_emp_id) || project.responsible_employee 
+          ...instUpdates, 
+          client: { ...project.client, ...clientUpdates },
+          responsible_employee: employees.find(e => e.custom_id === (instUpdates.responsible_emp_id || project.responsible_emp_id)) || project.responsible_employee 
       });
       
     } catch (error) {
@@ -268,10 +268,8 @@ const handleSave = async () => {
   const formatDateTime = (dateStr) => {
       if (!dateStr) return '';
       const date = new Date(dateStr);
-      return date.toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      return date.toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
-  
-  const formatCost = (cost) => cost != null ? `$${Number(cost).toLocaleString('en-US')}` : '—';
   
   let locationLink = project?.gps_link;
   if (!locationLink && project?.client?.oblast && project?.client?.populated_place) {
@@ -281,10 +279,14 @@ const handleSave = async () => {
 
   const responsiblePhone = project?.responsible_employee?.phone || project?.responsible_employee?.contact_phone || '—';
 
+  // --- СТИЛІ ІНПУТІВ ДЛЯ РЕДАГУВАННЯ ---
+  const inputClass = "w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none transition-all";
+  const labelClass = "text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1.5";
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center">
-        <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
   }
@@ -292,11 +294,11 @@ const handleSave = async () => {
   if (!project) return null;
 
   return (
-    <div className="min-h-screen bg-slate-100 pb-20 font-sans text-slate-800">
+    <div className="min-h-screen bg-slate-50 pb-20 font-sans text-slate-800">
       <Toast message={toast.message} type={toast.type} isVisible={toast.isVisible} onClose={hideToast} />
 
       {/* HEADER */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             
@@ -304,36 +306,31 @@ const handleSave = async () => {
             <div className="flex items-center gap-4">
                 <button 
                     onClick={() => {
-                        // Якщо користувач прийшов з іншої сторінки нашого додатку — повертаємо його туди ж (навіть на вкладку Партнери)
-                        if (window.history.state && window.history.state.idx > 0) {
-                        navigate(-1);
-                        } else {
-                        // Якщо він відкрив пряме посилання в новій вкладці, то історії немає — кидаємо на головний список
-                        navigate('/installations');
-                        }
+                        if (window.history.state && window.history.state.idx > 0) navigate(-1);
+                        else navigate('/installations');
                     }} 
-                    className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition"
+                    className="p-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-full text-slate-500 transition-colors"
                 >
                     <FaArrowLeft />
                 </button>
                <div>
-                  <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                  <h1 className="text-2xl font-extrabold text-slate-900 flex items-center gap-3">
                     {isEditing ? (
                       <input
                         type="text"
                         value={formData.name ?? ""}
                         onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                         placeholder={`Об'єкт #${project.custom_id}`}
-                        className="w-full max-w-[520px] bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400"
+                        className="w-full max-w-[500px] bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 focus:bg-white"
                       />
                     ) : (
                       <span>{project.name || `Об'єкт #${project.custom_id}`}</span>
                     )}
-                    <span className="text-sm font-normal text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
+                    <span className="text-sm font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
                         #{project.custom_id}
                     </span>
                   </h1>
-                  <p className="text-sm text-slate-500 mt-1">
+                  <p className="text-sm font-medium text-slate-500 mt-1">
                     {project.client?.company_name || project.client?.name} • {project.client?.oblast}
                   </p>
                </div>
@@ -342,25 +339,25 @@ const handleSave = async () => {
             {/* Actions */}
             <div className="flex items-center gap-3">
                <button 
-                  className="px-4 py-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 rounded-lg font-medium text-sm flex items-center gap-2 transition shadow-sm"
+                  className="px-5 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors shadow-sm"
                   onClick={() => setIsModalOpen(true)}
                >
-                  <FaCommentDots className="text-indigo-500"/> Написати коментар
+                  <FaCommentDots className="text-indigo-500"/> Додати запис
                </button>
                
                {canEdit && (
                  isEditing ? (
                     <>
-                      <button onClick={handleCancel} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 rounded-lg font-medium text-sm transition shadow-sm">
+                      <button onClick={handleCancel} className="px-5 py-2.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">
                         Скасувати
                       </button>
-                      <button onClick={handleSave} disabled={saving} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium text-sm flex items-center gap-2 shadow-sm transition">
+                      <button onClick={handleSave} disabled={saving} className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm flex items-center gap-2 shadow-md shadow-emerald-200 transition-all active:scale-95 disabled:opacity-50">
                         {saving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <FaSave />}
-                        Зберегти
+                        Зберегти зміни
                       </button>
                     </>
                  ) : (
-                    <button onClick={() => setIsEditing(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm flex items-center gap-2 shadow-sm transition">
+                    <button onClick={() => setIsEditing(true)} className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-sm flex items-center gap-2 shadow-md shadow-slate-200 transition-all active:scale-95">
                        <FaEdit /> Редагувати
                     </button>
                  )
@@ -369,170 +366,151 @@ const handleSave = async () => {
           </div>
 
           {/* TABS NAVIGATION */}
-          <div className="flex items-center gap-8 mt-6 border-b border-gray-200">
+          <div className="flex items-center gap-8 mt-6 border-b border-slate-100">
              {['general', 'documents', 'workflow'].map((tab) => (
                 <button 
                     key={tab}
                     onClick={() => setActiveTab(tab)}
-                    className={`pb-3 px-1 text-sm font-bold flex items-center gap-2 transition-colors relative 
-                        ${activeTab === tab ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
+                    className={`pb-3 px-1 text-sm font-extrabold flex items-center gap-2 transition-all relative 
+                        ${activeTab === tab ? 'text-indigo-600 border-b-[3px] border-indigo-600' : 'text-slate-400 hover:text-slate-700'}`}
                 >
                     {tab === 'general' && <FaBolt />}
                     {tab === 'documents' && <FaFileAlt />}
                     {tab === 'workflow' && <FaTools />}
-                    {tab === 'general' ? 'Основна' : tab === 'documents' ? 'Документи' : 'Хід роботи'}
+                    {tab === 'general' ? 'Основна інформація' : tab === 'documents' ? 'Документи' : 'Етапи та задачі'}
                 </button>
              ))}
           </div>
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto p-4 sm:p-6">
+      <main className="max-w-[1600px] mx-auto p-4 sm:p-6 lg:p-8">
         
         {activeTab === 'general' && (
-           <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} className="grid grid-cols-1 lg:grid-cols-12 gap-8">
               
-              {/* LEFT COLUMN (Client, Finance, Additional Info) - Spans 4 columns on large screens */}
+              {/* LEFT COLUMN (Client & Additional Info) */}
               <div className="lg:col-span-4 space-y-6">
                  
                  {/* CLIENT CARD */}
-                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                    <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50/50">
-                       <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
-                          <FaUsers className="text-gray-500"/> Клієнт
+                 <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                       <h3 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
+                          <FaUsers className="text-indigo-500"/> Інформація клієнта
                        </h3>
                        {project.client?.is_subcontract && (
-                         <span className="bg-orange-100 text-orange-800 text-xs px-2 py-1 rounded-full font-bold border border-orange-200 flex items-center gap-1">
-                            <FaHandshake/> {project.client.contractor_company}
+                         <span className="bg-orange-50 text-orange-600 text-[10px] px-2.5 py-1 rounded-lg font-bold border border-orange-200 flex items-center gap-1 uppercase tracking-wider">
+                            <FaHandshake size={12}/> {project.client.contractor_company}
                          </span>
                        )}
                     </div>
                     
                     <div className="p-6 grid gap-y-5">
-                        <div>
-                            <span className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Контактна особа</span>
-                            <p className="text-base font-medium text-gray-900">{project.client?.name}</p>
-                        </div>
-                        <div>
-                            <span className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Компанія</span>
-                            <p className="text-base font-medium text-gray-900">{project.client?.company_name || '—'}</p>
-                        </div>
-                        <div>
-                            <span className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Телефон</span>
-                            <a href={`tel:${project.client?.phone}`} className="text-indigo-600 hover:underline font-medium flex items-center gap-2">
-                               <FaPhone className="text-sm"/> {project.client?.phone || '—'}
-                            </a>
-                        </div>
-                         <div>
-                            <span className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Адреса об'єкта</span>
-                            <p className="text-gray-700 flex items-start gap-2">
-                                <FaMapMarkerAlt className="text-gray-400 mt-1 shrink-0"/>
-                                <span>{project.client?.oblast}, {project.client?.populated_place}</span>
-                            </p>
-                        </div>
-                        {project.client?.notes && (
-                            <div className="mt-2">
-                                <span className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Примітки клієнта</span>
-                                <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-100 text-sm text-yellow-800 italic">
-                                    {project.client.notes}
-                                </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="col-span-2">
+                                <label className={labelClass}>Контактна особа</label>
+                                {isEditing ? (
+                                    <input type="text" value={formData.client?.name || ''} onChange={e => setFormData({...formData, client: {...formData.client, name: e.target.value}})} className={inputClass} />
+                                ) : (
+                                    <p className="text-base font-bold text-slate-900">{project.client?.name}</p>
+                                )}
                             </div>
-                        )}
-                    </div>
-                 </div>
+                            <div className="col-span-2 sm:col-span-1">
+                                <label className={labelClass}>Компанія (ФОП)</label>
+                                {isEditing ? (
+                                    <input type="text" value={formData.client?.company_name || ''} onChange={e => setFormData({...formData, client: {...formData.client, company_name: e.target.value}})} className={inputClass} />
+                                ) : (
+                                    <p className="text-sm font-bold text-slate-800">{project.client?.company_name || '—'}</p>
+                                )}
+                            </div>
+                            <div className="col-span-2 sm:col-span-1">
+                                <label className={labelClass}>Телефон</label>
+                                {isEditing ? (
+                                    <input type="tel" value={formData.client?.phone || ''} onChange={e => setFormData({...formData, client: {...formData.client, phone: e.target.value}})} className={inputClass} />
+                                ) : (
+                                    <a href={`tel:${project.client?.phone}`} className="text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-2 text-sm bg-indigo-50 w-fit px-3 py-1.5 rounded-lg border border-indigo-100 transition-colors">
+                                       <FaPhone className="text-xs"/> {project.client?.phone || '—'}
+                                    </a>
+                                )}
+                            </div>
+                            <div className="col-span-2 sm:col-span-1">
+                                <label className={labelClass}>Область</label>
+                                {isEditing ? (
+                                    <input type="text" value={formData.client?.oblast || ''} onChange={e => setFormData({...formData, client: {...formData.client, oblast: e.target.value}})} className={inputClass} />
+                                ) : (
+                                    <p className="text-sm font-bold text-slate-800">{project.client?.oblast || '—'}</p>
+                                )}
+                            </div>
+                            <div className="col-span-2 sm:col-span-1">
+                                <label className={labelClass}>Нас. пункт</label>
+                                {isEditing ? (
+                                    <input type="text" value={formData.client?.populated_place || ''} onChange={e => setFormData({...formData, client: {...formData.client, populated_place: e.target.value}})} className={inputClass} />
+                                ) : (
+                                    <p className="text-sm font-bold text-slate-800">{project.client?.populated_place || '—'}</p>
+                                )}
+                            </div>
+                        </div>
 
-                 {/* FINANCE CARD */}
-                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                    <div className="px-6 py-4 border-b border-gray-200 bg-gray-50/50">
-                        <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
-                            <FaMoneyBillWave className="text-gray-500"/> Фінанси
-                        </h3>
-                    </div>
-                    
-                    <div className="p-6">
-                        <div className="grid grid-cols-2 gap-6 mb-6">
-                            <div>
-                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Загальна вартість</label>
-                                {isEditing ? (
-                                    <input type="number" step="0.01" value={formData.total_cost || ''} onChange={e => setFormData({...formData, total_cost: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500" />
-                                ) : (
-                                    <p className="text-lg font-bold text-gray-900">{formatCost(project.total_cost)}</p>
-                                )}
-                            </div>
-                             <div>
-                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Сплачено</label>
-                                {isEditing ? (
-                                    <input type="number" step="0.01" value={formData.paid_amount || ''} onChange={e => setFormData({...formData, paid_amount: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500" />
-                                ) : (
-                                    <p className="text-lg font-bold text-green-600">{formatCost(project.paid_amount)}</p>
-                                )}
-                            </div>
-                        </div>
-                        
                         <div>
-                            <div className="flex justify-between mb-1 text-xs font-medium text-gray-500">
-                                 <span>Прогрес оплати</span>
-                                 <span>{((project.paid_amount || 0) / (project.total_cost || 1) * 100).toFixed(0)}%</span>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
-                                <div 
-                                    className="bg-green-500 h-2.5 rounded-full transition-all duration-500" 
-                                    style={{ width: `${Math.min(((project.paid_amount || 0) / (project.total_cost || 1)) * 100, 100)}%` }}
-                                ></div>
-                            </div>
+                            <label className={labelClass}>Примітки клієнта</label>
+                            {isEditing ? (
+                                <textarea rows="3" value={formData.client?.notes || ''} onChange={e => setFormData({...formData, client: {...formData.client, notes: e.target.value}})} className={`${inputClass} resize-none`} placeholder="Додаткова інформація..."/>
+                            ) : (
+                                project.client?.notes ? (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 whitespace-pre-wrap">
+                                        {project.client.notes}
+                                    </div>
+                                ) : <p className="text-sm text-slate-400 italic">Немає приміток</p>
+                            )}
                         </div>
                     </div>
                  </div>
 
-                 {/* --- ADDITIONAL INFO BLOCK (HISTORY) --- */}
-                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                 {/* ADDITIONAL INFO BLOCK (HISTORY) */}
+                 <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
                     <div 
                         onClick={() => setIsInfoExpanded(!isInfoExpanded)} 
-                        className="px-6 py-4 border-b border-gray-200 bg-gray-50/50 flex justify-between items-center cursor-pointer hover:bg-gray-100 transition"
+                        className="px-6 py-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center cursor-pointer hover:bg-slate-100 transition-colors"
                     >
-                        <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
-                            <FaCommentDots className="text-indigo-600"/> 
-                            Додаткова інформація ({additionalInfoList.length})
+                        <h3 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
+                            <FaCommentDots className="text-indigo-500"/> 
+                            Робочі записи ({additionalInfoList.length})
                         </h3>
-                        {isInfoExpanded ? <FaChevronUp className="text-gray-400 text-sm"/> : <FaChevronDown className="text-gray-400 text-sm"/>}
+                        <div className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-400 shadow-sm">
+                            {isInfoExpanded ? <FaChevronUp size={12}/> : <FaChevronDown size={12}/>}
+                        </div>
                     </div>
                     
                     <AnimatePresence>
                         {isInfoExpanded && (
-                            <motion.div 
-                                initial={{ height: 0, opacity: 0 }} 
-                                animate={{ height: "auto", opacity: 1 }} 
-                                exit={{ height: 0, opacity: 0 }}
-                            >
-                                <div className="p-6 bg-white space-y-4 max-h-[500px] overflow-y-auto">
+                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
+                                <div className="p-6 bg-white space-y-4 max-h-[500px] overflow-y-auto custom-scrollbar">
                                     {additionalInfoList.length === 0 ? (
-                                        <div className="text-center text-gray-400 text-sm italic py-4">
-                                            Історія повідомлень порожня
+                                        <div className="text-center text-slate-400 text-sm font-medium py-8 border-2 border-dashed border-slate-100 rounded-xl bg-slate-50/50">
+                                            Записів ще немає.
                                         </div>
                                     ) : (
                                         additionalInfoList.map((info) => (
-                                            <div key={info.id} className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                                                <div className="flex justify-between items-start mb-2">
+                                            <div key={info.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 hover:border-indigo-200 hover:bg-indigo-50/30 transition-colors">
+                                                <div className="flex justify-between items-start mb-2.5">
                                                     <span className="font-bold text-slate-800 text-sm">
-                                                        {info.author_name || 'Невідомий користувач'}
+                                                        {info.author_name || 'Система'}
                                                     </span>
-                                                    <span className="text-xs text-gray-400 font-medium">
+                                                    <span className="text-[10px] font-bold text-slate-400 bg-white px-2 py-0.5 rounded border border-slate-100 shadow-sm">
                                                         {formatDateTime(info.created_at)}
                                                     </span>
                                                 </div>
-                                                
-                                                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed mb-3">
+                                                <p className="text-sm font-medium text-slate-600 whitespace-pre-wrap leading-relaxed mb-3">
                                                     {info.message_text}
                                                 </p>
-                                                
-                                                <div className="flex justify-end">
+                                                <div className="flex justify-end pt-2 border-t border-slate-100">
                                                     {info.is_sent_to_telegram ? (
-                                                        <span className="text-[11px] font-bold text-green-600 flex items-center gap-1.5">
-                                                            <FaCheckCircle className="text-sm"/> Надіслано в ТГ
+                                                        <span className="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
+                                                            <FaCheckCircle/> В Telegram
                                                         </span>
                                                     ) : (
-                                                        <span className="text-[11px] font-medium text-gray-400 flex items-center gap-1.5">
-                                                            <FaClock className="text-sm"/> Не надіслано
+                                                        <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
+                                                            <FaClock/> Тільки в CRM
                                                         </span>
                                                     )}
                                                 </div>
@@ -544,48 +522,46 @@ const handleSave = async () => {
                         )}
                     </AnimatePresence>
                  </div>
-                 {/* --- END ADDITIONAL INFO BLOCK --- */}
-
               </div>
 
-              {/* RIGHT COLUMN */}
+              {/* RIGHT COLUMN (Project Details) */}
               <div className="lg:col-span-8">
-                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                     <div className="px-6 py-4 border-b border-gray-200 bg-gray-50/50">
-                        <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
-                            <FaBolt className="text-gray-500"/> Деталі об'єкта
+                 <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                     <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                        <h3 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
+                            <FaTools className="text-indigo-500"/> Специфікація об'єкта
                         </h3>
                      </div>
 
-                 <div className="p-6 space-y-8">
+                 <div className="p-6 md:p-8 space-y-8">
                     {/* Responsible Person */}
-                    <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-2">Відповідальний за проект</label>
+                    <div className="pb-6 border-b border-slate-100">
+                        <label className={labelClass}>Відповідальний за проект (Менеджер)</label>
                         {isEditing ? (
                              <div className="relative max-w-md">
-                                  <input type="text" value={employeeSearch} onChange={e => { setEmployeeSearch(e.target.value); if (formData.responsible_emp_id) setFormData({...formData, responsible_emp_id: ''}); }} placeholder="Пошук працівника..." className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500" />
-                                  <FaPhone className="absolute right-3 top-2.5 text-gray-400" />
+                                  <input type="text" value={employeeSearch} onChange={e => { setEmployeeSearch(e.target.value); if (formData.responsible_emp_id) setFormData({...formData, responsible_emp_id: ''}); }} placeholder="Пошук працівника..." className={inputClass} />
+                                  <FaSearch className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" />
                                   {employeeSearch && filteredEmployeesMain.length > 0 && !formData.responsible_emp_id && (
-                                    <div className="absolute z-10 w-full bg-white border border-gray-200 rounded-md mt-1 shadow-lg max-h-48 overflow-y-auto">
+                                    <div className="absolute z-10 w-full bg-white border border-slate-200 rounded-xl mt-2 shadow-xl max-h-48 overflow-y-auto custom-scrollbar p-1">
                                       {filteredEmployeesMain.map(emp => (
-                                        <button key={emp.custom_id} type="button" onClick={() => handleMainEmployeeSelect(emp)} className="w-full px-4 py-2 text-left hover:bg-gray-50 border-b border-gray-100 text-sm text-gray-700">
-                                            {emp.name}
+                                        <button key={emp.custom_id} type="button" onClick={() => handleMainEmployeeSelect(emp)} className="w-full px-4 py-2.5 text-left hover:bg-indigo-50 rounded-lg text-sm font-bold text-slate-700 transition-colors mb-0.5">
+                                            {emp.name} <span className="text-[10px] text-slate-400 ml-2 bg-white border px-1.5 py-0.5 rounded">#{emp.custom_id}</span>
                                         </button>
                                       ))}
                                     </div>
                                   )}
                              </div>
                         ) : (
-                            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-lg border border-gray-200 max-w-md">
-                                <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold">
+                            <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-200 max-w-md shadow-sm">
+                                <div className="w-12 h-12 rounded-full bg-indigo-100 border border-indigo-200 flex items-center justify-center text-indigo-600 font-black text-lg">
                                     {project.responsible_employee?.name ? project.responsible_employee.name.charAt(0) : '?'}
                                 </div>
                                 <div>
-                                    <p className="text-base font-bold text-gray-900 leading-tight">
+                                    <p className="text-base font-extrabold text-slate-900">
                                         {project.responsible_employee?.name || 'Не призначено'}
                                     </p>
                                     {project.responsible_employee && (
-                                        <a href={`tel:${responsiblePhone}`} className="text-sm text-indigo-600 hover:underline flex items-center gap-1 mt-1 font-medium">
+                                        <a href={`tel:${responsiblePhone}`} className="text-sm font-bold text-slate-500 hover:text-indigo-600 flex items-center gap-1.5 mt-1 transition-colors">
                                             <FaPhone className="text-xs" /> {responsiblePhone}
                                         </a>
                                     )}
@@ -594,133 +570,147 @@ const handleSave = async () => {
                         )}
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-8">
                         {/* Status & Type */}
                         <div className="space-y-6">
                              <div>
-                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Статус проекту</label>
+                                <label className={labelClass}>Статус виконання</label>
                                 {isEditing ? (
-                                    <select value={formData.status || 'planning'} onChange={e => setFormData({...formData, status: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white focus:ring-indigo-500 focus:border-indigo-500">
+                                    <select value={formData.status || 'planning'} onChange={e => setFormData({...formData, status: e.target.value})} className={inputClass}>
                                         {Object.entries(PROJECT_STATUS_LABELS).map(([key, label]) => (
                                             <option key={key} value={key}>{label}</option>
                                         ))}
                                     </select>
                                 ) : (
-                                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-semibold border
-                                        ${project.status === 'completed' ? 'bg-green-50 text-green-700 border-green-200' : 
-                                          project.status === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 
-                                          project.status === 'on_hold' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' :
-                                          'bg-gray-50 text-gray-700 border-gray-200'}`}>
-                                        {project.status === 'completed' && <FaCheckCircle className="text-xs"/>}
+                                    <span className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-xl text-sm font-bold border shadow-sm
+                                        ${project.status === 'completed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 
+                                          project.status === 'in_progress' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 
+                                          project.status === 'on_hold' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                                          'bg-slate-50 text-slate-700 border-slate-200'}`}>
+                                        {project.status === 'completed' && <FaCheckCircle className="text-emerald-500"/>}
                                         {PROJECT_STATUS_LABELS[project.status] || project.status}
                                     </span>
                                 )}
                             </div>
                              <div>
-                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Тип станції</label>
+                                <label className={labelClass}>Клас станції</label>
                                 {isEditing ? (
-                                    <select value={formData.station_type || ''} onChange={e => setFormData({...formData, station_type: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white">
-                                        <option value="">—</option>
-                                        <option value="Мережева">Мережева</option>
-                                        <option value="Автономна">Автономна</option>
-                                        <option value="Гібридна">Гібридна</option>
+                                    <select value={formData.station_type || ''} onChange={e => setFormData({...formData, station_type: e.target.value})} className={inputClass}>
+                                        <option value="">Не вказано</option>
+                                        <option value="Мережева">Мережева (СЕС)</option>
+                                        <option value="Автономна">Автономна (АЕС)</option>
+                                        <option value="Гібридна">Гібридна (ГЕС)</option>
                                     </select>
                                 ) : (
-                                    <p className="text-base font-medium text-gray-900">{project.station_type || '—'}</p>
+                                    <p className="text-base font-bold text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 inline-block">{project.station_type || '—'}</p>
                                 )}
                             </div>
                              <div>
-                                 <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Тип монтажу</label>
+                                 <label className={labelClass}>Спосіб монтажу</label>
                                  {isEditing ? (
-                                    <select value={formData.mount_type || ''} onChange={e => setFormData({...formData, mount_type: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white">
-                                        <option value="">—</option>
-                                        <option value="Дахове кріплення (Скатний дах)">Дахове кріплення (Скатний дах)</option>
-                                        <option value="Наземне кріплення">Наземне кріплення</option>
-                                        <option value="Дахове кріплення (Плоский дах)">Дахове кріплення (Плоский дах)</option>
-                                        <option value="Трекерна система">Трекерна система</option>
-                                        <option value="Електромонтаж">Електромонтаж</option>
+                                    <select value={formData.mount_type || ''} onChange={e => setFormData({...formData, mount_type: e.target.value})} className={inputClass}>
+                                        <option value="">Не вказано</option>
+                                        <option value="Дахове кріплення (Скатний дах)">Дах (Скатний)</option>
+                                        <option value="Дахове кріплення (Плоский дах)">Дах (Плоский баласт)</option>
+                                        <option value="Наземне кріплення">Наземна конструкція</option>
+                                        <option value="Трекерна система">Трекер</option>
+                                        <option value="Електромонтаж">Тільки електромонтаж</option>
                                     </select>
                                  ) : (
-                                    <p className="text-base font-medium text-gray-900 truncate" title={project.mount_type}>{project.mount_type || '—'}</p>
+                                    <p className="text-base font-bold text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200">{project.mount_type || '—'}</p>
                                  )}
                             </div>
                         </div>
 
-                        {/* Technical Specs */}
+                        {/* Specs & Dates */}
                         <div className="space-y-6">
-                            <div className="flex gap-6">
+                            <div className="flex gap-4">
                                 <div className="flex-1">
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Потужність</label>
+                                    <label className={labelClass}>Потужність</label>
                                     {isEditing ? (
                                         <div className="relative">
-                                            <input type="number" step="0.1" value={formData.capacity_kw || ''} onChange={e => setFormData({...formData, capacity_kw: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm pr-8" />
-                                            <span className="absolute right-3 top-2 text-gray-500 text-sm">кВт</span>
+                                            <input type="number" step="0.1" value={formData.capacity_kw || ''} onChange={e => setFormData({...formData, capacity_kw: e.target.value})} className={`${inputClass} pr-12`} />
+                                            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">кВт</span>
                                         </div>
                                     ) : (
-                                        <p className="text-base font-medium text-gray-900">{project.capacity_kw ? `${project.capacity_kw} кВт` : '—'}</p>
+                                        <p className="text-base font-black text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{project.capacity_kw ? `${project.capacity_kw} кВт` : '—'}</p>
                                     )}
                                 </div>
                                 <div className="flex-1">
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Фази</label>
+                                    <label className={labelClass}>Мережа</label>
                                     {isEditing ? (
-                                        <select value={formData.quant_phase || ''} onChange={e => setFormData({...formData, quant_phase: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white">
+                                        <select value={formData.quant_phase || ''} onChange={e => setFormData({...formData, quant_phase: e.target.value})} className={inputClass}>
                                             <option value="">—</option>
                                             <option value="1">1 фаза</option>
                                             <option value="3">3 фази</option>
                                         </select>
                                     ) : (
-                                        <p className="text-base font-medium text-gray-900">{project.quant_phase ? `${project.quant_phase}ф` : '—'}</p>
+                                        <p className="text-base font-black text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{project.quant_phase ? `${project.quant_phase}ф` : '—'}</p>
                                     )}
                                 </div>
                             </div>
                             
-                            <div className="flex gap-6">
+                            <div className="flex gap-4">
                                  <div className="flex-1">
-                                     <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1 flex items-center gap-1"><FaCalendarAlt className="text-gray-400"/> Початок</label>
+                                     <label className={`${labelClass} flex items-center gap-1.5`}><FaCalendarAlt className="text-indigo-400"/> Старт</label>
                                      {isEditing ? (
-                                         <input type="date" value={formData.start_date || ''} onChange={e => setFormData({...formData, start_date: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                                         <input type="date" value={formData.start_date || ''} onChange={e => setFormData({...formData, start_date: e.target.value})} className={inputClass} />
                                      ) : (
-                                         <p className="text-base font-medium text-gray-900">{formatDate(project.start_date)}</p>
+                                         <p className="text-sm font-bold text-slate-800 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{formatDate(project.start_date)}</p>
                                      )}
                                 </div>
                                 <div className="flex-1">
-                                     <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1 flex items-center gap-1"><FaCalendarAlt className="text-gray-400"/> Завершення</label>
+                                     <label className={`${labelClass} flex items-center gap-1.5`}><FaCalendarAlt className="text-emerald-400"/> Фініш</label>
                                      {isEditing ? (
-                                         <input type="date" value={formData.end_date || ''} onChange={e => setFormData({...formData, end_date: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                                         <input type="date" value={formData.end_date || ''} onChange={e => setFormData({...formData, end_date: e.target.value})} className={inputClass} />
                                      ) : (
-                                         <p className="text-base font-medium text-gray-900">{formatDate(project.end_date)}</p>
+                                         <p className="text-sm font-bold text-slate-800 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{formatDate(project.end_date)}</p>
                                      )}
                                 </div>
                             </div>
 
                              <div>
-                                 <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">Маршрут до об'єкта</label>
+                                 <label className={labelClass}>Локація об'єкта (GPS)</label>
                                  {isEditing ? (
                                      <div className="relative">
-                                        <input type="url" placeholder="GPS посилання..." value={formData.gps_link || ''} onChange={e => setFormData({...formData, gps_link: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm pl-8" />
-                                        <FaGlobe className="absolute left-3 top-2.5 text-gray-400" />
+                                        <input type="url" placeholder="Вставте посилання з Google Maps..." value={formData.gps_link || ''} onChange={e => setFormData({...formData, gps_link: e.target.value})} className={`${inputClass} pl-10`} />
+                                        <FaGlobe className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                                      </div>
                                  ) : (
                                      locationLink ? (
-                                         <a href={locationLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-md text-sm font-medium text-indigo-600 hover:bg-gray-50 hover:border-gray-300 transition shadow-sm">
-                                             <FaMapMarkerAlt className="text-red-500"/> Відкрити на Google Maps
+                                         <a href={locationLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2.5 w-full justify-center px-4 py-3 bg-indigo-50 border border-indigo-200 rounded-xl text-sm font-bold text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 transition-colors shadow-sm">
+                                             <FaMapMarkerAlt className="text-red-500 text-lg"/> Відкрити на Google Maps
                                          </a>
-                                     ) : <span className="text-gray-400 text-sm">Не вказано</span>
+                                     ) : <p className="text-sm font-bold text-slate-400 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">Немає посилання</p>
                                  )}
                             </div>
                         </div>
                     </div>
 
-                    <div className="pt-4 border-t border-gray-100">
-                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-2">Технічні примітки</label>
-                        {isEditing ? (
-                            <textarea rows="3" value={formData.notes || ''} onChange={e => setFormData({...formData, notes: e.target.value})} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm resize-y focus:ring-indigo-500 focus:border-indigo-500" placeholder="Введіть примітки..." />
-                        ) : (
-                            <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 text-sm text-gray-700 whitespace-pre-wrap">
-                                {project.notes || 'Примітки відсутні.'}
-                            </div>
-                        )}
+                    {/* Організаційні деталі (Банк та Примітки) */}
+                    <div className="pt-6 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div>
+                            <label className={labelClass}>Банк / Реквізити</label>
+                            {isEditing ? (
+                                <input type="text" placeholder="Вкажіть назву банку..." value={formData.bank || ''} onChange={e => setFormData({...formData, bank: e.target.value})} className={inputClass} />
+                            ) : (
+                                <p className="text-base font-bold text-slate-800 flex items-center gap-3 bg-slate-50 px-4 py-3 rounded-xl border border-slate-200">
+                                    <FaUniversity className="text-slate-400"/> {project.bank || 'Не вказано'}
+                                </p>
+                            )}
+                        </div>
+                        <div>
+                            <label className={labelClass}>Технічні примітки</label>
+                            {isEditing ? (
+                                <textarea rows="2" value={formData.notes || ''} onChange={e => setFormData({...formData, notes: e.target.value})} className={`${inputClass} resize-y min-h-[50px]`} placeholder="Умови монтажу, складність тощо..." />
+                            ) : (
+                                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 whitespace-pre-wrap leading-relaxed">
+                                    {project.notes || <span className="italic opacity-70">Відсутні</span>}
+                                </div>
+                            )}
+                        </div>
                     </div>
+
                  </div>
                  </div>
               </div>
@@ -730,7 +720,7 @@ const handleSave = async () => {
         {/* --- TAB: DOCUMENTS --- */}
         {activeTab === 'documents' && (
            <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }}>
-               <ProjectDocuments projectId={id} />
+               <ProjectDocuments project={project} />
            </motion.div>
         )}
 
@@ -739,9 +729,9 @@ const handleSave = async () => {
             <motion.div
                 initial={{ opacity: 0, x: 10 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="-mx-4 sm:-mx-6 -mt-4 sm:-mt-6" // <-- прибирає відступи main, робить блок “впритул”
+                className="mt-2"
             >
-              <ProjectWorkflow project={project}  />
+              <ProjectWorkflow project={project} />
             </motion.div>
         )}
 
@@ -754,7 +744,7 @@ const handleSave = async () => {
             onClose={() => setIsModalOpen(false)}
             project={project}
             currentUser={currentUser}
-            onUpdate={refreshAdditionalInfo} // Передаємо функцію оновлення
+            onUpdate={refreshAdditionalInfo} 
             showToast={showToast}
         />
       )}

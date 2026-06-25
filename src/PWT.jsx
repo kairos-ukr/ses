@@ -2,22 +2,22 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FaCheck, FaCamera, FaClock, FaHistory, FaTimes,
-  FaChevronRight, FaMapMarkerAlt, FaBoxOpen, FaSolarPanel,
-  FaFileSignature, FaBroadcastTower, FaImage, FaExclamationTriangle,
+  FaChevronRight, FaChevronDown, FaMapMarkerAlt, FaBoxOpen, FaSolarPanel,
+  FaBroadcastTower, FaImage, FaExclamationTriangle,
   FaTools, FaTrash, FaPlus, FaSpinner, FaThumbtack, FaCheckCircle,
-  FaUserTie, FaSearch, FaArrowRight,
+  FaUserTie, FaSearch, FaArrowRight, FaClipboardList,
   FaFileInvoiceDollar, FaDraftingCompass, FaTruckLoading, FaHandPointer,
-  FaFileAlt, FaDownload
+  FaFileAlt, FaDownload, FaFilePdf
 } from "react-icons/fa";
 
-// ✅ ПІДПРАВ ШЛЯХИ ПІД СВІЙ ПРОЄКТ
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
+import SpecificationManager from "./SpecificationManager";
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 
 // ==================================================================================
-// 1. КОНФІГУРАЦІЯ
+// 1. КОНФІГУРАЦІЯ (БЕЗ "МЕРЕЖІ")
 // ==================================================================================
 
 const STAGE_GROUPS = [
@@ -27,25 +27,18 @@ const STAGE_GROUPS = [
   { key: "equipment", label: "Обладнання", icon: FaTruckLoading },
   { key: "complectation", label: "Комплектація", icon: FaBoxOpen },
   { key: "installation", label: "Монтаж", icon: FaSolarPanel },
-  { key: "grid_connection", label: "Мережа", icon: FaFileSignature },
   { key: "monitoring_setup", label: "Запуск", icon: FaBroadcastTower },
 ];
 
 const DETAILED_TASKS = {
-  tech_review: [
-    { id: "tech_review", title: "Проведення замірів" } 
-  ],
+  tech_review: [{ id: "tech_review", title: "Проведення замірів" }],
   project: [
-    { id: "project_design", title: "Розробка 3D візуалізації (Завантаження)" }, 
+    { id: "project_design", title: "Розробка 3D візуалізації" }, 
     { id: "project_approval", title: "Вибір та затвердження варіанту" },
-    { id: "tech_project", title: "Технічний проект" } // <-- НОВИЙ ЕТАП
+    { id: "tech_project", title: "Технічне креслення" }
   ],
-  proposal: [
-    { id: "commercial_proposal", title: "Комерційна пропозиція" } 
-  ],
-  equipment: [
-    { id: "equipment", title: "Закупівля обладнання" } 
-  ],
+  proposal: [{ id: "commercial_proposal", title: "Комерційна пропозиція" }],
+  equipment: [{ id: "equipment", title: "Закупівля обладнання" }],
   complectation: [
     { id: "complectation", title: "Комплектація матеріалів" }, 
     { id: "comp_protection", title: "Комплектація ел. захисту" } 
@@ -57,21 +50,19 @@ const DETAILED_TASKS = {
     { id: "inst_grounding", title: "Заземлення" },
     { id: "inst_inverter", title: "Підключення інвертора" }
   ],
-  grid_connection: [
-    { id: "grid_connection", title: "Заведення потужності" } 
-  ],
-  monitoring_setup: [
-    { id: "monitoring_setup", title: "Запуск станції" } 
-  ]
+  monitoring_setup: [{ id: "monitoring_setup", title: "Запуск станції" }]
 };
 
-// Етапи, де дозволено завантаження файлів (документів)
-const STAGES_WITH_UPLOADS = new Set([
-  "commercial_proposal",
-  "tech_project",
-  "complectation",
-  "comp_protection"
-]);
+const AUTO_STATUS_MAP = {
+  tech_review: "completed",
+  project_design: "created",
+  tech_project: "done",
+  commercial_proposal: "created",
+  complectation: "done",
+  comp_protection: "done"
+};
+
+const STAGES_WITH_UPLOADS = new Set(["commercial_proposal", "tech_project", "complectation", "comp_protection"]);
 
 const STATUS_CONFIG = {
   default: [
@@ -79,7 +70,6 @@ const STATUS_CONFIG = {
     { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" }, 
     { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" }, 
   ],
-  // Конфіг для Технічного проекту
   tech_project_group: [
     { key: "todo", label: "Не почато", color: "bg-slate-50 text-slate-500 border-slate-200" },
     { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
@@ -121,22 +111,11 @@ const STATUS_CONFIG = {
 };
 
 const ALL_STATUS_LABELS = {
-  waiting: "Очікуємо",
-  waiting_start: "Очікуємо старт",
-  not_started: "Не розпочато",
-  started: "В роботі",
-  created: "Зроблено",
-  arrived: "Прибуло",
-  done_on_site: "Виконали на виїзді",
-  completed: "Виконано",
-  todo: "Не почато",
-  in_progress: "В роботі",
-  done: "Виконано",
-  ordered: "Замовлено",
-  approved: "Погоджено",
-  waiting_client: "Очікуємо від клієнта",
-  selection_needed: "Очікує вибору",
-  selected: "Варіант обрано"
+  waiting: "Очікуємо", waiting_start: "Очікуємо старт", not_started: "Не розпочато",
+  started: "В роботі", created: "Зроблено", arrived: "Прибуло", done_on_site: "Виконали на виїзді",
+  completed: "Виконано", todo: "Не почато", in_progress: "В роботі", done: "Виконано",
+  ordered: "Замовлено", approved: "Погоджено", waiting_client: "Очікуємо від клієнта",
+  selection_needed: "Очікує вибору", selected: "Варіант обрано"
 };
 
 // ==================================================================================
@@ -145,15 +124,9 @@ const ALL_STATUS_LABELS = {
 
 const getStatusMeta = (stageGroupKey, statusKey, taskId = null) => {
   let config = STATUS_CONFIG.default;
-
-  // Спеціальний конфіг для Технічного Проекту
-  if (taskId === "tech_project") {
-    config = STATUS_CONFIG.tech_project_group;
-  } else if (STATUS_CONFIG[stageGroupKey]) {
-    config = STATUS_CONFIG[stageGroupKey];
-  } else if (stageGroupKey === "installation") {
-    config = STATUS_CONFIG.installation; 
-  }
+  if (taskId === "tech_project") config = STATUS_CONFIG.tech_project_group;
+  else if (STATUS_CONFIG[stageGroupKey]) config = STATUS_CONFIG[stageGroupKey];
+  else if (stageGroupKey === "installation") config = STATUS_CONFIG.installation; 
 
   const item = config.find(i => i.key === statusKey);
   if (item) return item;
@@ -162,225 +135,261 @@ const getStatusMeta = (stageGroupKey, statusKey, taskId = null) => {
   return { label, color: "bg-slate-100 text-slate-500 border-slate-200" };
 };
 
-const driveThumbUrl = (fileId, size = 240) =>
-  `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}-h${size}`;
-const driveViewUrl = (fileId) =>
-  `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w1600`;
-
-function isImageFile(file) {
-  return (file?.type || "").startsWith("image/");
-}
-
-// Приводимо значення до integer (custom_id працівника) або null
+const driveThumbUrl = (fileId, size = 400) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}-h${size}`;
+const driveViewUrl = (fileId) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w1600`;
+function isImageFile(file) { return (file?.type || "").startsWith("image/"); }
 function toIntOrNull(v) {
   if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : null;
+  const n = Number(v); return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+function getDocTypeLabel(stageKey) {
+  switch (stageKey) {
+    case "commercial_proposal": return "Комерційна пропозиція";
+    case "tech_project": return "Технічне рішення";
+    case "tech_review": return "Заміри";
+    case "project_design": return "3D Візуалізація";
+    default: return "Файли етапу";
+  }
 }
 
 async function uploadWorkflowFiles({ files, installationId, stageKey }) {
   if (!files || files.length === 0) return { links: [], fileIds: [] };
-
   const fd = new FormData();
   files.forEach((f) => fd.append("files", f));
   fd.append("object_number", String(installationId));
-  fd.append("doc_type", "Файли етапу"); // Універсальний тип
+  fd.append("doc_type", getDocTypeLabel(stageKey)); 
   if (stageKey) fd.append("stage_key", stageKey);
 
   const url = `${WORKFLOW_UPLOADER_URL}/workflow/upload`;
-
   const res = await fetch(url, { method: "POST", body: fd });
   let data;
   try { data = await res.json(); } catch { data = null; }
-
-  if (!res.ok || !data || data.status !== "success") {
-    const msg = (data && (data.message || data.detail)) || `Upload error (${res.status})`;
-    throw new Error(msg);
-  }
+  if (!res.ok || !data || data.status !== "success") throw new Error((data && (data.message || data.detail)) || `Upload error (${res.status})`);
 
   const filesArr = Array.isArray(data.files) ? data.files : [];
-  return {
-    links: filesArr.map(x => x?.webViewLink).filter(Boolean),
-    fileIds: filesArr.map(x => x?.fileId).filter(Boolean),
-  };
+  return { links: filesArr.map(x => x?.webViewLink).filter(Boolean), fileIds: filesArr.map(x => x?.fileId).filter(Boolean) };
 }
 
 const formatUkShort = (iso) => {
   if (!iso) return "";
-  return new Date(iso).toLocaleString("uk-UA", {
-    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"
-  });
+  return new Date(iso).toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 };
 
 async function resolveActorName({ user, employee }) {
   if (employee?.name) return employee.name;
-  let actorName = user?.email || "Невідомий";
   if (user?.id) {
     const { data } = await supabase.from("employees").select("name").eq("user_id", user.id).maybeSingle();
     if (data?.name) return data.name;
   }
-  return actorName;
+  return user?.email || "Невідомий";
+}
+
+const getEmployeeNameStr = (customId, employees) => {
+  if (!customId) return null;
+  const found = employees.find(e => String(e.custom_id) === String(customId));
+  return found?.name || customId;
+};
+
+// ==================================================================================
+// 3. СУПЕР-ВІДЖЕТ СПЕЦИФІКАЦІЇ (ДЛЯ КОМПЛЕКТАЦІЇ)
+// ==================================================================================
+
+function SpecificationSummaryWidget({ installationId }) {
+    const [specData, setSpecData] = useState(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchSpec = async () => {
+            if (!installationId) return;
+            try {
+                const { data, error } = await supabase
+                    .from('specifications')
+                    .select(`
+                        id, status, version, created_at,
+                        specification_items (
+                            id, quantity,
+                            nomenclature (name, brand)
+                        )
+                    `)
+                    .eq('installation_custom_id', installationId)
+                    .order('version', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (error && error.code !== 'PGRST116') throw error; 
+                setSpecData(data || null);
+            } catch (err) {
+                console.error("Помилка завантаження специфікації:", err);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchSpec();
+    }, [installationId]);
+
+    if (loading) return <div className="h-32 flex items-center justify-center text-slate-400"><FaSpinner className="animate-spin text-2xl" /></div>;
+
+    if (!specData || !specData.specification_items || specData.specification_items.length === 0) {
+        return (
+            <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl p-8 text-center w-full flex flex-col items-center justify-center">
+                <FaClipboardList className="text-4xl text-slate-300 mb-3" />
+                <h4 className="font-bold text-slate-600 text-sm mb-1">Специфікація порожня</h4>
+                <p className="text-xs text-slate-400 max-w-sm">Завантажте PDF-рахунок через менеджер специфікацій, щоб оцифрувати матеріали для цього об'єкту.</p>
+            </div>
+        );
+    }
+
+    const items = specData.specification_items;
+    const totalItems = items.length;
+    // Беремо перші 9 для широкого прев'ю (по 3 в ряд)
+    const previewItems = items.slice(0, 9);
+
+    return (
+        <div className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden w-full flex flex-col">
+            <div className="bg-indigo-50/50 border-b border-indigo-100 p-4 flex justify-between items-center">
+                <div>
+                    <h4 className="font-extrabold text-indigo-900 text-sm flex items-center gap-2">
+                        <FaClipboardList className="text-indigo-500" /> Оцифрована специфікація
+                    </h4>
+                    <div className="text-[10px] text-indigo-500/70 font-bold mt-0.5">ВЕРСІЯ {specData.version} • {new Date(specData.created_at).toLocaleDateString()}</div>
+                </div>
+                <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase tracking-wider border ${specData.status === 'confirmed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                    {specData.status === 'confirmed' ? 'Затверджено' : specData.status}
+                </div>
+            </div>
+            
+            <div className="p-5">
+                <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Завантажені позиції ({totalItems})</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
+                    {previewItems.map(item => (
+                        <div key={item.id} className="flex justify-between items-center text-xs py-2 border-b border-slate-50 last:border-0">
+                            <span className="font-medium text-slate-700 truncate pr-2">
+                                {item.nomenclature?.name || 'Невідома позиція'} 
+                                {item.nomenclature?.brand && <span className="text-slate-400 ml-1">({item.nomenclature.brand})</span>}
+                            </span>
+                            <span className="font-bold text-slate-900 shrink-0 bg-slate-100 px-2.5 py-1 rounded">{item.quantity} шт</span>
+                        </div>
+                    ))}
+                </div>
+                {totalItems > 9 && (
+                    <div className="text-center mt-5 pt-4 border-t border-slate-100">
+                        <span className="text-[11px] font-bold text-indigo-500 bg-indigo-50 px-4 py-1.5 rounded-full">
+                            + ще {totalItems - 9} позицій
+                        </span>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 }
 
 // ==================================================================================
-// 3. UI COMPONENTS
+// 4. UI COMPONENTS (ШИРОКИЙ МАКЕТ + ВІДЖЕТИ)
 // ==================================================================================
 
-function DesignVariantSelector({ installationId, onClose }) {
+function DesignVariantInline({ installationId }) {
   const [variants, setVariants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const fetchVariants = async () => {
+  const fetchVariants = useCallback(async () => {
     try {
       setLoading(true);
       const res = await fetch(`${WORKFLOW_UPLOADER_URL}/design/variants/${installationId}`);
       const data = await res.json();
-
-      if (data && data.status === "success") {
-        setVariants(data.items);
-        setError(null);
-      } else {
-        setError("Не вдалося завантажити варіанти");
-      }
-    } catch (e) {
-      console.error(e);
-      setError("Помилка з'єднання з сервером дизайну");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (installationId) fetchVariants();
+      if (data && data.status === "success") { setVariants(data.items); setError(null); } 
+      else setError("Не вдалося завантажити варіанти");
+    } catch (e) { setError("Помилка з'єднання з сервером дизайну"); } 
+    finally { setLoading(false); }
   }, [installationId]);
+
+  useEffect(() => { if (installationId) fetchVariants(); }, [installationId, fetchVariants]);
 
   const handleSelect = async (variantId) => {
     try {
       setVariants(prev => prev.map(v => ({ ...v, is_selected: v.id === variantId })));
       await fetch(`${WORKFLOW_UPLOADER_URL}/design/select`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ variant_id: variantId, installation_custom_id: installationId })
       });
-    } catch (e) {
-      alert("Помилка при збереженні. Спробуйте ще раз.");
-      fetchVariants();
-    }
+    } catch (e) { alert("Помилка при збереженні."); fetchVariants(); }
   };
 
+  if (loading) return <div className="p-10 text-center text-slate-400 flex flex-col items-center"><FaSpinner className="animate-spin text-2xl mb-2" /> Завантаження...</div>;
+  if (error) return <div className="p-10 text-center text-red-500 font-bold">{error}</div>;
+  if (variants.length === 0) return (
+    <div className="text-center py-8 px-4 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50 m-4">
+      <FaImage className="mx-auto text-3xl text-slate-300 mb-2" />
+      <p className="text-slate-500 font-bold text-sm">Варіантів ще немає</p>
+      <p className="text-xs text-slate-400 mt-1">Завантажте фото в завданні "Розробка 3D".</p>
+    </div>
+  );
+
   return (
-    <div className="flex flex-col h-full bg-slate-50">
-      <div className="p-5 border-b border-slate-200 bg-white flex justify-between items-center shadow-sm z-10">
-        <div>
-          <h3 className="font-extrabold text-lg text-slate-900">Затвердження дизайну</h3>
-          <p className="text-xs text-slate-500">Оберіть фінальний варіант (завантажені в етапі "Проект")</p>
-        </div>
-        <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200" type="button">
-          <FaTimes />
-        </button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
-        {loading && (
-          <div className="flex flex-col items-center justify-center h-40 text-slate-400">
-            <FaSpinner className="animate-spin text-2xl mb-2" /> Завантаження...
-          </div>
-        )}
-
-        {!loading && !error && variants.length === 0 && (
-          <div className="text-center py-12 px-4 border-2 border-dashed border-slate-200 rounded-2xl bg-white">
-            <FaImage className="mx-auto text-4xl text-slate-200 mb-3" />
-            <p className="text-slate-500 font-bold">Варіантів ще немає</p>
-            <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">
-              Завантажте фото в завданні "Розробка 3D", і вони з'являться тут.
-            </p>
-          </div>
-        )}
-
-        {error && !loading && (
-          <div className="text-center py-10 text-red-500 font-bold">{error}</div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {variants.map((v) => (
-            <div
-              key={v.id}
-              onClick={() => handleSelect(v.id)}
-              className={`relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer group bg-white ${
-                v.is_selected
-                  ? "border-emerald-500 shadow-xl ring-2 ring-emerald-100 scale-[1.01]"
-                  : "border-slate-200 hover:border-indigo-400"
-              }`}
-            >
-              <div className="aspect-video bg-slate-100 relative border-b border-slate-50">
-                <img src={driveViewUrl(v.google_file_id)} alt="Design" className="w-full h-full object-contain" />
-                {v.is_selected && (
-                  <div className="absolute inset-0 bg-emerald-500/10 flex items-center justify-center backdrop-blur-[1px]">
-                    <div className="bg-white text-emerald-600 px-4 py-2 rounded-full font-bold shadow-lg flex items-center gap-2 transform scale-110">
-                      <FaCheckCircle /> ЗАТВЕРДЖЕНО
-                    </div>
-                  </div>
-                )}
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4 bg-slate-50/50">
+      {variants.map((v) => (
+        <div key={v.id} onClick={() => handleSelect(v.id)} className={`relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer group bg-white ${v.is_selected ? "border-emerald-500 shadow-md ring-1 ring-emerald-100" : "border-slate-200 hover:border-indigo-400"}`}>
+          <div className="aspect-video bg-slate-100 relative border-b border-slate-50">
+            <img src={driveViewUrl(v.google_file_id)} alt="Design" className="w-full h-full object-cover" />
+            {v.is_selected && (
+              <div className="absolute inset-0 bg-emerald-500/10 flex items-center justify-center backdrop-blur-[1px]">
+                <div className="bg-white text-emerald-600 px-3 py-1.5 rounded-full font-bold shadow-lg flex items-center gap-1.5 text-xs"><FaCheckCircle /> ЗАТВЕРДЖЕНО</div>
               </div>
-              <div className="p-3 flex justify-between items-center">
-                <div className="flex flex-col overflow-hidden pr-2">
-                  <span className={`font-bold text-xs truncate ${v.is_selected ? "text-emerald-700" : "text-slate-700"}`}>
-                    {v.file_name}
-                  </span>
-                  <span className="text-[10px] text-slate-400">
-                    {new Date(v.created_at).toLocaleDateString()}
-                  </span>
-                </div>
-                <div className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
-                  v.is_selected ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-200"
-                }`}>
-                  {v.is_selected && <FaCheck size={10} />}
-                </div>
-              </div>
+            )}
+          </div>
+          <div className="p-3 flex justify-between items-center bg-white">
+            <div className="flex flex-col overflow-hidden pr-2">
+              <span className={`font-bold text-xs truncate ${v.is_selected ? "text-emerald-700" : "text-slate-700"}`}>{v.file_name}</span>
             </div>
-          ))}
+            <div className={`shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${v.is_selected ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-200"}`}>
+              {v.is_selected && <FaCheck size={8} />}
+            </div>
+          </div>
         </div>
-      </div>
+      ))}
     </div>
   );
 }
 
-function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoading, employees, currentResponsibleId }) {
+function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId }) {
   const [newComment, setNewComment] = useState("");
+  const [showSpecManager, setShowSpecManager] = useState(false);
   
   let statusOptions = STATUS_CONFIG.default;
-  if (task.id === "tech_project") {
-    statusOptions = STATUS_CONFIG.tech_project_group;
-  } else if (STATUS_CONFIG[stageGroupKey]) {
-    statusOptions = STATUS_CONFIG[stageGroupKey];
-  } else if (stageGroupKey === "installation") {
-    statusOptions = STATUS_CONFIG.installation;
-  }
+  if (task.id === "tech_project") statusOptions = STATUS_CONFIG.tech_project_group;
+  else if (STATUS_CONFIG[stageGroupKey]) statusOptions = STATUS_CONFIG[stageGroupKey];
+  else if (stageGroupKey === "installation") statusOptions = STATUS_CONFIG.installation;
 
   const initialStatus = statusOptions.find(s => s.key === task.status) ? task.status : statusOptions[0].key;
   const [newStatus, setNewStatus] = useState(initialStatus);
-  const [assignedEmpId, setAssignedEmpId] = useState(currentResponsibleId);
+  const [assignedEmpId, setAssignedEmpId] = useState(task.responsibleId);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const fileInputRef = useRef(null);
 
-  // Перевірка, чи дозволені файли (документи)
   const canUploadAnyFile = STAGES_WITH_UPLOADS.has(task.id);
-  // Перевірка, чи дозволені фото (більшість етапів, окрім equipment)
   const canUploadPhotos = !["equipment", "proposal"].includes(stageGroupKey) || canUploadAnyFile;
+  const isComplectationTask = task.id === 'complectation' || task.id === 'comp_protection';
 
-  const hasChanges =
-    newStatus !== task.status ||
-    newComment.trim().length > 0 ||
-    selectedFiles.length > 0 ||
-    String(assignedEmpId) !== String(currentResponsibleId);
+  useEffect(() => {
+    if (selectedFiles.length > 0) {
+      if (initialStatus === newStatus && AUTO_STATUS_MAP[task.id]) setNewStatus(AUTO_STATUS_MAP[task.id]);
+      if (currentUserEmpId) setAssignedEmpId(currentUserEmpId);
+    }
+  }, [selectedFiles.length, initialStatus, newStatus, task.id, currentUserEmpId]);
+
+  const handleOpenSpecManager = () => {
+    setShowSpecManager(true);
+    if (initialStatus === newStatus && AUTO_STATUS_MAP[task.id]) setNewStatus(AUTO_STATUS_MAP[task.id]);
+    if (currentUserEmpId) setAssignedEmpId(currentUserEmpId);
+  };
+
+  const hasChanges = newStatus !== task.status || newComment.trim().length > 0 || selectedFiles.length > 0 || String(assignedEmpId) !== String(task.responsibleId);
 
   const handleFileSelect = (e) => {
     if (e.target.files) {
       const filesArray = Array.from(e.target.files).map((file) => ({
-        file,
-        preview: isImageFile(file) ? URL.createObjectURL(file) : null,
-        isImage: isImageFile(file)
+        file, preview: isImageFile(file) ? URL.createObjectURL(file) : null, isImage: isImageFile(file)
       }));
       setSelectedFiles((prev) => [...prev, ...filesArray]);
     }
@@ -396,187 +405,222 @@ function StandardTaskDetail({ task, stageGroupKey, onClose, onAddUpdate, isLoadi
 
   const handleSubmit = () => {
     if (!hasChanges) return;
-
     onAddUpdate(task.id, {
-      status: newStatus,
-      comment: newComment,
-      photos: [],
-      rawFiles: selectedFiles.map(f => f.file),
-      // Відправляємо саме custom_id працівника (integer)
-      assigned_to: toIntOrNull(assignedEmpId)
+      status: newStatus, comment: newComment, photos: [], rawFiles: selectedFiles.map(f => f.file), assigned_to: toIntOrNull(assignedEmpId)
     });
+    setNewComment("");
+    setSelectedFiles([]);
   };
 
-  useEffect(() => {
-    return () => selectedFiles.forEach(f => { if(f.preview) URL.revokeObjectURL(f.preview) });
-  }, [selectedFiles]);
-
-  const getEmployeeName = (customId) => {
-    if (!customId) return null;
-    const found = employees.find(e => String(e.custom_id) === String(customId));
-    return found?.name || customId;
-  };
+  useEffect(() => { return () => selectedFiles.forEach(f => { if(f.preview) URL.revokeObjectURL(f.preview) }); }, [selectedFiles]);
 
   return (
-    <div className="fixed inset-0 z-[50] flex items-end sm:items-center justify-center bg-slate-900/40 backdrop-blur-sm animate-fade-in p-0 sm:p-4">
-      <div className="bg-white w-full max-w-lg h-[90vh] sm:h-auto sm:max-h-[90vh] sm:rounded-2xl rounded-t-2xl flex flex-col shadow-2xl overflow-hidden">
-        <div className="p-5 border-b border-slate-100 flex justify-between items-start bg-white shrink-0">
-          <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Редагування завдання</div>
-            <h3 className="font-extrabold text-lg text-slate-900 leading-tight">{task.title}</h3>
-          </div>
-          <button onClick={onClose} className="p-2 bg-slate-50 rounded-full text-slate-500 hover:bg-slate-100 transition" type="button">
-            <FaTimes />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-slate-50/50">
-          <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-sm mb-6 space-y-5">
-            <div>
-              <h4 className="text-xs font-black text-slate-900 uppercase tracking-wide mb-3 flex items-center gap-2">
-                <FaClock className="text-indigo-500" /> Статус
-              </h4>
-              <div className="grid grid-cols-1 gap-2">
-                {statusOptions.map((opt) => {
-                  const isSelected = newStatus === opt.key;
-                  return (
-                    <button
-                      key={opt.key}
-                      onClick={() => setNewStatus(opt.key)}
-                      className={`w-full py-3 px-4 rounded-xl text-sm font-bold transition-all flex items-center justify-between border ${
-                        isSelected
-                          ? `${opt.color.replace("text-", "border-").split(" ")[0]} ${opt.color} ring-1 ring-inset ring-black/5`
-                          : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
-                      }`}
-                      type="button"
-                    >
-                      <span>{opt.label}</span>
-                      {isSelected && <FaCheck />}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <EmployeeSelect
-              label="Відповідальний за етап"
-              employees={employees}
-              selectedId={assignedEmpId}
-              onSelect={setAssignedEmpId}
-            />
-
-            <div>
-              <div className="text-[11px] font-bold text-slate-500 uppercase mb-1">Коментар</div>
-              <textarea
-                value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
-                placeholder="Введіть коментар..."
-                className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none min-h-[80px] font-medium text-slate-700"
-              />
-            </div>
-
-            {canUploadPhotos && (
+    <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex flex-col gap-6">
+      
+      {/* ВЕРХНЯ ЧАСТИНА: 2 Колонки (Форма зліва, Історія справа) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        
+        {/* Форма (Ліва колонка) */}
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 gap-4">
               <div>
-                <input 
-                  type="file" 
-                  multiple 
-                  accept={canUploadAnyFile ? "*/*" : "image/*"} 
-                  ref={fileInputRef} 
-                  onChange={handleFileSelect} 
-                  className="hidden" 
-                />
-                
-                {selectedFiles.length > 0 && (
-                  <div className="grid grid-cols-3 gap-2 mb-3">
-                    {selectedFiles.map((fileObj, idx) => (
-                      <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-slate-200 group bg-slate-50">
-                        {fileObj.isImage ? (
-                           <img src={fileObj.preview} alt="preview" className="w-full h-full object-cover" />
-                        ) : (
-                           <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1">
-                               <FaFileAlt size={24} className="mb-1"/>
-                               <span className="text-[8px] text-center leading-tight truncate w-full px-1">{fileObj.file.name}</span>
-                           </div>
-                        )}
-                        <button
-                          onClick={() => removePhoto(idx)}
-                          className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-90 hover:opacity-100 transition shadow-sm"
-                          type="button"
-                        >
-                          <FaTrash size={10} />
-                        </button>
-                      </div>
-                    ))}
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      className="aspect-square rounded-lg border-2 border-dashed border-slate-200 flex items-center justify-center text-slate-400 hover:border-indigo-400 hover:text-indigo-500 transition"
-                      type="button"
-                    >
-                      <FaPlus />
-                    </button>
-                  </div>
-                )}
-                {selectedFiles.length === 0 && (
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full py-2.5 border border-dashed border-indigo-200 text-indigo-600 bg-indigo-50/50 rounded-xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-50 transition"
-                    type="button"
-                  >
-                    {canUploadAnyFile ? <FaPlus /> : <FaCamera />} 
-                    {canUploadAnyFile ? "Додати файли / фото" : "Додати фото"}
-                  </button>
-                )}
+                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1.5"><FaClock /> Статус завдання</h4>
+                <div className="flex flex-col gap-2">
+                  {statusOptions.map((opt) => {
+                    const isSelected = newStatus === opt.key;
+                    return (
+                      <button key={opt.key} onClick={() => setNewStatus(opt.key)} className={`w-full py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between border ${isSelected ? `${opt.color.replace("text-", "border-").split(" ")[0]} ${opt.color} ring-1 ring-inset ring-black/5 shadow-sm` : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"}`} type="button">
+                        <span className="truncate">{opt.label}</span>
+                        {isSelected && <FaCheck size={10}/>}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            )}
+              
+              <div className="flex flex-col gap-4">
+                  <EmployeeSelect label="Відповідальний" employees={employees} selectedId={assignedEmpId} onSelect={setAssignedEmpId} />
+                  
+                  {isComplectationTask ? (
+                    <button onClick={handleOpenSpecManager} className="w-full h-full py-3 bg-white border-2 border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-400 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
+                        <div className="flex items-center gap-1"><FaPlus className="text-indigo-400 text-xs" /><FaFilePdf className="text-red-500 text-2xl" /></div>
+                        <span>Оцифрувати PDF</span>
+                    </button>
+                  ) : (
+                    canUploadPhotos && (
+                        <button onClick={() => fileInputRef.current?.click()} className="w-full h-full py-3 bg-indigo-50/50 border-2 border-dashed border-indigo-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-300 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
+                            <FaCamera className="text-2xl opacity-70" />
+                            <span>{canUploadAnyFile ? "Завантажити файли" : "Додати фотографії"}</span>
+                        </button>
+                    )
+                  )}
+              </div>
           </div>
 
           <div>
-            <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2">
-              <FaHistory /> Хронологія
-            </h4>
-            <HistoryTimeline 
-                logs={task.history} 
-                stageGroupKey={stageGroupKey} 
-                task={task}
-                getEmployeeName={getEmployeeName}
-            />
+            <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Робочі нотатки / Коментар</div>
+            <textarea value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Вкажіть важливі деталі по етапу..." className="w-full p-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none min-h-[100px] font-medium text-slate-700 shadow-sm" />
+          </div>
+
+          {/* Приховані інпути та прев'юшки завантажених */}
+          {!isComplectationTask && canUploadPhotos && (
+            <div>
+              <input type="file" multiple accept={canUploadAnyFile ? "*/*" : "image/*"} ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
+              {selectedFiles.length > 0 && (
+                <div className="grid grid-cols-4 sm:grid-cols-6 gap-3 mb-3 p-3 bg-white rounded-xl border border-slate-200 shadow-sm">
+                  {selectedFiles.map((fileObj, idx) => (
+                    <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-50 group">
+                      {fileObj.isImage ? <img src={fileObj.preview} alt="preview" className="w-full h-full object-cover" /> : <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1"><FaFileAlt size={24} className="mb-1 text-slate-300"/><span className="text-[8px] text-center leading-tight truncate w-full">{fileObj.file.name}</span></div>}
+                      <button onClick={() => removePhoto(idx)} className="absolute top-1 right-1 bg-white/90 text-red-500 p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition shadow-sm hover:bg-red-500 hover:text-white" type="button"><FaTrash size={10} /></button>
+                    </div>
+                  ))}
+                  <button onClick={() => fileInputRef.current?.click()} className="aspect-square rounded-lg border-2 border-dashed border-slate-200 flex items-center justify-center text-slate-400 hover:border-indigo-400 hover:text-indigo-500 transition bg-slate-50" type="button"><FaPlus size={20}/></button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <button onClick={handleSubmit} disabled={isLoading || !hasChanges} className={`w-full py-4 rounded-xl font-extrabold text-sm shadow-sm transition-all flex justify-center items-center gap-2 ${hasChanges ? "bg-slate-900 text-white hover:bg-slate-800 active:scale-[0.98] shadow-slate-300" : "bg-slate-100 text-slate-400 cursor-not-allowed"}`} type="button">
+            {isLoading && <FaSpinner className="animate-spin" />} Зберегти зміни в системі
+          </button>
+        </div>
+
+        {/* Права колонка: Історія */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col h-full min-h-[300px] max-h-[500px]">
+           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-1.5"><FaHistory /> Історія виконання</h4>
+           <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
+              <HistoryTimeline logs={task.history} stageGroupKey={stageGroupKey} task={task} getEmployeeName={(id) => getEmployeeNameStr(id, employees)} />
+           </div>
+        </div>
+
+      </div>
+
+      {/* НИЖНЯ ЧАСТИНА: Віджет Специфікації на всю ширину (ТІЛЬКИ ДЛЯ КОМПЛЕКТАЦІЇ) */}
+      {isComplectationTask && (
+          <div className="w-full">
+              <SpecificationSummaryWidget installationId={installationId} />
+          </div>
+      )}
+
+      {showSpecManager && <SpecificationManager installationId={installationId} onClose={() => setShowSpecManager(false)} />}
+    </div>
+  );
+}
+
+function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId }) {
+  const isDone = ["done", "launched", "approved", "selected", "completed", "done_on_site", "arrived", "created"].includes(task.status);
+  
+  let statusMeta;
+  if (task.id === "project_approval") statusMeta = STATUS_CONFIG.project_selector.find(s => s.key === task.status) || STATUS_CONFIG.project_selector[0];
+  else statusMeta = getStatusMeta(stageGroupKey, task.status, task.id);
+
+  const assignedName = getEmployeeNameStr(task.responsibleId, employees);
+
+  return (
+    <div className={`bg-white rounded-2xl border transition-all duration-300 overflow-hidden ${isExpanded ? "border-indigo-300 shadow-lg shadow-indigo-100/50 my-5" : "border-slate-200 shadow-sm hover:border-indigo-200 mb-3 hover:shadow-md"}`}>
+      <button onClick={onToggle} className="w-full flex items-center justify-between p-5 md:px-6 md:py-5 text-left focus:outline-none relative overflow-hidden group bg-white" type="button">
+        {isDone && <FaCheckCircle className="absolute -right-8 -top-8 text-8xl text-emerald-500/5 pointer-events-none" />}
+        
+        <div className="flex-1 flex flex-col md:flex-row md:items-center gap-3 md:gap-8 relative z-10">
+          <div className="flex-1">
+            <h3 className={`font-extrabold text-lg md:text-xl transition-colors tracking-tight ${isExpanded ? "text-indigo-700" : (isDone ? "text-slate-600" : "text-slate-900")}`}>
+              {task.title}
+            </h3>
+            
+            <div className="flex flex-wrap items-center gap-3 mt-2">
+                <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border ${statusMeta.color}`}>
+                  {statusMeta.label}
+                </span>
+                {assignedName && (
+                  <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5 bg-slate-50 px-2 py-0.5 rounded border border-slate-100">
+                    <FaUserTie className="text-slate-400"/> {assignedName}
+                  </span>
+                )}
+                {task.history && task.history.length > 0 && !isExpanded && (
+                  <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
+                    <FaHistory className="opacity-70"/> Оновлено: {task.history[0].date}
+                  </span>
+                )}
+            </div>
           </div>
         </div>
 
-        <div className="p-4 border-t border-slate-100 bg-white shrink-0">
-          <button
-            onClick={handleSubmit}
-            disabled={isLoading || !hasChanges}
-            className={`w-full py-3.5 rounded-xl font-bold text-lg shadow-lg transition flex justify-center items-center gap-2 ${
-              hasChanges
-                ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-200 active:scale-[0.98]"
-                : "bg-slate-100 text-slate-400 cursor-not-allowed"
-            }`}
-            type="button"
-          >
-            {isLoading && <FaSpinner className="animate-spin" />} Зберегти зміни
-          </button>
+        <div className={`shrink-0 ml-4 p-2.5 rounded-full transition-all duration-300 relative z-10 ${isExpanded ? "bg-indigo-600 text-white rotate-180 shadow-md shadow-indigo-200" : "bg-slate-50 text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-500 border border-slate-100"}`}>
+          <FaChevronDown size={14} />
+        </div>
+      </button>
+
+      <div className="grid transition-[grid-template-rows] duration-300 ease-in-out" style={{ gridTemplateRows: isExpanded ? "1fr" : "0fr" }}>
+        <div className="overflow-hidden">
+          {task.id === "project_approval" ? (
+             <DesignVariantInline installationId={installationId} />
+          ) : (
+             <TaskInlineEditor task={task} stageGroupKey={stageGroupKey} onAddUpdate={onAddUpdate} isLoading={isLoading} employees={employees} installationId={installationId} currentUserEmpId={currentUserEmpId} />
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function TaskDetailModal(props) {
-  if (props.stageGroupKey === "project" && props.task.id === "project_approval") {
-    return (
-      <div className="fixed inset-0 z-[50] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm animate-fade-in p-4">
-        <div className="bg-slate-50 w-full max-w-4xl h-[80vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-          <DesignVariantSelector installationId={props.installationId} onClose={props.onClose} />
+
+// ==================================================================================
+// 5. РАЗДІЛ СТЕПЕРА (РОЗТЯГНУТИЙ НА ВСЮ ШИРИНУ)
+// ==================================================================================
+
+function StageNavigatorStepper({ activeStage, onSelect }) {
+  const scrollRef = useRef(null);
+  const itemRefs = useRef({});
+
+  useEffect(() => {
+    const el = itemRefs.current[activeStage];
+    if (el && scrollRef.current) {
+        const container = scrollRef.current;
+        const scrollLeft = el.offsetLeft - (container.offsetWidth / 2) + (el.offsetWidth / 2);
+        container.scrollTo({ left: scrollLeft, behavior: 'smooth' });
+    }
+  }, [activeStage]);
+
+  return (
+    <div className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
+        {/* Зовнішній контейнер для плавного скролінгу по всій ширині */}
+        <div ref={scrollRef} className="w-full overflow-x-auto no-scrollbar scroll-smooth">
+          
+          {/* Внутрішній контейнер: центрується на великих екранах, або тягнеться в довжину на мобільних */}
+          <div className="max-w-7xl mx-auto min-w-max px-4 sm:px-8 py-5 relative flex items-start sm:items-center justify-between gap-8">
+            
+            {/* З'єднувальна лінія прогресу (тепер всередині контейнера скролу) */}
+            <div className="absolute top-[44px] left-[5%] right-[5%] h-[2px] bg-slate-100 -z-10 hidden sm:block"></div>
+
+            {STAGE_GROUPS.map((s) => {
+              const isActive = s.key === activeStage;
+              const currentIndex = STAGE_GROUPS.findIndex(x => x.key === activeStage);
+              const thisIndex = STAGE_GROUPS.findIndex(x => x.key === s.key);
+              const isPassed = thisIndex < currentIndex;
+
+              return (
+                <button
+                  key={s.key} ref={(el) => (itemRefs.current[s.key] = el)} onClick={() => onSelect(s.key)}
+                  className="shrink-0 flex flex-col items-center gap-2 group focus:outline-none relative z-10 w-24"
+                  type="button"
+                >
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 shadow-sm border-[3px] bg-white ${isActive ? "border-indigo-600 text-indigo-600 scale-110 shadow-indigo-200/50" : (isPassed ? "border-emerald-500 text-emerald-500" : "border-slate-100 text-slate-300 group-hover:border-indigo-200 group-hover:text-indigo-400")}`}>
+                     {isPassed && !isActive ? <FaCheck size={16} /> : <s.icon size={18} />}
+                  </div>
+                  <span className={`text-[11px] font-bold tracking-wide transition-colors text-center ${isActive ? "text-indigo-800" : (isPassed ? "text-slate-600" : "text-slate-400 group-hover:text-indigo-500")}`}>
+                     {s.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
-    );
-  }
-  return <StandardTaskDetail {...props} />;
+    </div>
+  );
 }
 
 // ==================================================================================
-// 4. UI HELPERS
+// 6. UI ДОПОМІЖНІ (Модалки, Історія)
 // ==================================================================================
 
 function ConfirmationModal({ isOpen, onClose, onConfirm, title, message }) {
@@ -584,18 +628,11 @@ function ConfirmationModal({ isOpen, onClose, onConfirm, title, message }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
       <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 transform transition-all scale-100">
-        <div className="flex items-center gap-3 text-amber-500 mb-4">
-          <FaExclamationTriangle size={24} />
-          <h3 className="text-lg font-bold text-slate-900">{title}</h3>
-        </div>
-        <p className="text-slate-600 mb-6 leading-relaxed">{message}</p>
+        <div className="flex items-center gap-3 text-indigo-600 mb-4"><FaThumbtack size={24} /><h3 className="text-lg font-bold text-slate-900">{title}</h3></div>
+        <p className="text-slate-600 mb-6 text-sm leading-relaxed">{message}</p>
         <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-3 px-4 rounded-xl font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition" type="button">
-            Скасувати
-          </button>
-          <button onClick={onConfirm} className="flex-1 py-3 px-4 rounded-xl font-bold text-white bg-slate-900 hover:bg-slate-800 transition shadow-lg" type="button">
-            Підтвердити
-          </button>
+          <button onClick={onClose} className="flex-1 py-3 px-4 rounded-xl font-bold text-sm text-slate-700 bg-slate-100 hover:bg-slate-200 transition" type="button">Скасувати</button>
+          <button onClick={onConfirm} className="flex-1 py-3 px-4 rounded-xl font-bold text-sm text-white bg-indigo-600 hover:bg-indigo-700 transition shadow-lg shadow-indigo-200" type="button">Підтвердити</button>
         </div>
       </div>
     </div>
@@ -606,163 +643,76 @@ function EmployeeSelect({ employees, selectedId, onSelect, label }) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const wrapperRef = useRef(null);
-
   const selectedEmployee = (employees || []).find(e => String(e.custom_id) === String(selectedId));
   const filteredEmployees = (employees || []).filter(e => {
     if (!searchTerm) return true;
-    const lowerTerm = searchTerm.toLowerCase();
-    return (e.name || "").toLowerCase().includes(lowerTerm) || String(e.custom_id).includes(lowerTerm);
+    return (e.name || "").toLowerCase().includes(searchTerm.toLowerCase()) || String(e.custom_id).includes(searchTerm.toLowerCase());
   });
 
   useEffect(() => {
-    function handleClickOutside(event) {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) setIsOpen(false);
-    }
+    function handleClickOutside(event) { if (wrapperRef.current && !wrapperRef.current.contains(event.target)) setIsOpen(false); }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   return (
     <div className="min-w-0 relative" ref={wrapperRef}>
-      <div className="text-[11px] font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">
-        <FaUserTie /> {label}
-      </div>
+      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1.5"><FaUserTie /> {label}</div>
       <div className="relative" onClick={() => setIsOpen(true)}>
-        <div className={`w-full flex items-center justify-between border rounded-xl px-3 py-2.5 text-sm bg-white cursor-text transition-all ${
-          isOpen ? "ring-2 ring-indigo-500 border-indigo-500" : "border-slate-200 hover:border-indigo-300"
-        }`}>
+        <div className={`w-full flex items-center justify-between border rounded-xl px-4 py-3 text-sm bg-white cursor-text transition-all shadow-sm ${isOpen ? "ring-2 ring-indigo-500 border-indigo-500" : "border-slate-200 hover:border-indigo-300"}`}>
           {!isOpen && selectedEmployee ? (
-            <span className="font-bold text-slate-800 truncate pr-2">
-              {selectedEmployee.name} <span className="text-slate-400 font-normal">#{selectedEmployee.custom_id}</span>
-            </span>
+            <span className="font-bold text-slate-800 truncate pr-2">{selectedEmployee.name}</span>
           ) : (
-            <input
-              type="text"
-              className="w-full outline-none bg-transparent placeholder:text-slate-400 font-medium"
-              placeholder={selectedEmployee ? selectedEmployee.name : "Введіть ім'я або ID..."}
-              value={searchTerm}
-              onChange={(e) => { setSearchTerm(e.target.value); setIsOpen(true); }}
-              autoFocus={isOpen}
-            />
+            <input type="text" className="w-full outline-none bg-transparent placeholder:text-slate-400 font-medium" placeholder={selectedEmployee ? selectedEmployee.name : "Введіть ім'я..."} value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setIsOpen(true); }} autoFocus={isOpen} />
           )}
           <div className="flex items-center gap-1 text-slate-400">
-            {selectedEmployee && !isOpen && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onSelect(null); setSearchTerm(""); }}
-                className="p-1 hover:text-red-500 hover:bg-red-50 rounded-full transition"
-                type="button"
-              >
-                <FaTimes />
-              </button>
-            )}
+            {selectedEmployee && !isOpen && <button onClick={(e) => { e.stopPropagation(); onSelect(null); setSearchTerm(""); }} className="p-1 hover:text-red-500 hover:bg-red-50 rounded-full transition" type="button"><FaTimes /></button>}
             {!isOpen && <FaSearch className="text-xs" />}
           </div>
         </div>
       </div>
-
       {isOpen && (
         <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-100">
           {filteredEmployees.length > 0 ? filteredEmployees.map(emp => (
-            <button
-              key={emp.id}
-              onClick={() => { onSelect(emp.custom_id); setIsOpen(false); setSearchTerm(""); }}
-              className={`w-full text-left px-4 py-3 text-sm flex justify-between items-center hover:bg-indigo-50 transition border-b border-slate-50 last:border-0 ${
-                String(selectedId) === String(emp.custom_id) ? "bg-indigo-50/50 text-indigo-700" : "text-slate-700"
-              }`}
-              type="button"
-            >
-              <div className="flex flex-col">
-                <span className="font-bold">{emp.name}</span>
-                <span className="text-xs text-slate-400">{emp.position || "Працівник"}</span>
-              </div>
-              <span className="text-xs font-mono bg-slate-100 px-2 py-1 rounded text-slate-500">
-                #{emp.custom_id}
-              </span>
+            <button key={emp.id} onClick={() => { onSelect(emp.custom_id); setIsOpen(false); setSearchTerm(""); }} className={`w-full text-left px-4 py-3 text-sm flex justify-between items-center hover:bg-indigo-50 transition border-b border-slate-50 last:border-0 ${String(selectedId) === String(emp.custom_id) ? "bg-indigo-50/50 text-indigo-700" : "text-slate-700"}`} type="button">
+              <span className="font-bold">{emp.name}</span>
             </button>
-          )) : (
-            <div className="px-4 py-3 text-sm text-slate-400 text-center italic">Нікого не знайдено</div>
-          )}
+          )) : <div className="px-4 py-3 text-sm text-slate-400 text-center italic">Нікого не знайдено</div>}
         </div>
       )}
     </div>
   );
 }
 
-function StageNavigator({ activeStage, onSelect }) {
-  const scrollRef = useRef(null);
-  const itemRefs = useRef({});
-
-  useEffect(() => {
-    const el = itemRefs.current[activeStage];
-    if (el && scrollRef.current) el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-  }, [activeStage]);
-
-  return (
-    <div ref={scrollRef} className="flex overflow-x-auto gap-2 px-4 py-4 bg-white border-b border-slate-100 sticky top-0 z-30 no-scrollbar shadow-sm">
-      {STAGE_GROUPS.map((s) => {
-        const isActive = s.key === activeStage;
-        return (
-          <button
-            key={s.key}
-            ref={(el) => (itemRefs.current[s.key] = el)}
-            onClick={() => onSelect(s.key)}
-            className={`shrink-0 px-4 py-2.5 rounded-xl text-sm font-extrabold transition-all duration-300 flex items-center gap-2 border ${
-              isActive
-                ? "bg-slate-900 text-white border-slate-900 shadow-md scale-105"
-                : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-            type="button"
-          >
-            <s.icon className={isActive ? "text-yellow-400" : "text-slate-400"} /> {s.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function PhotoViewerModal({ isOpen, onClose, fileIds, startIndex = 0 }) {
-  const [idx, setIdx] = useState(startIndex);
-  useEffect(() => { if (isOpen) setIdx(startIndex); }, [isOpen, startIndex]);
-  if (!isOpen) return null;
-
-  const currentId = fileIds[idx];
-  return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl overflow-hidden">
-        <div className="p-3 border-b border-slate-100 flex items-center justify-between">
-          <div className="text-xs font-bold text-slate-500">Файл {idx + 1} / {fileIds.length}</div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setIdx(Math.max(0, idx - 1))} disabled={idx === 0} className="px-3 py-2 rounded-xl border font-bold text-xs bg-white" type="button">
-              Назад
-            </button>
-            <button onClick={() => setIdx(Math.min(fileIds.length - 1, idx + 1))} disabled={idx === fileIds.length - 1} className="px-3 py-2 rounded-xl border font-bold text-xs bg-white" type="button">
-              Далі
-            </button>
-            <button onClick={onClose} className="p-2 bg-slate-100 rounded-full" type="button">
-              <FaTimes />
-            </button>
+    const [idx, setIdx] = useState(startIndex);
+    useEffect(() => { if (isOpen) setIdx(startIndex); }, [isOpen, startIndex]);
+    if (!isOpen) return null;
+  
+    const currentId = fileIds[idx];
+    return (
+      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/90 backdrop-blur-sm p-2 sm:p-4 animate-in fade-in">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl overflow-hidden flex flex-col h-full max-h-[95vh]">
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
+            <div className="text-sm font-bold text-slate-500">Файл {idx + 1} з {fileIds.length}</div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setIdx(Math.max(0, idx - 1))} disabled={idx === 0} className="px-4 py-2 rounded-xl border border-slate-200 font-bold text-xs bg-slate-50 hover:bg-slate-100 disabled:opacity-50 transition" type="button">Назад</button>
+              <button onClick={() => setIdx(Math.min(fileIds.length - 1, idx + 1))} disabled={idx === fileIds.length - 1} className="px-4 py-2 rounded-xl border border-slate-200 font-bold text-xs bg-slate-50 hover:bg-slate-100 disabled:opacity-50 transition" type="button">Далі</button>
+              <div className="w-px h-6 bg-slate-200 mx-2"></div>
+              <button onClick={onClose} className="p-2.5 bg-slate-100 hover:bg-red-50 hover:text-red-500 rounded-full transition" type="button"><FaTimes size={16}/></button>
+            </div>
           </div>
-        </div>
-        <div className="bg-black flex items-center justify-center h-[78vh] bg-slate-50 relative">
-          <img 
-            src={driveViewUrl(currentId)} 
-            alt="Preview" 
-            className="max-h-full max-w-full object-contain" 
-            onError={(e) => { e.currentTarget.style.display = "none"; }}
-          />
-          {/* Фолбек, якщо картинка не завантажилась (наприклад, це PDF) */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 -z-10">
-             <FaFileAlt size={48} className="mb-2 opacity-50"/>
-             <span className="text-sm">Попередній перегляд недоступний</span>
-             <a href={driveViewUrl(currentId)} target="_blank" rel="noreferrer" className="mt-4 px-4 py-2 bg-white rounded-lg border shadow-sm font-bold text-sm text-indigo-600">
-               Завантажити / Відкрити
-             </a>
+          <div className="flex-1 bg-slate-100/50 relative flex items-center justify-center overflow-hidden p-4">
+            <img src={driveViewUrl(currentId)} alt="Preview" className="max-h-full max-w-full object-contain drop-shadow-lg rounded-lg" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 -z-10">
+               <FaFileAlt size={64} className="mb-4 text-slate-300 drop-shadow-sm"/>
+               <span className="text-base font-bold text-slate-600">Попередній перегляд недоступний</span>
+               <a href={driveViewUrl(currentId)} target="_blank" rel="noreferrer" className="mt-5 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-md shadow-indigo-200 font-bold text-sm transition active:scale-95">Відкрити в Google Drive</a>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-  );
+    );
 }
 
 function HistoryTimeline({ logs, stageGroupKey, task, getEmployeeName }) {
@@ -770,119 +720,69 @@ function HistoryTimeline({ logs, stageGroupKey, task, getEmployeeName }) {
   const [viewerIds, setViewerIds] = useState([]);
   const [viewerStart, setViewerStart] = useState(0);
 
-  const openViewer = (ids, index) => {
-    setViewerIds(ids);
-    setViewerStart(index);
-    setViewerOpen(true);
-  };
-
-  if (!logs || logs.length === 0) return <div className="text-center text-slate-400 py-6 text-xs italic">Історія порожня.</div>;
+  const openViewer = (ids, index) => { setViewerIds(ids); setViewerStart(index); setViewerOpen(true); };
+  if (!logs || logs.length === 0) return <div className="text-center text-slate-400 py-10 text-xs font-medium border-2 border-dashed border-slate-100 rounded-xl bg-slate-50">Історія порожня. Внесіть зміни, щоб почати.</div>;
 
   return (
     <>
-      <div className="space-y-4 mt-4">
+      <div className="space-y-5 py-2">
         {logs.map((log) => {
           const hasStatusChange = log.old_status && log.new_status && log.old_status !== log.new_status;
           const oldMeta = hasStatusChange ? getStatusMeta(stageGroupKey, log.old_status, task.id) : null;
           const newMeta = hasStatusChange ? getStatusMeta(stageGroupKey, log.new_status, task.id) : null;
-
-          const oldResp = log.old_responsible;
-          const newResp = log.new_responsible;
+          const oldResp = log.old_responsible; const newResp = log.new_responsible;
           const hasRespInfo = oldResp != null || newResp != null;
           const respChanged = String(oldResp ?? "") !== String(newResp ?? "");
-
           const fileIds = Array.isArray(log.photo_file_ids) ? log.photo_file_ids.filter(Boolean) : [];
           const links = Array.isArray(log.photos) ? log.photos.filter(Boolean) : [];
-
-          // Об'єднуємо fileIds та links для відображення
           const attachments = [
             ...fileIds.map((id, i) => ({ fileId: id, link: links[i] || driveViewUrl(id), idx: i })),
             ...links.slice(fileIds.length).map((link, i) => ({ fileId: null, link, idx: fileIds.length + i }))
           ];
 
           return (
-            <div key={log.id} className="flex gap-3 relative group">
-              <div className="absolute left-[15px] top-8 bottom-[-20px] w-0.5 bg-slate-100 group-last:hidden" />
-              <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center shrink-0 z-10 border border-slate-200 bg-white shadow-sm">
-                <span className="text-[10px] font-black text-slate-600 uppercase">{log.actor?.[0] || "U"}</span>
+            <div key={log.id} className="flex gap-4 relative group">
+              <div className="absolute left-[15px] top-8 bottom-[-24px] w-0.5 bg-slate-100 group-last:hidden" />
+              <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center shrink-0 z-10 border-2 border-slate-200 mt-0.5 shadow-sm">
+                <span className="text-[10px] font-black text-slate-400 uppercase">{log.actor?.[0] || "U"}</span>
               </div>
-              <div className="flex-1 bg-white rounded-xl p-3 border border-slate-100 shadow-sm">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="font-bold text-xs text-slate-800">{log.actor || log.user || "Невідомий"}</span>
-                  <span className="text-[10px] font-bold text-slate-400">{log.date || formatUkShort(log.created_at)}</span>
+              <div className="flex-1 bg-white rounded-xl p-4 border border-slate-100 shadow-sm hover:border-indigo-100 transition-colors">
+                <div className="flex justify-between items-start mb-3">
+                  <span className="font-bold text-sm text-slate-800">{log.actor || log.user || "Невідомий"}</span>
+                  <span className="text-[10px] font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-md">{log.date || formatUkShort(log.created_at)}</span>
                 </div>
-
                 {hasStatusChange && (
-                  <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-                    <span className={`px-2 py-0.5 rounded border ${oldMeta.color} opacity-60 line-through`}>{oldMeta.label}</span>
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+                    <span className={`px-2 py-1 rounded-md border ${oldMeta.color} opacity-60 line-through`}>{oldMeta.label}</span>
                     <FaArrowRight className="text-slate-300 text-[10px]" />
-                    <span className={`px-2 py-0.5 rounded border ${newMeta.color} font-bold`}>{newMeta.label}</span>
+                    <span className={`px-2 py-1 rounded-md border ${newMeta.color} font-bold shadow-sm`}>{newMeta.label}</span>
                   </div>
                 )}
-
                 {hasRespInfo && (
-                  <div className="mb-2 text-xs text-slate-600 bg-indigo-50/50 rounded-lg px-2 py-1.5 border border-indigo-100 flex items-center gap-2">
-                     <div className="p-1 bg-indigo-100 rounded text-indigo-600">
-                        <FaUserTie /> 
-                     </div>
+                  <div className="mb-3 text-xs text-slate-600 bg-slate-50 rounded-lg px-3 py-2 border border-slate-100 flex items-center gap-2">
+                     <FaUserTie className="text-slate-400"/>
                      <div className="flex-1">
-                        <span className="font-semibold text-slate-500 mr-1">Призначено:</span>
                         {respChanged ? (
-                          <>
-                            <span className="line-through opacity-60 mr-1">{getEmployeeName(oldResp)}</span>
-                            <FaArrowRight className="inline text-slate-300 text-[10px] mx-1" />
-                            <span className="font-bold text-slate-800">{getEmployeeName(newResp)}</span>
-                          </>
-                        ) : (
-                          <span className="font-bold text-slate-800">{getEmployeeName(newResp ?? oldResp)}</span>
-                        )}
+                          <><span className="line-through opacity-50 mr-2">{getEmployeeName(oldResp)}</span><FaArrowRight className="inline text-slate-300 text-[10px] mr-2" /><span className="font-bold text-slate-800">{getEmployeeName(newResp)}</span></>
+                        ) : (<span className="font-bold text-slate-800">{getEmployeeName(newResp ?? oldResp)}</span>)}
                      </div>
                   </div>
                 )}
-
-                {log.comment && (
-                  <p className="text-sm text-slate-700 mb-2 leading-relaxed whitespace-pre-line bg-slate-50/50 p-2 rounded-lg">
-                    {log.comment}
-                  </p>
-                )}
-
+                {log.comment && <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line bg-indigo-50/30 p-3 rounded-lg border border-indigo-50">{log.comment}</p>}
                 {attachments.length > 0 && (
-                  <div className="flex gap-2 mt-2 flex-wrap">
+                  <div className="flex gap-2 mt-3 flex-wrap">
                     {attachments.map((att) => {
                        if (att.fileId) {
                          return (
                             <div key={`att-${log.id}-${att.idx}`} className="flex items-center gap-1 group/file">
-                              <button
-                                type="button"
-                                onClick={() => openViewer(fileIds, att.idx)}
-                                className="block w-12 h-10 bg-slate-100 rounded border border-slate-200 overflow-hidden hover:bg-slate-200 transition relative"
-                              >
-                                <img
-                                  src={driveThumbUrl(att.fileId)}
-                                  alt="preview"
-                                  className="w-full h-full object-cover"
-                                  onError={(e) => { 
-                                      e.currentTarget.style.display = "none"; 
-                                      // Показати іконку, якщо картинка не завантажилась (наприклад, документ)
-                                      e.currentTarget.parentElement.querySelector('.fallback-icon').style.display = 'flex';
-                                  }}
-                                />
-                                <div className="fallback-icon w-full h-full absolute inset-0 hidden items-center justify-center text-slate-400 bg-slate-50">
-                                   <FaFileAlt size={16} />
-                                </div>
+                              <button type="button" onClick={() => openViewer(fileIds, att.idx)} className="block w-14 h-14 bg-slate-50 rounded-lg border border-slate-200 overflow-hidden hover:border-indigo-400 hover:shadow-md transition-all relative">
+                                <img src={driveThumbUrl(att.fileId, 200)} alt="preview" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; e.currentTarget.parentElement.querySelector('.fallback-icon').style.display = 'flex'; }} />
+                                <div className="fallback-icon w-full h-full absolute inset-0 hidden items-center justify-center text-slate-400 bg-white"><FaFileAlt size={20} /></div>
                               </button>
-                              <a href={att.link} target="_blank" rel="noreferrer" className="text-[10px] px-2 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 flex items-center gap-1">
-                                <FaDownload size={8} />
-                              </a>
                             </div>
                          );
                        }
-                       // Якщо тільки посилання (старі логи)
-                       return (
-                          <a key={`link-${log.id}-${att.idx}`} href={att.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-200 bg-white text-slate-600 text-[11px]">
-                             <FaFileAlt /> Документ
-                          </a>
-                       )
+                       return (<a key={`link-${log.id}-${att.idx}`} href={att.link} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center w-14 h-14 rounded-lg border border-slate-200 bg-slate-50 text-slate-400 hover:text-indigo-600 hover:border-indigo-300 shadow-sm transition"><FaDownload size={16}/></a>)
                     })}
                   </div>
                 )}
@@ -891,19 +791,13 @@ function HistoryTimeline({ logs, stageGroupKey, task, getEmployeeName }) {
           );
         })}
       </div>
-
-      <PhotoViewerModal
-        isOpen={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-        fileIds={viewerIds}
-        startIndex={viewerStart}
-      />
+      <PhotoViewerModal isOpen={viewerOpen} onClose={() => setViewerOpen(false)} fileIds={viewerIds} startIndex={viewerStart} />
     </>
   );
 }
 
 // ==================================================================================
-// 5. MAIN SCREEN
+// 7. MAIN SCREEN (ШИРОКИЙ МАКЕТ)
 // ==================================================================================
 
 export default function FieldWorkflow({ project }) {
@@ -915,349 +809,170 @@ export default function FieldWorkflow({ project }) {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
-  const [activeTask, setActiveTask] = useState(null);
-
-  const [confirmModal, setConfirmModal] = useState({
-    isOpen: false,
-    title: "",
-    message: "",
-    onConfirm: null
-  });
+  
+  const [expandedTaskId, setExpandedTaskId] = useState(null);
+  const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: "", message: "", onConfirm: null });
 
   const installationId = project?.custom_id;
+  const currentUserEmpId = employee?.custom_id || null;
 
   const loadEmployees = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("employees")
-        .select("id, custom_id, name, position")
-        .order("custom_id", { ascending: true })
-        .limit(300);
-
-      if (error) throw error;
+      const { data } = await supabase.from("employees").select("id, custom_id, name, position").order("custom_id", { ascending: true }).limit(300);
       setEmployees(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("Employees load error:", e);
-      setEmployees([]);
-    }
+    } catch (e) { setEmployees([]); }
   }, []);
 
   const loadWorkflowData = useCallback(async () => {
     if (!installationId) return;
     setLoading(true);
-
     try {
-      // Завантажуємо статуси, відповідальних та історію
       const [stagesResp, eventsResp] = await Promise.all([
-        supabase
-          .from("project_stages")
-          .select("stage_key, status, responsible_emp_custom_id")
-          .eq("installation_custom_id", installationId),
-
-        supabase
-          .from("workflow_events")
-          .select("*")
-          .eq("installation_custom_id", installationId)
-          .order("created_at", { ascending: false })
+        supabase.from("project_stages").select("stage_key, status, responsible_emp_custom_id").eq("installation_custom_id", installationId),
+        supabase.from("workflow_events").select("*").eq("installation_custom_id", installationId).order("created_at", { ascending: false })
       ]);
 
-      if (stagesResp.error) throw stagesResp.error;
-      if (eventsResp.error) throw eventsResp.error;
-
       const stagesDict = (stagesResp.data || []).reduce((acc, item) => {
-        acc[item.stage_key] = {
-            status: item.status,
-            // В БД зберігаємо саме employees.custom_id
-            responsibleId: toIntOrNull(item.responsible_emp_custom_id)
-        };
+        acc[item.stage_key] = { status: item.status, responsibleId: toIntOrNull(item.responsible_emp_custom_id) };
         return acc;
       }, {});
 
-      const formattedHistory = (eventsResp.data || []).map(ev => ({
-        ...ev,
-        user: ev.actor || "Невідомий",
-        date: formatUkShort(ev.created_at),
-      }));
+      const formattedHistory = (eventsResp.data || []).map(ev => ({ ...ev, user: ev.actor || "Невідомий", date: formatUkShort(ev.created_at) }));
 
       const tasksTemplate = DETAILED_TASKS[activeStage] || [];
       const mappedTasks = tasksTemplate.map(templateTask => {
         const taskKey = templateTask.id;
-        
         let stageInfo = stagesDict?.[taskKey] || {};
         let statusFromDB = stageInfo.status || "todo"; 
-        
-        // Фоллбеки для статусів, якщо в базі пусто
         if (!stageInfo.status) {
-            if (taskKey === "equipment") statusFromDB = "waiting";
-            else if (taskKey === "project_design" || taskKey === "commercial_proposal") statusFromDB = "waiting";
-            else statusFromDB = "todo";
+            if (taskKey === "equipment" || taskKey === "project_design" || taskKey === "commercial_proposal") statusFromDB = "waiting";
         }
-
-        if (taskKey === "project_approval") {
-          statusFromDB = "selection_needed";
-        }
+        if (taskKey === "project_approval") statusFromDB = "selection_needed";
 
         const history = formattedHistory.filter(h => h.stage_key === taskKey);
-        return { 
-            ...templateTask, 
-            status: statusFromDB, 
-            history, 
-            responsibleId: stageInfo.responsibleId || null
-        };
+        return { ...templateTask, status: statusFromDB, history, responsibleId: stageInfo.responsibleId || null };
       });
 
       setTasks(mappedTasks);
-    } catch (e) {
-      console.error("Workflow Load Error:", e);
-    } finally {
-      setLoading(false);
-    }
+      
+      if (mappedTasks.length === 1) {
+          setExpandedTaskId(mappedTasks[0].id);
+      } else {
+          setExpandedTaskId(null); 
+      }
+    } catch (e) { console.error("Workflow Load Error:", e); } 
+    finally { setLoading(false); }
   }, [installationId, activeStage]);
 
   useEffect(() => { loadEmployees(); }, [loadEmployees]);
   useEffect(() => { loadWorkflowData(); }, [loadWorkflowData]);
 
   const handleAddUpdate = async (taskId, updateData) => {
-    if (!installationId) return;
-    if (!user) {
-      alert("Немає сесії. Перезайди в аккаунт.");
-      return;
-    }
-
+    if (!installationId || !user) return;
     setSaveLoading(true);
     try {
-      let uploadedLinks = [];
-      let uploadedFileIds = [];
-
+      let uploadedLinks = []; let uploadedFileIds = [];
       if (updateData?.rawFiles?.length) {
-        const up = await uploadWorkflowFiles({
-          files: updateData.rawFiles,
-          installationId,
-          stageKey: taskId
-        });
-        uploadedLinks = up.links || [];
-        uploadedFileIds = up.fileIds || [];
+        const up = await uploadWorkflowFiles({ files: updateData.rawFiles, installationId, stageKey: taskId });
+        uploadedLinks = up.links || []; uploadedFileIds = up.fileIds || [];
       }
-
-      const photos = [
-        ...(Array.isArray(updateData.photos) ? updateData.photos : []),
-        ...uploadedLinks
-      ];
-
-      const photo_file_ids = [
-        ...(Array.isArray(updateData.photo_file_ids) ? updateData.photo_file_ids : []),
-        ...uploadedFileIds
-      ];
-
+      const photos = [...(Array.isArray(updateData.photos) ? updateData.photos : []), ...uploadedLinks];
+      const photo_file_ids = [...(Array.isArray(updateData.photo_file_ids) ? updateData.photo_file_ids : []), ...uploadedFileIds];
       const actorName = await resolveActorName({ user, employee });
 
-      const { data: rpcData, error: rpcError } = await supabase.rpc("update_workflow_stage", {
-        p_installation_id: installationId,
-        p_stage_key: taskId,
-        p_new_status: updateData.status,
-        p_actor: actorName,
-        p_comment: updateData.comment || "",
-        p_photos: photos,
-        p_photo_file_ids: photo_file_ids,
-        // 👇 важливо: сюди передаємо integer custom_id працівника
-        p_new_responsible: toIntOrNull(updateData.assigned_to),
-        p_set_as_global_stage: false
+      const { error: rpcError } = await supabase.rpc("update_workflow_stage", {
+        p_installation_id: installationId, p_stage_key: taskId, p_new_status: updateData.status, p_actor: actorName, p_comment: updateData.comment || "",
+        p_photos: photos, p_photo_file_ids: photo_file_ids, p_new_responsible: toIntOrNull(updateData.assigned_to), p_set_as_global_stage: false
       });
-
       if (rpcError) throw rpcError;
 
-      if (rpcData && rpcData.success === false) {
-        alert(rpcData.message || "Змін не виявлено або сталася помилка");
-        return;
-      }
-
-      setActiveTask(null);
       await loadWorkflowData();
-    } catch (e) {
-      alert(`Помилка: ${e?.message || "Помилка з'єднання"}`);
-    } finally {
-      setSaveLoading(false);
-    }
+    } catch (e) { alert(`Помилка: ${e?.message || "Помилка з'єднання"}`); } 
+    finally { setSaveLoading(false); }
   };
 
   const handleSetCurrentStage = () => {
     const stageLabel = STAGE_GROUPS.find(s => s.key === activeStage)?.label;
-
     setConfirmModal({
-      isOpen: true,
-      title: "Змінити етап проекту?",
-      message: `Ви впевнені, що хочете встановити етап "${stageLabel}" як поточний активний етап для всього проекту?`,
+      isOpen: true, title: "Оновити статус проекту?", message: `Встановити етап "${stageLabel}" як активний для всього об'єкту?`,
       onConfirm: async () => {
         try {
-          if (!user) {
-            alert("Немає сесії. Перезайди в аккаунт.");
-            return;
-          }
+          if (!user) return;
           const actorName = await resolveActorName({ user, employee });
-
-          const { data: rpcData, error: rpcError } = await supabase.rpc("update_workflow_stage", {
-            p_installation_id: installationId,
-            p_stage_key: activeStage,
-            p_new_status: "active",
-            p_actor: actorName,
-            p_comment: "",
-            p_photos: [],
-            p_photo_file_ids: [],
-            // Для глобального етапу відповідального не ставимо
-            p_new_responsible: null,
-            p_set_as_global_stage: true
+          const { error: rpcError } = await supabase.rpc("update_workflow_stage", {
+            p_installation_id: installationId, p_stage_key: activeStage, p_new_status: "active", p_actor: actorName, p_comment: "", p_photos: [], p_photo_file_ids: [], p_new_responsible: null, p_set_as_global_stage: true
           });
-
           if (rpcError) throw rpcError;
-          if (rpcData && rpcData.success === false) {
-            alert(rpcData.message || "Помилка");
-            return;
-          }
           window.location.reload();
-        } catch (e) {
-          alert(`Помилка: ${e?.message || "Помилка"}`);
-        } finally {
-          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
-        }
+        } catch (e) { alert("Помилка"); } 
+        finally { setConfirmModal(prev => ({ ...prev, isOpen: false })); }
       }
     });
   };
 
-  const getStatusLabel = (stageKey, statusKey, taskId) => {
-    if (stageKey === "project" && taskId === "project_approval") {
-      const selConfig = STATUS_CONFIG.project_selector;
-      const item = selConfig.find(i => i.key === statusKey);
-      return item || selConfig[0];
-    }
-    const statusMeta = getStatusMeta(stageKey, statusKey, taskId);
-    return statusMeta;
-  };
-
   const openMeasurementTool = () => { navigate(`/measurements/${installationId}`); };
-
   const sortedTasks = [...tasks];
 
   return (
-    <div className="w-full h-full flex flex-col bg-white">
-      <StageNavigator activeStage={activeStage} onSelect={setActiveStage} />
+    <div className="w-full h-full flex flex-col bg-slate-50/50">
+      <StageNavigatorStepper activeStage={activeStage} onSelect={setActiveStage} />
 
-      <div className="flex-1 p-4 md:p-6 bg-slate-50 overflow-y-auto">
-        <div className="max-w-7xl mx-auto mb-6 flex flex-col sm:flex-row gap-3 items-center justify-between">
-          {project?.workflow_stage !== activeStage && (
-            <button
-              onClick={handleSetCurrentStage}
-              className="text-xs font-bold text-indigo-600 bg-indigo-50 px-4 py-3 rounded-xl hover:bg-indigo-100 transition flex items-center gap-2 border border-indigo-200 shadow-sm w-full sm:w-auto justify-center"
-              type="button"
-            >
-              <FaThumbtack /> Зробити цей етап поточним
-            </button>
-          )}
+      <div className="flex-1 p-4 md:p-8 overflow-y-auto">
+        <div className="max-w-7xl mx-auto">
+          
+          <div className="mb-8 flex flex-col sm:flex-row gap-4 items-center justify-between bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+            <div className="flex-1 flex items-center gap-4">
+              <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 shadow-inner">
+                  <FaThumbtack size={20} />
+              </div>
+              <div>
+                  <h2 className="font-extrabold text-slate-800 text-base md:text-lg">Етап: {STAGE_GROUPS.find(s => s.key === activeStage)?.label}</h2>
+                  {project?.workflow_stage !== activeStage ? (
+                      <p className="text-xs font-medium text-slate-500 mt-1">Цей етап зараз не є активним для всього проекту.</p>
+                  ) : (
+                      <p className="text-xs text-emerald-600 font-bold flex items-center gap-1.5 mt-1"><FaCheckCircle/> Активний етап об'єкту</p>
+                  )}
+              </div>
+            </div>
+            
+            <div className="flex gap-3 w-full sm:w-auto">
+                {project?.workflow_stage !== activeStage && (
+                  <button onClick={handleSetCurrentStage} className="flex-1 sm:flex-none text-sm font-bold text-white bg-slate-900 px-6 py-3.5 rounded-xl hover:bg-slate-800 transition shadow-lg shadow-slate-200 active:scale-95" type="button">
+                    Зробити поточним
+                  </button>
+                )}
+                {activeStage === "tech_review" && (
+                  <button onClick={openMeasurementTool} className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3.5 rounded-xl shadow-lg shadow-indigo-200 transition flex items-center justify-center gap-2 font-bold text-sm active:scale-95" type="button">
+                    <FaTools className="text-indigo-200" /> Відкрити заміри
+                  </button>
+                )}
+            </div>
+          </div>
 
-          {activeStage === "tech_review" && (
-            <button
-              onClick={openMeasurementTool}
-              className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white px-5 py-3 rounded-xl shadow-lg transition flex items-center justify-center gap-3 font-bold text-sm"
-              type="button"
-            >
-              <FaTools className="text-yellow-400" /> Інструмент замірів
-            </button>
+          {loading ? (
+            <div className="flex justify-center py-32 text-indigo-400"><FaSpinner className="animate-spin text-5xl" /></div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {sortedTasks.map(task => (
+                <TaskAccordionItem
+                  key={task.id}
+                  task={task}
+                  isExpanded={expandedTaskId === task.id}
+                  onToggle={() => setExpandedTaskId(prev => prev === task.id ? null : task.id)}
+                  stageGroupKey={activeStage}
+                  onAddUpdate={handleAddUpdate}
+                  isLoading={saveLoading}
+                  employees={employees}
+                  installationId={installationId}
+                  currentUserEmpId={currentUserEmpId}
+                />
+              ))}
+            </div>
           )}
         </div>
-
-        {loading && (
-          <div className="flex justify-center py-10 text-slate-400">
-            <FaSpinner className="animate-spin text-3xl" />
-          </div>
-        )}
-
-        {!loading && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-7xl mx-auto">
-            {sortedTasks.map(task => {
-              let statusMeta;
-              if (task.id === "project_approval") {
-                statusMeta = STATUS_CONFIG.project_selector.find(s => s.key === task.status) || STATUS_CONFIG.project_selector[0];
-              } else {
-                statusMeta = getStatusLabel(activeStage, task.status, task.id);
-              }
-
-              const lastLog = task.history && task.history[0];
-              const isDone = ["done", "launched", "approved", "selected", "completed", "done_on_site", "arrived", "created"].includes(task.status);
-
-              return (
-                <div
-                  key={task.id}
-                  onClick={() => setActiveTask(task)}
-                  className={`group p-5 rounded-2xl border shadow-sm transition-all cursor-pointer flex flex-col justify-between relative overflow-hidden min-h-[140px] ${
-                    isDone
-                      ? "bg-slate-50 border-slate-200 opacity-90 hover:opacity-100"
-                      : "bg-white border-slate-200 hover:shadow-md hover:border-indigo-200"
-                  }`}
-                >
-                  {isDone && <FaCheckCircle className="absolute -right-4 -bottom-4 text-7xl text-emerald-500/10 pointer-events-none" />}
-
-                  <div>
-                    <div className="flex justify-between items-start mb-4">
-                      <div className={`font-extrabold text-lg leading-snug pr-2 transition-colors ${
-                        isDone ? "text-slate-500" : "text-slate-900 group-hover:text-indigo-700"
-                      }`}>
-                        {task.title}
-                      </div>
-                      {!isDone && <FaChevronRight className="text-slate-300 mt-1 shrink-0 group-hover:text-indigo-300" />}
-                    </div>
-
-                    {task.id === "project_approval" ? (
-                      <div className="flex items-center gap-2 text-indigo-600 font-bold text-xs uppercase tracking-wide">
-                        <FaHandPointer className="animate-pulse" /> Натисніть для вибору
-                      </div>
-                    ) : (
-                      <div className="flex flex-wrap gap-2 items-center mb-3">
-                        <span className={`px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider border ${statusMeta.color}`}>
-                          {statusMeta.label}
-                        </span>
-                        {lastLog && (
-                          <span className="text-xs text-slate-400 font-bold flex items-center gap-1 bg-white px-2 py-1 rounded border border-slate-100">
-                            <FaClock size={10} /> {lastLog.date}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {lastLog && lastLog.comment && !isDone && (
-                    <div className="mt-auto pt-3 border-t border-slate-100">
-                      <div className="text-xs text-slate-600 italic line-clamp-2 flex gap-2">
-                        <span className="font-bold not-italic text-slate-800">{lastLog.actor || lastLog.user}:</span>
-                        "{lastLog.comment}"
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
 
-      {activeTask && (
-        <TaskDetailModal
-          task={activeTask}
-          stageGroupKey={activeStage}
-          onClose={() => setActiveTask(null)}
-          onAddUpdate={handleAddUpdate}
-          isLoading={saveLoading}
-          employees={employees}
-          currentResponsibleId={activeTask.responsibleId}
-          installationId={installationId}
-        />
-      )}
-
-      <ConfirmationModal
-        isOpen={confirmModal.isOpen}
-        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
-        onConfirm={confirmModal.onConfirm}
-        title={confirmModal.title}
-        message={confirmModal.message}
-      />
+      <ConfirmationModal isOpen={confirmModal.isOpen} onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))} onConfirm={confirmModal.onConfirm} title={confirmModal.title} message={confirmModal.message} />
     </div>
   );
 }

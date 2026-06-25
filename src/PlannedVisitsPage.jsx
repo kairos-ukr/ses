@@ -14,6 +14,10 @@ import {
   FaMapMarkerAlt,
   FaExternalLinkAlt,
   FaExclamationTriangle,
+  FaUsers,
+  FaUserCheck,
+  FaChevronDown,
+  FaChevronUp
 } from "react-icons/fa";
 import Layout from "./Layout";
 import { supabase } from "./supabaseClient";
@@ -163,19 +167,27 @@ export default function PlannedVisitsPage() {
     toastTimer.current = setTimeout(() => setToast(null), 3000);
   }, []);
 
-  // Modals
+  // Modals & Accordions
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isMoveOpen, setIsMoveOpen] = useState(false);
   const [isTeamOpen, setIsTeamOpen] = useState(false);
   const [confirmConfig, setConfirmConfig] = useState(null);
 
-  // Add Form
-  const [addDate, setAddDate] = useState(todayISO);
+  // Free Staff Inline Accordion State
+  const [isFreeStaffExpanded, setIsFreeStaffExpanded] = useState(false);
+  const [freeStaffData, setFreeStaffData] = useState([]);
+  const [loadingFreeStaff, setLoadingFreeStaff] = useState(false);
+  const [freeStaffStart, setFreeStaffStart] = useState(todayISO);
+  const [freeStaffEnd, setFreeStaffEnd] = useState(toISODate(addDays(new Date(), 6))); // За замовчуванням +7 днів (від 0 до 6)
+
+  // Add Form (Multi-date support)
+  const [addStartDate, setAddStartDate] = useState(todayISO);
+  const [addEndDate, setAddEndDate] = useState(todayISO);
   const [addReason, setAddReason] = useState("");
   const [addComment, setAddComment] = useState("");
 
   // Mode (installation/custom)
-  const [addMode, setAddMode] = useState("installation"); // "installation" | "custom"
+  const [addMode, setAddMode] = useState("installation");
   const [customTitle, setCustomTitle] = useState("");
 
   // Search installations
@@ -185,18 +197,18 @@ export default function PlannedVisitsPage() {
   const [selectedInst, setSelectedInst] = useState(null);
   const programmaticQSet = useRef(false);
 
-  // Employees selection (used for Add modal and Team modal)
+  // Employees selection
   const [empQ, setEmpQ] = useState("");
   const [empSearching, setEmpSearching] = useState(false);
   const [empOptions, setEmpOptions] = useState([]);
-  const [selectedEmployees, setSelectedEmployees] = useState([]); // [{id, custom_id, name, email}]
+  const [selectedEmployees, setSelectedEmployees] = useState([]);
 
   // Team modal state
   const [teamTarget, setTeamTarget] = useState(null);
   const [teamQ, setTeamQ] = useState("");
   const [teamSearching, setTeamSearching] = useState(false);
   const [teamOptions, setTeamOptions] = useState([]);
-  const [teamSelected, setTeamSelected] = useState([]); // same shape
+  const [teamSelected, setTeamSelected] = useState([]);
 
   // Move Form
   const [moveTarget, setMoveTarget] = useState(null);
@@ -220,7 +232,7 @@ export default function PlannedVisitsPage() {
     return data || [];
   }, []);
 
-  // --- FETCHING ---
+  // --- FETCHING PLANS ---
   const fetchPlans = useCallback(async () => {
     setLoading(true);
     try {
@@ -325,10 +337,83 @@ export default function PlannedVisitsPage() {
     };
   }, [fetchPlans]);
 
-  // --- SEARCH installations ---
+  // --- FREE STAFF CALCULATION (Dynamic Dates) ---
+  const calculateFreeStaff = useCallback(async () => {
+    if (!freeStaffStart || !freeStaffEnd) return;
+    
+    setLoadingFreeStaff(true);
+    try {
+      // Отримуємо тільки монтажників
+      const { data: installers, error } = await supabase
+        .from("employees")
+        .select("id, name")
+        .eq("role", "installer")
+        .order("name", { ascending: true });
+
+      if (error) throw error;
+      const staffList = installers || [];
+
+      const result = [];
+      const start = new Date(freeStaffStart);
+      const end = new Date(freeStaffEnd);
+
+      if (start > end) {
+        setFreeStaffData([]);
+        return;
+      }
+
+      let currentDateObj = new Date(start);
+      // Проходимо по кожному дню з вибраного діапазону
+      while (currentDateObj <= end) {
+        // Пропускаємо неділю (0)
+        if (currentDateObj.getDay() !== 0) {
+          const currentDate = toISODate(currentDateObj);
+          
+          // Актуальні плани на цю дату
+          const plansForDay = plans.filter(
+            (p) => p.planned_date === currentDate && p.status !== "cancelled"
+          );
+
+          // Збираємо ID зайнятих
+          const busyIds = new Set();
+          plansForDay.forEach((plan) => {
+            if (Array.isArray(plan.employees)) {
+              plan.employees.forEach((emp) => {
+                if (emp && emp.employee_id) busyIds.add(emp.employee_id);
+              });
+            }
+          });
+
+          // Фільтруємо вільних
+          const freeEmployees = staffList.filter((emp) => !busyIds.has(emp.id));
+
+          result.push({
+            date: currentDate,
+            freeStaff: freeEmployees,
+          });
+        }
+        currentDateObj = addDays(currentDateObj, 1);
+      }
+
+      setFreeStaffData(result);
+    } catch (e) {
+      console.error("Помилка завантаження працівників:", e);
+      notify("err", "Помилка розрахунку вільних бригад");
+    } finally {
+      setLoadingFreeStaff(false);
+    }
+  }, [plans, notify, freeStaffStart, freeStaffEnd]);
+
+  // Реактивне оновлення при зміні дат або планів
+  useEffect(() => {
+    if (isFreeStaffExpanded) {
+      calculateFreeStaff();
+    }
+  }, [isFreeStaffExpanded, calculateFreeStaff, freeStaffStart, freeStaffEnd]);
+
+  // --- SEARCH effects ---
   useEffect(() => {
     if (addMode !== "installation") return;
-
     if (programmaticQSet.current) {
       programmaticQSet.current = false;
       return;
@@ -347,11 +432,8 @@ export default function PlannedVisitsPage() {
           .select("custom_id, name, capacity_kw, priority, gps_link, client_id")
           .limit(10);
 
-        if (/^\d+$/.test(s)) {
-          query = query.eq("custom_id", parseInt(s, 10));
-        } else {
-          query = query.ilike("name", `%${s}%`);
-        }
+        if (/^\d+$/.test(s)) query = query.eq("custom_id", parseInt(s, 10));
+        else query = query.ilike("name", `%${s}%`);
 
         const { data, error } = await query;
         if (error) throw error;
@@ -362,11 +444,9 @@ export default function PlannedVisitsPage() {
         setSearching(false);
       }
     }, 300);
-
     return () => clearTimeout(timer);
   }, [q, addMode]);
 
-  // --- SEARCH employees for ADD modal (server-side, by name) ---
   useEffect(() => {
     if (!isAddOpen) return;
     const s = empQ.trim();
@@ -388,11 +468,9 @@ export default function PlannedVisitsPage() {
         setEmpSearching(false);
       }
     }, 250);
-
     return () => clearTimeout(timer);
   }, [empQ, isAddOpen, searchEmployeesByName, selectedEmployees]);
 
-  // --- SEARCH employees for TEAM modal (server-side, by name) ---
   useEffect(() => {
     if (!isTeamOpen) return;
     const s = teamQ.trim();
@@ -414,10 +492,10 @@ export default function PlannedVisitsPage() {
         setTeamSearching(false);
       }
     }, 250);
-
     return () => clearTimeout(timer);
   }, [teamQ, isTeamOpen, searchEmployeesByName, teamSelected]);
 
+  // --- ACTIONS ---
   const addEmployeeToSelection = (emp) => {
     if (!emp?.id) return;
     setSelectedEmployees((prev) => {
@@ -446,10 +524,9 @@ export default function PlannedVisitsPage() {
     setTeamSelected((prev) => prev.filter((x) => x.id !== id));
   };
 
-  // --- ACTIONS ---
-
   const handleCreate = async () => {
-    if (!addDate) return notify("err", "Вкажіть дату");
+    if (!addStartDate || !addEndDate) return notify("err", "Вкажіть дати");
+    if (new Date(addStartDate) > new Date(addEndDate)) return notify("err", "Початкова дата не може бути більшою за кінцеву");
 
     if (addMode === "installation") {
       if (!selectedInst?.custom_id) return notify("err", "Оберіть об'єкт зі списку");
@@ -459,57 +536,78 @@ export default function PlannedVisitsPage() {
 
     setSaving(true);
     try {
-      const payload =
-        addMode === "installation"
-          ? {
-              installation_custom_id: selectedInst.custom_id,
-              custom_task_title: null,
-              planned_date: addDate,
-              status: "planned",
-              reason: addReason || null,
-              comment: addComment || null,
-              created_by_email: createdByEmail,
-            }
-          : {
-              installation_custom_id: null,
-              custom_task_title: customTitle.trim(),
-              planned_date: addDate,
-              status: "planned",
-              reason: addReason || null,
-              comment: addComment || null,
-              created_by_email: createdByEmail,
-            };
+      // 1. Формуємо масив дат
+      const datesToPlan = [];
+      let curr = new Date(addStartDate);
+      const end = new Date(addEndDate);
 
-      const { data: inserted, error: insErr } = await supabase
+      while (curr <= end) {
+        if (curr.getDay() !== 0) { // Автоматично пропускаємо неділю при створенні масових планів
+          datesToPlan.push(toISODate(curr));
+        }
+        curr = addDays(curr, 1);
+      }
+
+      if (datesToPlan.length === 0) {
+        setSaving(false);
+        return notify("err", "Обраний період містить лише вихідні (неділю)");
+      }
+
+      // 2. Базовий об'єкт плану
+      const basePayload = addMode === "installation"
+        ? {
+            installation_custom_id: selectedInst.custom_id,
+            custom_task_title: null,
+            status: "planned",
+            reason: addReason || null,
+            comment: addComment || null,
+            created_by_email: createdByEmail,
+          }
+        : {
+            installation_custom_id: null,
+            custom_task_title: customTitle.trim(),
+            status: "planned",
+            reason: addReason || null,
+            comment: addComment || null,
+            created_by_email: createdByEmail,
+          };
+
+      // 3. Створюємо запис для КОЖНОЇ дати
+      const payloads = datesToPlan.map((d) => ({ ...basePayload, planned_date: d }));
+
+      const { data: insertedRows, error: insErr } = await supabase
         .from("installation_visit_plan")
-        .insert(payload)
-        .select("id")
-        .single();
+        .insert(payloads)
+        .select("id");
 
       if (insErr) throw insErr;
-      const newPlanId = inserted?.id;
-      if (!newPlanId) throw new Error("No inserted id returned");
+      if (!insertedRows || insertedRows.length === 0) throw new Error("No inserted ids returned");
 
+      // 4. Прив'язуємо обраних працівників до КОЖНОГО створеного плану
       if (selectedEmployees.length > 0) {
-        const rows = selectedEmployees.map((emp) => ({
-          visit_plan_id: newPlanId,
-          employee_id: emp.id,
-          assigned_by_email: createdByEmail,
-        }));
+        const teamRows = [];
+        insertedRows.forEach((row) => {
+          selectedEmployees.forEach((emp) => {
+            teamRows.push({
+              visit_plan_id: row.id,
+              employee_id: emp.id,
+              assigned_by_email: createdByEmail,
+            });
+          });
+        });
 
         const { error: teamErr } = await supabase
           .from("installation_visit_plan_employees")
-          .insert(rows);
-
+          .insert(teamRows);
         if (teamErr) throw teamErr;
       }
 
-      notify("ok", "Успішно заплановано");
+      notify("ok", `Успішно заплановано на ${datesToPlan.length} дн.`);
       setIsAddOpen(false);
       fetchPlans();
     } catch (e) {
       console.error("Create error:", e);
-      notify("err", "Помилка (можливо дубль або доступ)");
+      notify("err", "Помилка (можливо дубль або відсутній доступ)");
     } finally {
       setSaving(false);
     }
@@ -517,7 +615,6 @@ export default function PlannedVisitsPage() {
 
   const handleMove = async () => {
     if (!moveTarget || !moveNewDate) return;
-
     setSaving(true);
     try {
       const { error: updErr } = await supabase
@@ -567,7 +664,6 @@ export default function PlannedVisitsPage() {
       const newPlanId = newRow?.id;
       if (!newPlanId) throw new Error("No inserted id returned on move");
 
-      // copy team to new plan
       const oldTeam = Array.isArray(moveTarget.employees) ? moveTarget.employees : [];
       const rows = oldTeam
         .filter((x) => x?.employee_id)
@@ -581,7 +677,6 @@ export default function PlannedVisitsPage() {
         const { error: teamErr } = await supabase
           .from("installation_visit_plan_employees")
           .insert(rows);
-
         if (teamErr) throw teamErr;
       }
 
@@ -624,12 +719,11 @@ export default function PlannedVisitsPage() {
     });
   };
 
-  // --- TEAM MODAL ACTIONS ---
   const openTeamModal = (plan) => {
     const team = Array.isArray(plan.employees) ? plan.employees : [];
     const normalized = team
       .map((x) => ({
-        id: x.employee_id, // employees view gives employee_id
+        id: x.employee_id,
         employee_id: x.employee_id,
         custom_id: x.custom_id,
         name: x.name,
@@ -648,7 +742,6 @@ export default function PlannedVisitsPage() {
     if (!teamTarget?.id) return;
     setSaving(true);
     try {
-      // delete old
       const { error: delErr } = await supabase
         .from("installation_visit_plan_employees")
         .delete()
@@ -656,7 +749,6 @@ export default function PlannedVisitsPage() {
 
       if (delErr) throw delErr;
 
-      // insert new
       const rows = teamSelected.map((emp) => ({
         visit_plan_id: teamTarget.id,
         employee_id: emp.id,
@@ -667,7 +759,6 @@ export default function PlannedVisitsPage() {
         const { error: insErr } = await supabase
           .from("installation_visit_plan_employees")
           .insert(rows);
-
         if (insErr) throw insErr;
       }
 
@@ -711,23 +802,19 @@ export default function PlannedVisitsPage() {
   }, [plans]);
 
   const openAddModal = () => {
-    setAddDate(todayISO);
+    setAddStartDate(todayISO);
+    setAddEndDate(todayISO);
     setAddReason("");
     setAddComment("");
-
     setAddMode("installation");
     setCustomTitle("");
-
     setQ("");
     setSelectedInst(null);
     setOptions([]);
     setSearching(false);
-
-    // employees for add
     setEmpQ("");
     setEmpOptions([]);
     setSelectedEmployees([]);
-
     setIsAddOpen(true);
   };
 
@@ -748,14 +835,135 @@ export default function PlannedVisitsPage() {
             <h1 className="text-2xl font-extrabold text-slate-900">Планування виїздів</h1>
             <p className="text-slate-500 text-sm mt-0.5">Графік на {DAY_WINDOW} днів</p>
           </div>
-          <button
-            onClick={openAddModal}
-            className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white px-5 py-3 rounded-2xl font-bold shadow-lg shadow-slate-900/10 transition-all active:scale-95"
-          >
-            <FaPlus className="text-sm" />
-            <span>Додати</span>
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsFreeStaffExpanded(!isFreeStaffExpanded)}
+              className={`flex items-center justify-center gap-2 px-5 py-3 rounded-2xl font-bold transition-all active:scale-95 shadow-sm border ${
+                isFreeStaffExpanded 
+                  ? "bg-violet-50 text-violet-700 border-violet-200" 
+                  : "bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 border-slate-200"
+              }`}
+            >
+              <FaUsers className={`text-sm ${isFreeStaffExpanded ? "text-violet-600" : "text-violet-500"}`} />
+              <span className="hidden sm:inline">Хто вільний?</span>
+              {isFreeStaffExpanded ? <FaChevronUp className="text-[10px] ml-1" /> : <FaChevronDown className="text-[10px] ml-1" />}
+            </button>
+
+            <button
+              onClick={openAddModal}
+              className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white px-5 py-3 rounded-2xl font-bold shadow-lg shadow-slate-900/10 transition-all active:scale-95"
+            >
+              <FaPlus className="text-sm" />
+              <span>Додати</span>
+            </button>
+          </div>
         </div>
+
+        {/* --- FREE STAFF ACCORDION --- */}
+        <AnimatePresence>
+          {isFreeStaffExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0, marginBottom: 0 }}
+              animate={{ height: "auto", opacity: 1, marginBottom: 24 }}
+              exit={{ height: 0, opacity: 0, marginBottom: 0 }}
+              className="overflow-hidden"
+            >
+              <div className="bg-white border-2 border-violet-100 rounded-3xl p-5 shadow-sm">
+                
+                {/* Header of Accordion with Date Picker */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 pb-4 border-b border-violet-50">
+                  <div>
+                    <h2 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
+                      Вільні монтажники
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-0.5">Працівники без запланованих виїздів</p>
+                  </div>
+                  
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+                      <input 
+                        type="date" 
+                        value={freeStaffStart}
+                        onChange={(e) => setFreeStaffStart(e.target.value)}
+                        className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer"
+                      />
+                      <span className="text-slate-300">-</span>
+                      <input 
+                        type="date" 
+                        value={freeStaffEnd}
+                        min={freeStaffStart}
+                        onChange={(e) => setFreeStaffEnd(e.target.value)}
+                        className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer"
+                      />
+                    </div>
+                    <button 
+                      onClick={() => setIsFreeStaffExpanded(false)}
+                      className="text-slate-400 hover:text-slate-600 p-2 bg-slate-50 rounded-full transition-colors shrink-0"
+                    >
+                      <FaTimes />
+                    </button>
+                  </div>
+                </div>
+
+                {loadingFreeStaff ? (
+                  <div className="flex flex-col items-center justify-center py-6 text-slate-400">
+                    <div className="w-6 h-6 border-2 border-slate-200 border-t-violet-600 rounded-full animate-spin mb-2" />
+                    <span className="text-xs font-bold">Аналіз...</span>
+                  </div>
+                ) : freeStaffData.length === 0 ? (
+                  <div className="text-center text-slate-500 text-sm py-4">
+                    Оберіть коректний діапазон дат
+                  </div>
+                ) : (
+                  <div className="flex overflow-x-auto items-start gap-3 pb-4 snap-x hide-scrollbar">
+                    {freeStaffData.map((day) => (
+                      <div 
+                        key={day.date} 
+                        className="min-w-[220px] max-w-[240px] bg-slate-50/80 border border-slate-200 rounded-2xl p-3 shrink-0 snap-start flex flex-col"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="text-sm font-black text-slate-800">
+                              {formatDayMonth(day.date)}
+                            </span>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase">
+                              {getDayName(day.date)}
+                            </span>
+                          </div>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md shadow-sm border ${
+                            day.freeStaff.length > 0 
+                              ? "bg-white text-emerald-600 border-emerald-100" 
+                              : "bg-rose-50 text-rose-600 border-rose-100"
+                          }`}>
+                            {day.freeStaff.length > 0 ? `Вільні: ${day.freeStaff.length}` : 'Всі зайняті'}
+                          </span>
+                        </div>
+
+                        {day.freeStaff.length > 0 ? (
+                          <div className="flex flex-col gap-1.5 mt-2">
+                            {day.freeStaff.map((emp) => (
+                              <span
+                                key={emp.id}
+                                className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-[11px] font-bold shadow-sm"
+                              >
+                                <FaUserCheck className="text-emerald-500 text-[10px]" />
+                                {emp.name}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] font-bold text-rose-500 bg-white border border-rose-100 p-2 rounded-xl text-center mt-2 shadow-sm">
+                            Немає вільних бригад
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Toast */}
         <AnimatePresence>
@@ -927,7 +1135,6 @@ export default function PlannedVisitsPage() {
                               <FaExchangeAlt /> Перенести
                             </button>
 
-                            {/* ✅ НОВЕ: кнопка Команда */}
                             <button
                               onClick={() => openTeamModal(p)}
                               className="w-10 flex items-center justify-center text-slate-500 hover:text-violet-700 hover:bg-violet-50 rounded-xl transition-all"
@@ -1067,7 +1274,6 @@ export default function PlannedVisitsPage() {
               </div>
             )}
 
-            {/* ✅ Employees: only search field (no preloaded list) */}
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5 ml-1">Хто їде</label>
 
@@ -1137,24 +1343,38 @@ export default function PlannedVisitsPage() {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5 ml-1">Дата</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 ml-1">Період з</label>
                 <input
                   type="date"
-                  value={addDate}
+                  value={addStartDate}
                   min={todayISO}
-                  onChange={(e) => setAddDate(e.target.value)}
+                  onChange={(e) => {
+                    setAddStartDate(e.target.value);
+                    if (e.target.value > addEndDate) setAddEndDate(e.target.value);
+                  }}
                   className="w-full px-3 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:ring-2 focus:ring-violet-500 focus:outline-none text-sm font-bold text-slate-700"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5 ml-1">Причина</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 ml-1">Період по</label>
                 <input
-                  value={addReason}
-                  onChange={(e) => setAddReason(e.target.value)}
-                  placeholder="Монтаж / Огляд"
-                  className="w-full px-3 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:ring-2 focus:ring-violet-500 focus:outline-none text-sm"
+                  type="date"
+                  value={addEndDate}
+                  min={addStartDate}
+                  onChange={(e) => setAddEndDate(e.target.value)}
+                  className="w-full px-3 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:ring-2 focus:ring-violet-500 focus:outline-none text-sm font-bold text-slate-700"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5 ml-1">Причина</label>
+              <input
+                value={addReason}
+                onChange={(e) => setAddReason(e.target.value)}
+                placeholder="Монтаж / Огляд"
+                className="w-full px-3 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:ring-2 focus:ring-violet-500 focus:outline-none text-sm"
+              />
             </div>
 
             <div>
@@ -1280,7 +1500,7 @@ export default function PlannedVisitsPage() {
           </div>
         </ModalShell>
 
-        {/* MOVE PLAN MODAL (без змін по UI) */}
+        {/* MOVE PLAN MODAL */}
         <ModalShell isOpen={isMoveOpen} onClose={() => setIsMoveOpen(false)} title="Перенесення">
           {moveTarget && (
             <div className="space-y-4">
@@ -1346,6 +1566,7 @@ export default function PlannedVisitsPage() {
             </div>
           )}
         </ModalShell>
+
       </div>
     </Layout>
   );

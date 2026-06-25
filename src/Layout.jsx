@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { 
-  FaBars, FaTimes, FaHome, FaUsers, FaUserTie, 
+  FaBars, FaTimes, FaUsers, FaUserTie, 
   FaTasks, FaFolderOpen, FaSignOutAlt,
   FaHardHat, FaProjectDiagram, FaCalendarAlt,
-  FaHandshake, FaBox // ✅ Додано іконку для Обладнання
+  FaHandshake, FaWarehouse, FaTruck 
 } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -24,18 +24,15 @@ const Layout = ({ children }) => {
   };
 
   const menuItems = [
-      { path: '/home', label: 'Головна', icon: FaHome },
+      { path: '/my-workflow', label: 'Мої етапи', icon: FaProjectDiagram }, // Головна сторінка
       { path: '/clients', label: 'Клієнти', icon: FaUsers },
       { path: '/installations', label: "Об'єкти", icon: FaHardHat },
+      { path: '/provisioning', label: "Забезпечення об'єктів", icon: FaTruck },
       { path: '/partners', label: 'Партнерство', icon: FaHandshake },
-      { path: '/my-workflow', label: 'Мої етапи', icon: FaProjectDiagram },
+      { path: '/inventory', label: 'Склад', icon: FaWarehouse },
       { path: '/plans', label: 'Плани', icon: FaCalendarAlt },
       { path: '/employees', label: 'Працівники', icon: FaUserTie },
       { path: '/tasks', label: 'Задачі', icon: FaTasks },
-      
-      // ✅ НОВЕ: Вкладка "Обладнання" під задачами
-      { path: '/equipment', label: 'Обладнання', icon: FaBox },
-      
       { path: '/documents', label: 'Документи', icon: FaFolderOpen },
   ];
 
