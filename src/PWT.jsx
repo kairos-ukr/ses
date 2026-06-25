@@ -208,7 +208,13 @@ const NomenclatureSelect = ({ options, value, onChange, placeholder, hasError })
     }, []);
 
     const selectedOption = options.find(o => o.id === value);
-    const filtered = options.filter(o => o.fullName.toLowerCase().includes(search.toLowerCase()) || (o.sku && o.sku.toLowerCase().includes(search.toLowerCase())));
+    const filtered = options.filter(o => {
+        const q = search.toLowerCase();
+        return o.fullName.toLowerCase().includes(q) ||
+               (o.sku && o.sku.toLowerCase().includes(q)) ||
+               (o.brand && o.brand.toLowerCase().includes(q)) ||
+               (o.model && o.model.toLowerCase().includes(q));
+    });
 
     return (
         <div className="relative w-full" ref={wrapperRef}>
@@ -217,19 +223,34 @@ const NomenclatureSelect = ({ options, value, onChange, placeholder, hasError })
                 onClick={() => setIsOpen(!isOpen)}
             >
                 <div className="truncate pr-2">
-                    {selectedOption ? <span className="font-bold text-slate-800">{selectedOption.fullName}</span> : <span className={hasError ? "text-red-400 font-medium" : "text-slate-400"}>{placeholder}</span>}
+                    {selectedOption ? (
+                        <div className="flex flex-col leading-tight">
+                            {selectedOption.categoryPath && (
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider truncate">{selectedOption.categoryPath}</span>
+                            )}
+                            <span className="font-bold text-slate-800">{selectedOption.name}</span>
+                        </div>
+                    ) : (
+                        <span className={hasError ? "text-red-400 font-medium" : "text-slate-400"}>{placeholder}</span>
+                    )}
                 </div>
                 <FaChevronDown className="text-slate-400 text-[10px] flex-shrink-0" />
             </div>
             <AnimatePresence>
                 {isOpen && (
-                    <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} className="absolute z-[100] w-[400px] right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-64 flex flex-col overflow-hidden">
-                        <div className="p-2 border-b border-slate-100 bg-slate-50"><input autoFocus type="text" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-400" placeholder="Пошук по базі..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+                    <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} className="absolute z-[100] w-[420px] right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-64 flex flex-col overflow-hidden">
+                        <div className="p-2 border-b border-slate-100 bg-slate-50"><input autoFocus type="text" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-400" placeholder="Пошук по назві, бренду, SKU..." value={search} onChange={e => setSearch(e.target.value)} /></div>
                         <div className="overflow-y-auto custom-scrollbar flex-1 p-1">
                             {filtered.length > 0 ? filtered.map(o => (
-                                <div key={o.id} className={`px-3 py-2 cursor-pointer text-sm rounded-lg mb-0.5 transition-colors ${o.id === value ? 'bg-indigo-50 border border-indigo-100' : 'hover:bg-slate-50 border border-transparent'}`} onClick={() => { onChange(o.id); setIsOpen(false); setSearch(''); }}>
-                                    <div className="font-bold text-slate-800 leading-tight">{o.fullName}</div>
-                                    {o.sku && <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 rounded mt-1 inline-block">SKU: {o.sku}</span>}
+                                <div key={o.id} className={`px-3 py-2.5 cursor-pointer text-sm rounded-lg mb-0.5 transition-colors ${o.id === value ? 'bg-indigo-50 border border-indigo-100' : 'hover:bg-slate-50 border border-transparent'}`} onClick={() => { onChange(o.id); setIsOpen(false); setSearch(''); }}>
+                                    {o.categoryPath && (
+                                        <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 truncate">{o.categoryPath}</div>
+                                    )}
+                                    <div className="font-bold text-slate-800 leading-tight">{o.name}</div>
+                                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                        {o.brand && <span className="text-[10px] text-slate-500">{o.brand}</span>}
+                                        {o.sku && <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 rounded inline-block">SKU: {o.sku}</span>}
+                                    </div>
                                 </div>
                             )) : <div className="px-4 py-4 text-sm text-slate-400 text-center">Нічого не знайдено</div>}
                         </div>
@@ -240,27 +261,64 @@ const NomenclatureSelect = ({ options, value, onChange, placeholder, hasError })
     );
 };
 
-function SpecOcrMappingModal({ file, installationId, onClose, onSuccess, nomenclatures, employee }) {
+function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess, nomenclatures, employee }) {
     const [isParsing, setIsParsing] = useState(true);
     const [mappedItems, setMappedItems] = useState([]);
     const [error, setError] = useState(null);
 
     const autoMatchItem = useCallback((originalName) => {
-        if (!originalName) return '';
-        const lowerName = originalName.toLowerCase();
-        let match = nomenclatures.find(n => n.fullName.toLowerCase().includes(lowerName) || lowerName.includes(n.name.toLowerCase()));
-        if (match) return match.id;
+        if (!originalName || !nomenclatures.length) return '';
+        const lowerName = originalName.toLowerCase().trim();
 
-        const words = lowerName.split(/[\s,.-]+/);
+        // 1. Exact SKU match (highest priority)
+        const skuMatch = nomenclatures.find(n => n.sku && lowerName.includes(n.sku.toLowerCase()));
+        if (skuMatch) return skuMatch.id;
+
+        // 2. Exact full name match
+        const exactMatch = nomenclatures.find(n => n.name.toLowerCase() === lowerName);
+        if (exactMatch) return exactMatch.id;
+
+        // 3. Tokenize the input: filter out short tokens and stopwords
+        const stopwords = new Set(['шт', 'пк', 'м', 'мм', 'см', 'кг', 'вт', 'кВт', 'а', 'в', 'кв', 'ом', 'на', 'та', 'або', 'для', 'від', 'до', 'із', 'по', 'з', 'і', 'й', 'the', 'for', 'and', 'or', 'mm', 'cm', 'kg', 'kw', 'a', 'v', 'w'].map(s => s.toLowerCase()));
+        const tokens = lowerName.split(/[\s,.\-\/\\()+:;]+/).filter(t => t.length > 2 && !stopwords.has(t));
+
         let bestMatch = null;
         let maxScore = 0;
+
         for (const nom of nomenclatures) {
-            const nomWords = nom.fullName.toLowerCase();
+            const nomSearchStr = [
+                nom.name,
+                nom.brand || '',
+                nom.model || '',
+                nom.categoryPath || '',
+                nom.sku || ''
+            ].join(' ').toLowerCase();
+
             let score = 0;
-            words.forEach(w => { if (w.length > 2 && nomWords.includes(w)) score++; });
+            let matchedTokens = 0;
+
+            for (const token of tokens) {
+                if (nomSearchStr.includes(token)) {
+                    // Longer tokens = more specific match = higher weight
+                    const weight = Math.min(token.length, 10);
+                    score += weight;
+                    matchedTokens++;
+                }
+            }
+
+            // Bonus: brand match is very strong signal
+            if (nom.brand && lowerName.includes(nom.brand.toLowerCase())) score += 15;
+            // Bonus: model match
+            if (nom.model && lowerName.includes(nom.model.toLowerCase())) score += 10;
+            // Penalty: low token coverage
+            const coverage = tokens.length > 0 ? matchedTokens / tokens.length : 0;
+            if (coverage < 0.4) score = Math.floor(score * 0.5);
+
             if (score > maxScore) { maxScore = score; bestMatch = nom; }
         }
-        return maxScore >= 2 && bestMatch ? bestMatch.id : '';
+
+        // Only return a match if confidence is high enough
+        return maxScore >= 8 && bestMatch ? bestMatch.id : '';
     }, [nomenclatures]);
 
     useEffect(() => {
@@ -302,16 +360,24 @@ function SpecOcrMappingModal({ file, installationId, onClose, onSuccess, nomencl
 
         setIsParsing(true);
         try {
-            const { data: existing } = await supabase.from('specifications').select('version').eq('installation_custom_id', installationId);
+            // Only count/archive specs of the SAME task type (stored in notes)
+            const { data: existing } = await supabase.from('specifications')
+                .select('version')
+                .eq('installation_custom_id', installationId)
+                .eq('notes', taskId);
             const nextVersion = existing && existing.length > 0 ? Math.max(...existing.map(s => s.version)) + 1 : 1;
 
             if (existing && existing.length > 0) {
-                await supabase.from('specifications').update({ status: 'archived' }).eq('installation_custom_id', installationId);
+                await supabase.from('specifications').update({ status: 'archived' })
+                    .eq('installation_custom_id', installationId)
+                    .eq('notes', taskId);
             }
 
             const { data: newSpec, error: hErr } = await supabase.from('specifications').insert([{
                 installation_custom_id: installationId, version: nextVersion, status: 'confirmed',
-                name: `Специфікація V.${nextVersion} (${file.name})`, confirmed_at: new Date().toISOString(), created_by: employee?.id
+                name: `Специфікація V.${nextVersion} (${file.name})`,
+                notes: taskId,
+                confirmed_at: new Date().toISOString(), created_by: employee?.id
             }]).select().single();
             if (hErr) throw hErr;
 
@@ -417,7 +483,7 @@ function SpecOcrMappingModal({ file, installationId, onClose, onSuccess, nomencl
     );
 }
 
-function SpecificationSummaryWidget({ installationId, refreshTrigger }) {
+function SpecificationSummaryWidget({ installationId, taskId, refreshTrigger }) {
     const [specData, setSpecData] = useState(null);
     const [loading, setLoading] = useState(true);
 
@@ -425,19 +491,25 @@ function SpecificationSummaryWidget({ installationId, refreshTrigger }) {
         const fetchSpec = async () => {
             if (!installationId) return;
             try {
-                const { data, error } = await supabase
+                let query = supabase
                     .from('specifications')
                     .select(`
-                        id, status, version, created_at,
+                        id, status, version, created_at, notes,
                         specification_items (
                             id, quantity, original_name,
-                            nomenclature (name, brand)
+                            nomenclature (id, name, brand, category_id)
                         )
                     `)
                     .eq('installation_custom_id', installationId)
                     .order('version', { ascending: false })
-                    .limit(1)
-                    .single();
+                    .limit(1);
+
+                // Filter by task type so complectation and comp_protection are independent
+                if (taskId) {
+                    query = query.eq('notes', taskId);
+                }
+
+                const { data, error } = await query.maybeSingle();
 
                 if (error && error.code !== 'PGRST116') throw error; 
                 setSpecData(data || null);
@@ -448,7 +520,14 @@ function SpecificationSummaryWidget({ installationId, refreshTrigger }) {
             }
         };
         fetchSpec();
-    }, [installationId, refreshTrigger]);
+    }, [installationId, taskId, refreshTrigger]);
+
+    const specTitle = taskId === 'comp_protection'
+        ? 'Специфікація електрозахисту'
+        : 'Специфікація матеріалів';
+    const specEmptyHint = taskId === 'comp_protection'
+        ? 'Оцифруйте специфікацію електрозахисту (автоматичні вимикачі, ПЗВ, щитки тощо).'
+        : 'Натисніть "Оцифрувати PDF", щоб автоматично створити специфікацію та закрити це завдання.';
 
     if (loading) return <div className="h-32 flex items-center justify-center text-slate-400"><FaSpinner className="animate-spin text-2xl" /></div>;
 
@@ -456,8 +535,8 @@ function SpecificationSummaryWidget({ installationId, refreshTrigger }) {
         return (
             <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl p-8 text-center w-full flex flex-col items-center justify-center">
                 <FaClipboardList className="text-4xl text-slate-300 mb-3" />
-                <h4 className="font-bold text-slate-600 text-sm mb-1">Специфікація порожня</h4>
-                <p className="text-xs text-slate-400 max-w-sm">Натисніть "Оцифрувати PDF", щоб автоматично створити специфікацію та закрити це завдання.</p>
+                <h4 className="font-bold text-slate-600 text-sm mb-1">{specTitle} порожня</h4>
+                <p className="text-xs text-slate-400 max-w-sm">{specEmptyHint}</p>
             </div>
         );
     }
@@ -467,12 +546,15 @@ function SpecificationSummaryWidget({ installationId, refreshTrigger }) {
 
     return (
         <div className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden w-full flex flex-col">
-            <div className="bg-indigo-50/50 border-b border-indigo-100 p-4 flex justify-between items-center">
+            <div className={`border-b p-4 flex justify-between items-center ${taskId === 'comp_protection' ? 'bg-amber-50/50 border-amber-100' : 'bg-indigo-50/50 border-indigo-100'}`}>
                 <div>
-                    <h4 className="font-extrabold text-indigo-900 text-sm flex items-center gap-2">
-                        <FaClipboardList className="text-indigo-500" /> Оцифрована специфікація
+                    <h4 className={`font-extrabold text-sm flex items-center gap-2 ${taskId === 'comp_protection' ? 'text-amber-900' : 'text-indigo-900'}`}>
+                        <FaClipboardList className={taskId === 'comp_protection' ? 'text-amber-500' : 'text-indigo-500'} />
+                        {specTitle}
                     </h4>
-                    <div className="text-[10px] text-indigo-500/70 font-bold mt-0.5">ВЕРСІЯ {specData.version} • {new Date(specData.created_at).toLocaleDateString()}</div>
+                    <div className={`text-[10px] font-bold mt-0.5 ${taskId === 'comp_protection' ? 'text-amber-500/70' : 'text-indigo-500/70'}`}>
+                        ВЕРСІЯ {specData.version} • {new Date(specData.created_at).toLocaleDateString()}
+                    </div>
                 </div>
                 <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase tracking-wider border ${specData.status === 'confirmed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
                     {specData.status === 'confirmed' ? 'Затверджено' : specData.status}
@@ -714,7 +796,7 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
 
       {isComplectationTask && (
           <div className="w-full">
-              <SpecificationSummaryWidget installationId={installationId} refreshTrigger={task.history.length} />
+              <SpecificationSummaryWidget installationId={installationId} taskId={task.id} refreshTrigger={task.history.length} />
           </div>
       )}
 
@@ -722,6 +804,7 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
           <SpecOcrMappingModal
               file={ocrFile}
               installationId={installationId}
+              taskId={task.id}
               nomenclatures={nomenclatures}
               onClose={() => setOcrFile(null)}
               onSuccess={(processedFile) => {
@@ -1039,7 +1122,7 @@ export default function FieldWorkflow({ project }) {
     try {
       const [empRes, nomRes, catRes] = await Promise.all([
           supabase.from("employees").select("id, custom_id, name, position").order("custom_id", { ascending: true }).limit(300),
-          supabase.from('nomenclature').select('id, name, sku, category_id, unit:units(name)').eq('is_active', true),
+          supabase.from('nomenclature').select('id, name, sku, brand, model, category_id, unit:units(name)').eq('is_active', true),
           supabase.from('categories').select('*')
       ]);
       setEmployees(Array.isArray(empRes.data) ? empRes.data : []);
@@ -1052,7 +1135,10 @@ export default function FieldWorkflow({ project }) {
               const cat = cats.find(c => c.id === currentId);
               if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break;
           }
-          return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim() };
+          const categoryPath = path.join(' › ');
+          // fullName = "CategoryPath › Name" for display in the dropdown
+          const fullName = categoryPath ? `${categoryPath} › ${item.name}` : item.name;
+          return { ...item, fullName, categoryPath };
       });
       setNomenclatures(processedNom);
     } catch (e) { console.error(e); }
