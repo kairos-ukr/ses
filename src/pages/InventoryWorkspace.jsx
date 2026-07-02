@@ -129,7 +129,7 @@ export default function InventoryWorkspace() {
                             {activeTab === 'warehouse' && <WarehousePage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
                             {activeTab === 'tools' && <ToolsPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
                             {activeTab === 'purchases' && <PurchasesPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
-                            {activeTab === 'movements' && <StockMovementsPage externalSearch={globalSearch} />}
+                            {activeTab === 'movements' && <StockMovementsPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
                         </motion.div>
                     </AnimatePresence>
                 </div>

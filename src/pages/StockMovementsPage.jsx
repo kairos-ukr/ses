@@ -1,13 +1,16 @@
-import React, { useState, useEffect, useCallback, memo } from 'react';
+import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     FaFileExcel, FaArrowDown, FaArrowUp, FaExchangeAlt, 
     FaTrash, FaLock, FaUnlock, FaFileAlt, FaCheck, FaExclamationTriangle, 
-    FaTimes, FaInfoCircle, FaHistory, FaCalendarAlt
+    FaTimes, FaInfoCircle, FaHistory, FaCalendarAlt, FaShoppingCart, FaHandshake
 } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
+
+// Імпорт модалки (створимо в наступному кроці)
+import DirectSaleModal from './DirectSaleModal';
 
 // --- ДОПОМІЖНІ КОМПОНЕНТИ ---
 const Toast = memo(({ message, type = 'success', isVisible, onClose }) => {
@@ -39,21 +42,26 @@ const OP_CONFIG = {
     'writeoff': { label: 'Списання', icon: FaTrash, color: 'text-rose-700 bg-rose-100 border-rose-200', sign: '-', signColor: 'text-rose-700 bg-rose-50 border-rose-200' },
     'reserve': { label: 'Резерв', icon: FaLock, color: 'text-purple-700 bg-purple-100 border-purple-200', sign: '0', signColor: 'text-purple-700 bg-purple-50 border-purple-200' },
     'unreserve': { label: 'Зняття рез.', icon: FaUnlock, color: 'text-slate-600 bg-slate-200 border-slate-300', sign: '0', signColor: 'text-slate-600 bg-slate-100 border-slate-200' },
+    'sale': { label: 'Продаж', icon: FaShoppingCart, color: 'text-blue-700 bg-blue-100 border-blue-200', sign: '-', signColor: 'text-blue-700 bg-blue-50 border-blue-200' },
+    'partner_transfer': { label: 'Передача', icon: FaHandshake, color: 'text-violet-700 bg-violet-100 border-violet-200', sign: '-', signColor: 'text-violet-700 bg-violet-50 border-violet-200' },
 };
 
-// Приймаємо externalSearch від батьківського компонента (InventoryWorkspace)
-export default function StockMovementsPage({ externalSearch = '' }) {
+// Приймаємо externalSearch та externalActionTrigger від батьківського компонента (InventoryWorkspace)
+export default function StockMovementsPage({ externalSearch = '', externalActionTrigger = 0 }) {
     const { loading: authLoading } = useAuth();
     
     const [movements, setMovements] = useState([]);
     const [loading, setLoading] = useState(true);
     
-    const [dicts, setDicts] = useState({ nom: {}, emp: {}, wh: {}, inst: {}, sup: {}, po: {} });
+    const [dicts, setDicts] = useState({ nom: {}, emp: {}, wh: {}, inst: {}, sup: {}, po: {}, clients: {} });
     
     const [toast, setToast] = useState({ isVisible: false, message: '', type: 'success' });
     const showToast = useCallback((message, type = 'success') => setToast({ isVisible: true, message, type }), []);
 
-    // Фільтри (пошук тепер зовнішній)
+    // Стейт для модалки продажів
+    const [isSaleModalOpen, setIsSaleModalOpen] = useState(false);
+
+    // Фільтри
     const [typeFilter, setTypeFilter] = useState('all');
     const [dateFrom, setDateFrom] = useState('');
     const [dateTo, setDateTo] = useState('');
@@ -61,6 +69,16 @@ export default function StockMovementsPage({ externalSearch = '' }) {
     // Пагінація
     const [currentPage, setCurrentPage] = useState(1);
     const ITEMS_PER_PAGE = 10;
+
+    // --- ВІДСТЕЖЕННЯ СИГНАЛУ НА ВІДКРИТТЯ МОДАЛКИ ПРОДАЖУ ---
+    const prevActionTrigger = useRef(externalActionTrigger);
+    
+    useEffect(() => {
+        if (externalActionTrigger > prevActionTrigger.current) {
+            setIsSaleModalOpen(true);
+        }
+        prevActionTrigger.current = externalActionTrigger;
+    }, [externalActionTrigger]);
 
     // --- ЗАВАНТАЖЕННЯ ДАНИХ ---
     const loadData = useCallback(async () => {
@@ -73,7 +91,7 @@ export default function StockMovementsPage({ externalSearch = '' }) {
                 .limit(1500); 
             if (movErr) throw movErr;
 
-            const [nomRes, catRes, empRes, whRes, instRes, supRes, poRes, poItemsRes, resRes] = await Promise.all([
+            const [nomRes, catRes, empRes, whRes, instRes, supRes, poRes, poItemsRes, resRes, clientsRes] = await Promise.all([
                 supabase.from('nomenclature').select('id, name, sku, category_id, unit:units(code, name)'),
                 supabase.from('categories').select('id, name, parent_id'),
                 supabase.from('employees').select('id, name'),
@@ -82,10 +100,11 @@ export default function StockMovementsPage({ externalSearch = '' }) {
                 supabase.from('suppliers').select('id, name'),
                 supabase.from('purchase_orders').select('id, order_number, supplier_id'),
                 supabase.from('purchase_order_items').select('id, purchase_order_id'),
-                supabase.from('reservations').select('id, installation_custom_id')
+                supabase.from('reservations').select('id, installation_custom_id'),
+                supabase.from('clients').select('id, name')
             ]);
 
-            const d = { nom: {}, emp: {}, wh: {}, inst: {}, sup: {}, po: {}, poItem: {}, res: {} };
+            const d = { nom: {}, emp: {}, wh: {}, inst: {}, sup: {}, po: {}, poItem: {}, res: {}, clients: {} };
             
             (empRes.data || []).forEach(e => d.emp[e.id] = e.name);
             (whRes.data || []).forEach(w => d.wh[w.id] = w.name);
@@ -94,6 +113,7 @@ export default function StockMovementsPage({ externalSearch = '' }) {
             (poRes.data || []).forEach(p => d.po[p.id] = p);
             (poItemsRes.data || []).forEach(pi => d.poItem[pi.id] = pi);
             (resRes.data || []).forEach(r => d.res[r.id] = r);
+            (clientsRes.data || []).forEach(c => d.clients[c.id] = c.name);
 
             const cats = catRes.data || [];
             (nomRes.data || []).forEach(item => {
@@ -166,6 +186,15 @@ export default function StockMovementsPage({ externalSearch = '' }) {
                 from = `Резерв під ${objName}`;
                 to = dicts.wh[mov.warehouse_from_id] || 'Склад';
             }
+        } else if (mov.operation_type === 'sale' || mov.operation_type === 'partner_transfer') {
+            from = dicts.wh[mov.warehouse_from_id] || 'Склад';
+            const clientName = mov.client_id ? dicts.clients[mov.client_id] : null;
+            const instName = mov.installation_custom_id ? `Об'єкт #${mov.installation_custom_id}` : null;
+            
+            if (clientName && instName) to = `${clientName} (${instName})`;
+            else if (clientName) to = `Клієнт/Партнер: ${clientName}`;
+            else if (instName) to = instName;
+            else to = 'Продаж / Відвантаження';
         }
 
         const routeStr = `${from} → ${to}`;
@@ -178,7 +207,6 @@ export default function StockMovementsPage({ externalSearch = '' }) {
     const processedMovements = movements.map(m => ({ ...m, ...buildRowData(m) }));
 
     const filteredMovements = processedMovements.filter(m => {
-        // Фільтр за зовнішнім текстом (з батьківського компонента)
         const term = externalSearch.toLowerCase();
         const matchesSearch = 
             m.nom.fullName.toLowerCase().includes(term) || 
@@ -187,10 +215,8 @@ export default function StockMovementsPage({ externalSearch = '' }) {
             m.routeStr.toLowerCase().includes(term) ||
             m.empName.toLowerCase().includes(term);
             
-        // Фільтр за типом
         const matchesType = typeFilter === 'all' || m.operation_type === typeFilter;
 
-        // Фільтр за датами
         const opDate = new Date(m.operation_date || m.created_at);
         const matchesDateFrom = !dateFrom || opDate >= new Date(dateFrom);
         const matchesDateTo = !dateTo || opDate <= new Date(dateTo + 'T23:59:59.999Z');
@@ -201,7 +227,6 @@ export default function StockMovementsPage({ externalSearch = '' }) {
     const totalPages = Math.ceil(filteredMovements.length / ITEMS_PER_PAGE);
     const paginatedItems = filteredMovements.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
-    // Скидання пагінації при зміні будь-якого фільтра
     useEffect(() => { setCurrentPage(1); }, [externalSearch, typeFilter, dateFrom, dateTo]);
 
     // --- ЕКСПОРТ В EXCEL ---
@@ -216,6 +241,7 @@ export default function StockMovementsPage({ externalSearch = '' }) {
                 'SKU': m.nom.sku || '',
                 'Кількість': `${m.conf.sign !== '0' ? m.conf.sign : ''}${parseFloat(m.quantity)}`,
                 'Од. вим.': m.nom.unitCode,
+                'Ціна (якщо продаж)': m.sale_price ? `${parseFloat(m.sale_price)} ${m.currency}` : '',
                 'Документ': m.docStr,
                 'Маршрут (Звідки -> Куди)': m.routeStr,
                 'Відповідальний': m.empName,
@@ -239,7 +265,6 @@ export default function StockMovementsPage({ externalSearch = '' }) {
             <div className="flex flex-col xl:flex-row gap-4 mb-4 bg-white p-4 rounded-[16px] border border-slate-200 shadow-sm flex-none">
                 
                 <div className="flex-1 flex flex-col sm:flex-row gap-4 items-center">
-                    {/* Фільтр по датах */}
                     <div className="flex items-center gap-3 bg-slate-50 px-4 py-2.5 rounded-xl border border-transparent focus-within:bg-white focus-within:border-indigo-300 transition-colors w-full sm:w-auto">
                         <FaCalendarAlt className="text-slate-400 flex-shrink-0" />
                         <div className="flex items-center gap-2">
@@ -249,11 +274,11 @@ export default function StockMovementsPage({ externalSearch = '' }) {
                         </div>
                     </div>
                     
-                    {/* Тип операції (таби-фільтри) */}
                     <div className="flex bg-slate-50 rounded-xl p-1.5 overflow-x-auto hide-scrollbar w-full sm:w-auto">
                         <button onClick={() => setTypeFilter('all')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'all' ? 'bg-[#0F172A] text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Всі</button>
                         <button onClick={() => setTypeFilter('purchase')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'purchase' ? 'bg-emerald-100 text-emerald-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Приходи</button>
                         <button onClick={() => setTypeFilter('issue')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'issue' ? 'bg-amber-100 text-amber-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Видачі</button>
+                        <button onClick={() => setTypeFilter('sale')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'sale' ? 'bg-blue-100 text-blue-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Продажі</button>
                         <button onClick={() => setTypeFilter('transfer')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'transfer' ? 'bg-indigo-100 text-indigo-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Переміщення</button>
                     </div>
                 </div>
@@ -315,11 +340,18 @@ export default function StockMovementsPage({ externalSearch = '' }) {
 
                                             {/* Кількість */}
                                             <td className="px-4 py-4 w-28 text-center align-middle border-x border-slate-50">
-                                                <div className={`inline-block px-3 py-1.5 rounded-lg border shadow-sm ${m.conf.signColor}`}>
-                                                    <span className="font-black text-[15px]">
-                                                        {m.conf.sign !== '0' && m.conf.sign}{parseFloat(m.quantity)}
-                                                    </span>
-                                                    <span className="text-[11px] font-bold uppercase ml-1.5 opacity-80">{m.nom.unitCode}</span>
+                                                <div className={`inline-flex flex-col items-center justify-center px-3 py-1.5 rounded-lg border shadow-sm ${m.conf.signColor}`}>
+                                                    <div>
+                                                        <span className="font-black text-[15px]">
+                                                            {m.conf.sign !== '0' && m.conf.sign}{parseFloat(m.quantity)}
+                                                        </span>
+                                                        <span className="text-[11px] font-bold uppercase ml-1.5 opacity-80">{m.nom.unitCode}</span>
+                                                    </div>
+                                                    {(m.operation_type === 'sale' || m.operation_type === 'partner_transfer') && m.sale_price && (
+                                                        <div className="text-[10px] font-bold opacity-75 mt-0.5">
+                                                            {parseFloat(m.sale_price).toLocaleString('uk-UA')} {m.currency}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </td>
 
@@ -358,7 +390,7 @@ export default function StockMovementsPage({ externalSearch = '' }) {
                 )}
             </div>
 
-            {/* --- ПАГІНАЦІЯ (Рівно 10 позицій) --- */}
+            {/* --- ПАГІНАЦІЯ --- */}
             {filteredMovements.length > 0 && (
                 <div className="flex justify-between items-center bg-white px-5 py-3.5 rounded-[16px] border border-slate-200 shadow-sm flex-none">
                     <span className="text-sm text-slate-500 font-medium">
@@ -385,6 +417,14 @@ export default function StockMovementsPage({ externalSearch = '' }) {
                     </div>
                 </div>
             )}
+
+            { 
+            <DirectSaleModal 
+                isOpen={isSaleModalOpen} 
+                onClose={() => setIsSaleModalOpen(false)} 
+                onSuccess={loadData} 
+            /> 
+            }
         </div>
     );
 }
