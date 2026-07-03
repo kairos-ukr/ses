@@ -18,7 +18,9 @@ import {
   FaArrowRight,
   FaUserTie,
   FaDownload,
-  FaClipboardList
+  FaClipboardList,
+  FaHardHat,
+  FaExclamationTriangle
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
@@ -166,6 +168,12 @@ const ALL_STATUS_LABELS = {
   "виконано": "Виконано",
   "завершено": "Завершено",
 };
+
+// --- СПИСОК СТАТУСІВ ОБ'ЄКТА, ЯКІ ОЗНАЧАЮТЬ "НЕАКТИВНИЙ" ---
+const INACTIVE_PROJECT_STATUSES = new Set([
+  "completed", "done", "cancelled", "paused", "closed", 
+  "скасовано", "завершено", "призупинено"
+]);
 
 function normalizeStatus(status) {
   return String(status || "").trim().toLowerCase();
@@ -931,15 +939,6 @@ export default function MyWorkflowDashboard() {
     }
   }, []);
 
-  /**
-   * ЗАВАНТАЖЕННЯ ДАНИХ ІЗ ТАБЛИЦІ WORKFLOW_EVENTS 🚀
-   * Логіка:
-   * 1. Знаходимо всі об'єкти, де цей працівник КОЛИСЬ був призначений (new_responsible = employee.id)
-   * 2. Витягуємо всю історію подій по знайдених об'єктах.
-   * 3. Йдемо по історії З КІНЦЯ. Знаходимо останній статус і останнього відповідального.
-   * Якщо при зміні статусу new_responsible = null, алгоритм автоматично шукає його в старіших логах.
-   * 4. Залишаємо лише ті завдання, де відповідальний - це ви і статус - не виконано.
-   */
   const loadData = useCallback(async () => {
     if (!employee?.custom_id) return;
 
@@ -947,7 +946,7 @@ export default function MyWorkflowDashboard() {
     setErrorText("");
 
     try {
-      // Крок 1: В яких об'єктах цей працівник взагалі брав участь
+      // 1: В яких об'єктах цей працівник взагалі брав участь
       const { data: myAssignments, error: assignErr } = await supabase
         .from("workflow_events")
         .select("installation_custom_id")
@@ -962,33 +961,30 @@ export default function MyWorkflowDashboard() {
         return;
       }
 
-      // Крок 2: Витягуємо всю історію цих об'єктів для точного прорахунку
+      // 2: Витягуємо всю історію цих об'єктів для точного прорахунку
       const { data: allHistory, error: historyErr } = await supabase
         .from("workflow_events")
         .select("id, installation_custom_id, stage_key, new_status, new_responsible, created_at")
         .in("installation_custom_id", installationIds)
         .order("created_at", { ascending: false })
-        .order("id", { ascending: false }); // Гарантуємо, що новіші ідентифікатори завжди вище, якщо час однаковий
+        .order("id", { ascending: false });
 
       if (historyErr) throw historyErr;
 
-      // Крок 3: Агрегуємо реальний поточний стан
-      const latestState = new Map(); // key -> { status, responsible, updated_at, id }
+      // 3: Агрегуємо реальний поточний стан
+      const latestState = new Map(); 
 
       for (const ev of (allHistory || [])) {
         const key = `${ev.installation_custom_id}__${ev.stage_key}`;
 
         if (!latestState.has(key)) {
-          // Зустріли запис вперше - це найновіший запис для цього етапу
           latestState.set(key, {
             status: ev.new_status || "todo",
-            responsible: ev.new_responsible, // Може бути null!
+            responsible: ev.new_responsible, 
             updated_at: ev.created_at,
             id: ev.id,
           });
         } else {
-          // Якщо ми вже маємо найновіший запис, але відповідальний там був null (не передавався),
-          // шукаємо його в старіших записах і присвоюємо.
           const state = latestState.get(key);
           if (state.responsible === null && ev.new_responsible !== null) {
             state.responsible = ev.new_responsible;
@@ -996,7 +992,7 @@ export default function MyWorkflowDashboard() {
         }
       }
 
-      // Крок 4: Фільтруємо - залишаємо тільки ті етапи, де реальний відповідальний - це ви, і етап НЕ завершено
+      // 4: Залишаємо тільки ті етапи, де відповідальний - це ви, і етап НЕ завершено
       const activeRows = [];
       for (const [key, state] of latestState.entries()) {
         const [instIdStr, stageKey] = key.split("__");
@@ -1019,9 +1015,9 @@ export default function MyWorkflowDashboard() {
         return;
       }
 
-      // Крок 5: Довантажуємо дані по об'єктах та клієнтах
       const activeInstIds = [...new Set(activeRows.map((r) => r.installation_custom_id))];
 
+      // 5: Довантажуємо дані по об'єктах та клієнтах
       const { data: installationRows, error: instErr } = await supabase
         .from("installations")
         .select(`
@@ -1047,6 +1043,11 @@ export default function MyWorkflowDashboard() {
           const inst = instMap.get(s.installation_custom_id);
           if (!inst) return null;
 
+          // ФІЛЬТР: Якщо об'єкт (проект) закритий, скасований або призупинений - не показуємо його завдання
+          if (inst.status && INACTIVE_PROJECT_STATUSES.has(inst.status.toLowerCase())) {
+            return null;
+          }
+
           const clientName = inst?.client?.company_name || inst?.client?.name || "—";
 
           return {
@@ -1065,7 +1066,7 @@ export default function MyWorkflowDashboard() {
             responsible_emp_custom_id: s.responsible_emp_custom_id,
           };
         })
-        .filter(Boolean);
+        .filter(Boolean); // Видаляє всі null, які утворилися через закриті проекти
 
       setRows(normalized);
     } catch (err) {
@@ -1212,7 +1213,6 @@ export default function MyWorkflowDashboard() {
       if (rpcError) {
         console.warn("RPC failed, using direct DB insert:", rpcError);
 
-        // Якщо RPC немає, просто пишемо напряму подію
         const { error: evErr } = await supabase.from("workflow_events").insert({
           installation_custom_id: quickItem.installation_custom_id,
           stage_key: quickItem.stage_key,
@@ -1229,7 +1229,6 @@ export default function MyWorkflowDashboard() {
         if (evErr) throw evErr;
       }
 
-      // Оновлюємо інтерфейс і перезавантажуємо дані
       closeQuickModal();
       await loadData();
     } catch (err) {
@@ -1264,124 +1263,134 @@ export default function MyWorkflowDashboard() {
               <div>
                 <h1 className="text-2xl font-extrabold text-slate-900 flex items-center gap-2">
                   <FaClipboardList className="text-indigo-600" />
-                  Мої етапи
+                  Мої завдання та етапи
                 </h1>
                 <p className="text-sm text-slate-600 mt-1">
-                  Показані лише етапи, де ви відповідальні, і які ще не завершені.
+                  Показані лише активні завдання для проектів, які знаходяться в роботі.
                 </p>
               </div>
 
               <button
                 onClick={loadData}
-                className="w-full lg:w-auto px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-sm font-medium flex items-center justify-center gap-2"
+                className="w-full lg:w-auto px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-indigo-200 text-slate-700 text-sm font-bold shadow-sm transition-colors flex items-center justify-center gap-2"
                 type="button"
               >
                 <FaSyncAlt />
-                Оновити
+                Оновити дані
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
-              <div className="rounded-xl border border-slate-200 p-3 bg-slate-50">
-                <div className="text-xs text-slate-500">Об’єкти у роботі</div>
-                <div className="text-2xl font-bold text-slate-900">{stats.objects}</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-5">
+              <div className="rounded-xl border border-slate-100 p-4 bg-slate-50 flex flex-col justify-center">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Активні об’єкти</div>
+                <div className="text-3xl font-black text-slate-800">{stats.objects}</div>
               </div>
-              <div className="rounded-xl border border-slate-200 p-3 bg-slate-50">
-                <div className="text-xs text-slate-500">Активні призначення</div>
-                <div className="text-2xl font-bold text-slate-900">{stats.assignments}</div>
+              <div className="rounded-xl border border-slate-100 p-4 bg-slate-50 flex flex-col justify-center">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Очікують виконання</div>
+                <div className="text-3xl font-black text-indigo-600">{stats.assignments}</div>
               </div>
             </div>
 
-            <div className="mt-4">
-              <div className="relative w-full md:max-w-lg">
-                <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <div className="mt-5">
+              <div className="relative w-full md:max-w-xl">
+                <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Пошук: № об’єкта, назва, клієнт, етап..."
-                  className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Пошук: № об’єкта, клієнт, етап..."
+                  className="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
                 />
               </div>
             </div>
 
-            {errorText ? (
-              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {errorText}
+            {errorText && (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 flex items-center gap-2">
+                <FaExclamationTriangle /> {errorText}
               </div>
-            ) : null}
+            )}
           </div>
 
           {loading ? (
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 text-slate-600 flex items-center gap-3">
-               <FaSpinner className="animate-spin text-indigo-500" /> Завантаження ваших завдань...
+            <div className="bg-white border border-slate-200 rounded-2xl p-10 flex flex-col items-center justify-center text-slate-500 shadow-sm">
+               <FaSpinner className="animate-spin text-indigo-500 text-3xl mb-3" /> 
+               <span className="font-medium text-sm">Збираємо ваші завдання...</span>
             </div>
           ) : groupedSections.length === 0 ? (
-            <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center">
-              <div className="mx-auto w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3">
-                <FaUserCheck className="text-slate-500" />
+            <div className="bg-white border border-slate-200 rounded-2xl p-12 flex flex-col items-center justify-center text-center shadow-sm">
+              <div className="w-16 h-16 rounded-2xl bg-emerald-50 flex items-center justify-center mb-4">
+                <FaUserCheck className="text-emerald-500 text-2xl" />
               </div>
-              <h3 className="text-lg font-semibold text-slate-900">Немає активних призначень</h3>
-              <p className="text-sm text-slate-600 mt-1">Зараз для вас немає етапів, що потребують дій.</p>
+              <h3 className="text-xl font-bold text-slate-800">Все виконано!</h3>
+              <p className="text-sm text-slate-500 mt-2 max-w-md">Наразі немає активних завдань, призначених на вас для проектів, які знаходяться в роботі.</p>
             </div>
           ) : (
-            <div className="space-y-5">
+            <div className="space-y-6">
               {groupedSections.map((section) => (
-                <section key={section.stageKey} className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                      <FaTasks className="text-indigo-600" />
+                <section key={section.stageKey} className="bg-white border border-slate-200 rounded-[20px] p-5 sm:p-6 shadow-sm">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 pb-4 border-b border-slate-100">
+                    <h2 className="text-lg font-black text-slate-800 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600">
+                        <FaTasks size={14} />
+                      </div>
                       {section.stageLabel}
                     </h2>
-                    <span className="text-xs font-semibold px-2 py-1 rounded-full bg-slate-100 text-slate-700">
-                      {section.items.length}
-                    </span>
+                    <div className="bg-slate-100 text-slate-600 text-xs font-bold px-3 py-1.5 rounded-lg w-fit">
+                      Всього: {section.items.length}
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                     {section.items.map((item) => {
                       const statusMeta = getStatusMetaByStage(item.stage_key, item.status);
 
                       return (
                         <div
                           key={item.id}
-                          className="p-4 rounded-xl border border-slate-200 hover:border-indigo-300 hover:shadow-sm transition bg-white"
+                          className="flex flex-col h-full p-5 rounded-2xl border border-slate-200 bg-white hover:border-indigo-300 hover:shadow-md transition-all group"
                         >
-                          <button
-                            onClick={() => navigate(`/project/${item.installation_custom_id}`)}
-                            className="w-full text-left"
-                            title={`Відкрити об'єкт #${item.installation_custom_id}`}
-                            type="button"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <div className="text-xs text-slate-500">Об’єкт #{item.installation_custom_id}</div>
-                                <div className="font-semibold text-slate-900 leading-snug mt-0.5">
-                                  {item.installation_name || `Об'єкт #${item.installation_custom_id}`}
-                                </div>
+                          <div className="flex-1">
+                            <div className="flex items-start justify-between gap-3 mb-3">
+                              <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-md">
+                                <FaHardHat className="text-slate-400 text-[10px]" />
+                                <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">
+                                  Об'єкт #{item.installation_custom_id}
+                                </span>
                               </div>
-
-                              <span className={`text-xs px-2 py-1 rounded-full font-medium border ${statusMeta.color}`}>
+                              <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider border ${statusMeta.color}`}>
                                 {statusMeta.label}
                               </span>
                             </div>
 
-                            <div className="mt-3 text-sm text-slate-600">
-                              <div className="truncate">
-                                <span className="text-slate-500">Клієнт:</span>{" "}
-                                <span className="text-slate-800">{item.client_name || "—"}</span>
+                            <button
+                              onClick={() => navigate(`/project/${item.installation_custom_id}`)}
+                              className="text-left group-hover:text-indigo-700 transition-colors w-full focus:outline-none"
+                              title={`Відкрити об'єкт #${item.installation_custom_id}`}
+                              type="button"
+                            >
+                              <h3 className="font-bold text-slate-800 text-base leading-snug mb-3">
+                                {item.installation_name || `Проект #${item.installation_custom_id}`}
+                              </h3>
+                            </button>
+
+                            <div className="space-y-1.5 mb-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                              <div className="flex items-center gap-2 text-xs">
+                                <FaUserTie className="text-slate-400" />
+                                <span className="text-slate-500 font-medium w-16">Клієнт:</span>
+                                <span className="font-bold text-slate-700 truncate">{item.client_name || "—"}</span>
                               </div>
-                              <div className="mt-1">
-                                <span className="text-slate-500">Оновлено:</span>{" "}
-                                <span className="text-slate-800">{formatDateTime(item.updated_at)}</span>
+                              <div className="flex items-center gap-2 text-xs">
+                                <FaClock className="text-slate-400" />
+                                <span className="text-slate-500 font-medium w-16">Оновлено:</span>
+                                <span className="font-bold text-slate-700 truncate">{formatDateTime(item.updated_at)}</span>
                               </div>
                             </div>
-                          </button>
+                          </div>
 
-                          <div className="mt-3 flex items-center justify-between gap-2">
+                          <div className="pt-4 mt-auto border-t border-slate-100 flex items-center justify-between gap-2">
                             <button
                               onClick={() => openQuickModal(item)}
-                              className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-medium hover:bg-indigo-100"
+                              className="flex-1 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 text-xs font-bold transition-colors border border-indigo-100 hover:border-indigo-600"
                               type="button"
                             >
                               Швидко відмітити
@@ -1389,11 +1398,11 @@ export default function MyWorkflowDashboard() {
 
                             <button
                               onClick={() => navigate(`/project/${item.installation_custom_id}`)}
-                              className="inline-flex items-center text-indigo-600 text-sm font-medium hover:text-indigo-700"
+                              className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50 transition-colors flex items-center justify-center"
+                              title="В картку проекту"
                               type="button"
                             >
-                              В картку
-                              <FaChevronRight className="ml-1" />
+                              <FaArrowRight />
                             </button>
                           </div>
                         </div>
