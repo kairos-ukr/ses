@@ -101,7 +101,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                 supabase.from('purchase_orders').select('id, order_number, supplier_id'),
                 supabase.from('purchase_order_items').select('id, purchase_order_id'),
                 supabase.from('reservations').select('id, installation_custom_id'),
-                supabase.from('clients').select('id, name')
+                supabase.from('clients').select('id, custom_id, name')
             ]);
 
             const d = { nom: {}, emp: {}, wh: {}, inst: {}, sup: {}, po: {}, poItem: {}, res: {}, clients: {} };
@@ -113,7 +113,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             (poRes.data || []).forEach(p => d.po[p.id] = p);
             (poItemsRes.data || []).forEach(pi => d.poItem[pi.id] = pi);
             (resRes.data || []).forEach(r => d.res[r.id] = r);
-            (clientsRes.data || []).forEach(c => d.clients[c.id] = c.name);
+            (clientsRes.data || []).forEach(c => d.clients[c.id] = { name: c.name, customId: c.custom_id ?? c.id });
 
             const cats = catRes.data || [];
             (nomRes.data || []).forEach(item => {
@@ -142,6 +142,20 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
 
     useEffect(() => { if (!authLoading) loadData(); }, [authLoading, loadData]);
 
+    // --- ФОРМАТУВАННЯ МІТОК ОБ'ЄКТА / КЛІЄНТА (назва + ID, без службових слів) ---
+    const getInstallationLabel = (customId) => {
+        if (!customId) return null;
+        const name = dicts.inst[customId];
+        return name ? `«${name}» #${customId}` : `#${customId}`;
+    };
+
+    const getClientLabel = (clientId) => {
+        if (!clientId) return null;
+        const client = dicts.clients[clientId];
+        if (!client) return `#${clientId}`;
+        return `${client.name} (ID ${client.customId})`;
+    };
+
     // --- ФОРМУВАННЯ ДАНИХ ДЛЯ РЯДКА ---
     const buildRowData = (mov) => {
         const conf = OP_CONFIG[mov.operation_type] || { label: 'Інше', icon: FaInfoCircle, color: 'text-slate-500 bg-slate-100', sign: '', signColor: 'bg-slate-100 text-slate-600' };
@@ -166,9 +180,9 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             to = dicts.wh[mov.warehouse_to_id] || 'Склад';
         } else if (mov.operation_type === 'issue') {
             from = dicts.wh[mov.warehouse_from_id] || 'Склад';
-            to = `Об'єкт #${mov.installation_custom_id}`;
+            to = getInstallationLabel(mov.installation_custom_id) || '—';
         } else if (mov.operation_type === 'return') {
-            from = `Об'єкт #${mov.installation_custom_id}`;
+            from = getInstallationLabel(mov.installation_custom_id) || '—';
             to = dicts.wh[mov.warehouse_to_id] || 'Склад';
         } else if (mov.operation_type === 'transfer') {
             from = dicts.wh[mov.warehouse_from_id] || 'Склад';
@@ -178,7 +192,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             to = 'Списано (Втрата)';
         } else if (mov.operation_type === 'reserve' || mov.operation_type === 'unreserve') {
             const resInstId = mov.reservation_id ? dicts.res[mov.reservation_id]?.installation_custom_id : null;
-            const objName = resInstId ? `Об'єкт #${resInstId}` : 'Об\'єкт';
+            const objName = getInstallationLabel(resInstId) || '—';
             if (mov.operation_type === 'reserve') {
                 from = dicts.wh[mov.warehouse_from_id] || 'Склад';
                 to = `Резерв під ${objName}`;
@@ -188,12 +202,12 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             }
         } else if (mov.operation_type === 'sale' || mov.operation_type === 'partner_transfer') {
             from = dicts.wh[mov.warehouse_from_id] || 'Склад';
-            const clientName = mov.client_id ? dicts.clients[mov.client_id] : null;
-            const instName = mov.installation_custom_id ? `Об'єкт #${mov.installation_custom_id}` : null;
-            
-            if (clientName && instName) to = `${clientName} (${instName})`;
-            else if (clientName) to = `Клієнт/Партнер: ${clientName}`;
-            else if (instName) to = instName;
+            const clientLabel = getClientLabel(mov.client_id);
+            const instLabel = getInstallationLabel(mov.installation_custom_id);
+
+            if (clientLabel && instLabel) to = `${clientLabel} · ${instLabel}`;
+            else if (clientLabel) to = clientLabel;
+            else if (instLabel) to = instLabel;
             else to = 'Продаж / Відвантаження';
         }
 
@@ -423,6 +437,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                 isOpen={isSaleModalOpen} 
                 onClose={() => setIsSaleModalOpen(false)} 
                 onSuccess={loadData} 
+                showToast={showToast}
             /> 
             }
         </div>

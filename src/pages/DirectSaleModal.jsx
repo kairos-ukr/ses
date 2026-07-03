@@ -61,7 +61,7 @@ const SearchableSelect = ({ options, value, onChange, placeholder, disabled, ico
                                 autoFocus
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
-                                placeholder="Пошук..."
+                                placeholder="Пошук (Ім'я або ID)..."
                                 className="w-full bg-transparent border-none outline-none text-sm font-medium py-1"
                             />
                         </div>
@@ -94,6 +94,12 @@ const SearchableSelect = ({ options, value, onChange, placeholder, disabled, ico
 
 export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast }) {
     const { employee } = useAuth();
+
+    // Захист від краху, якщо батьківський компонент не передав showToast
+    // (тости просто не будуть показані, замість краху додатку).
+    // ВАЖЛИВО: перевірте виклик <DirectSaleModal ... /> у батьківському
+    // компоненті — там має передаватись реальна функція showToast.
+    const safeShowToast = typeof showToast === 'function' ? showToast : (msg) => console.warn('[DirectSaleModal] showToast не передано:', msg);
     
     const [dictionaries, setDictionaries] = useState({
         nomenclatures: [],
@@ -106,21 +112,23 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
     const [isLoading, setIsLoading] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
-    // Стейт для швидкого додавання клієнта
     const [isAddingClient, setIsAddingClient] = useState(false);
     const [newClient, setNewClient] = useState({ name: '', phone: '', notes: '' });
 
+    // Оновлений початковий стан форми для гнучкої фіксації сум
     const initialFormState = {
         operation_type: 'sale',
         client_id: '',
         installation_custom_id: '',
         warehouse_from_id: '',
         nomenclature_id: '',
-        sellMode: 'base', // 'base' (упаковки/базова од.) або 'piece' (штуки)
+        sellMode: 'base', 
         quantity: '',
-        sale_price: '',
+        sale_price: '',    // Ціна за одиницю в обраній валюті
+        total_price: '',   // Загальна сума в обраній валюті
+        total_uah: '',     // Загальна сума в гривнях
         currency: 'USD',
-        exchange_rate: 1.0,
+        exchange_rate: '41.5', 
         reference_document: '',
         notes: ''
     };
@@ -143,13 +151,11 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                 supabase.from('nomenclature').select('id, name, sku, category_id, package_name, package_multiplier, unit:units(name)').eq('is_active', true),
                 supabase.from('categories').select('id, name, parent_id'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
-                supabase.from('clients').select('id, name, is_subcontract').order('name'),
-                // Фільтруємо об'єкти: беремо лише активні
+                supabase.from('clients').select('id, custom_id, name, is_subcontract').order('name'),
                 supabase.from('installations').select('custom_id, name').in('status', ['planning', 'in_progress', 'pending']),
                 supabase.from('v_warehouse_stock_available').select('warehouse_id, nomenclature_id, quantity_available')
             ]);
 
-            // Будуємо повні імена для товарів (з ієрархією категорій)
             const cats = catRes.data || [];
             const processedNom = (nomRes.data || []).map(item => {
                 let path = [];
@@ -173,15 +179,14 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                 stockBalances: stockRes.data || []
             });
         } catch (error) {
-            if (showToast) showToast(`Помилка: ${error.message}`, 'error');
+            safeShowToast(`Помилка: ${error.message}`, 'error');
         } finally {
             setIsLoading(false);
         }
     };
 
-    // --- ЛОГІКА ДОДАВАННЯ КЛІЄНТА ---
     const handleQuickAddClient = async () => {
-        if (!newClient.name.trim()) return showToast('Ім\'я/Назва клієнта є обов\'язковим', 'error');
+        if (!newClient.name.trim()) return safeShowToast('Ім\'я/Назва клієнта є обов\'язковим', 'error');
         setIsSubmitting(true);
         try {
             const { data, error } = await supabase
@@ -199,19 +204,67 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
             
             setForm(prev => ({ ...prev, client_id: data.id }));
             setIsAddingClient(false);
-            showToast('Клієнта успішно додано!', 'success');
+            safeShowToast('Клієнта успішно додано!', 'success');
         } catch (error) {
-            showToast(error.message, 'error');
+            safeShowToast(error.message, 'error');
         } finally {
             setIsSubmitting(false);
         }
     };
 
-    // --- ЛОГІКА ФІЛЬТРАЦІЇ ТА ЗАЛИШКІВ ---
+    // --- РОЗУМНЕ ОНОВЛЕННЯ ФІНАНСІВ (Свобода вводу) ---
+    const updateFinances = (field, value) => {
+        let newForm = { ...form, [field]: value };
+        
+        // Перетворюємо введені дані у числа для розрахунків (або 0, якщо пусто)
+        const q = parseFloat(newForm.quantity) || 0;
+        const up = parseFloat(newForm.sale_price) || 0;
+        const tp = parseFloat(newForm.total_price) || 0;
+        const r = parseFloat(newForm.exchange_rate) || 0;
+
+        if (field === 'quantity') {
+            const newQ = parseFloat(value) || 0;
+            const newTp = newQ * up;
+            newForm.total_price = newTp > 0 ? newTp.toFixed(2) : '';
+            newForm.total_uah = (newTp * r) > 0 ? (newTp * r).toFixed(2) : '';
+        } 
+        else if (field === 'sale_price') {
+            const newUp = parseFloat(value) || 0;
+            const newTp = q * newUp;
+            newForm.total_price = newTp > 0 ? newTp.toFixed(2) : '';
+            newForm.total_uah = (newTp * r) > 0 ? (newTp * r).toFixed(2) : '';
+        } 
+        else if (field === 'total_price') {
+            const newTp = parseFloat(value) || 0;
+            if (q > 0) newForm.sale_price = (newTp / q).toFixed(2);
+            newForm.total_uah = (newTp * r) > 0 ? (newTp * r).toFixed(2) : '';
+        } 
+        else if (field === 'exchange_rate') {
+            const newR = parseFloat(value) || 0;
+            newForm.total_uah = (tp * newR) > 0 ? (tp * newR).toFixed(2) : '';
+        } 
+        else if (field === 'total_uah') {
+            const newTu = parseFloat(value) || 0;
+            if (tp > 0) {
+                newForm.exchange_rate = (newTu / tp).toFixed(2);
+            }
+        } 
+        else if (field === 'currency') {
+            if (value === 'UAH') {
+                newForm.exchange_rate = '1';
+                newForm.total_uah = newForm.total_price;
+            } else {
+                newForm.exchange_rate = '41.5';
+                newForm.total_uah = (tp * 41.5) > 0 ? (tp * 41.5).toFixed(2) : '';
+            }
+        }
+        
+        setForm(newForm);
+    };
+
     const selectedItem = dictionaries.nomenclatures.find(n => n.id === parseInt(form.nomenclature_id));
     const hasPackage = selectedItem && selectedItem.package_multiplier > 1;
     
-    // Отримуємо баланс в базових одиницях
     const getAvailableStockBase = () => {
         if (!form.nomenclature_id || !form.warehouse_from_id) return 0;
         const balance = dictionaries.stockBalances.find(
@@ -223,7 +276,6 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
 
     const availableQtyBase = getAvailableStockBase();
 
-    // Формуємо список товарів для Dropdown (тільки ті, що є на обраному складі)
     const availableNomenclatureOptions = dictionaries.nomenclatures
         .filter(nom => {
             if (!form.warehouse_from_id) return false;
@@ -239,26 +291,29 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
             };
         });
 
-    // --- САБМІТ ФОРМИ ---
     const handleSubmit = async (e) => {
         e.preventDefault();
         
+        // Валідація: хоча б клієнт АБО об'єкт
+        if (!form.client_id && !form.installation_custom_id) {
+            return safeShowToast("Будь ласка, оберіть хоча б Клієнта АБО Пов'язаний об'єкт!", 'error');
+        }
+
         let qtyToProcess = parseFloat(form.quantity);
-        let priceToProcess = parseFloat(form.sale_price);
+        let priceToProcess = parseFloat(form.sale_price); // Беремо ціну за одиницю, бо вона передається в БД
         
-        if (isNaN(qtyToProcess) || qtyToProcess <= 0) return showToast('Введіть коректну кількість (більше 0)', 'error');
+        if (isNaN(qtyToProcess) || qtyToProcess <= 0) return safeShowToast('Введіть коректну кількість (більше 0)', 'error');
         
-        // Якщо продаж в штуках, конвертуємо введену кількість в базові одиниці (дріб)
+        // Якщо вибрано штуки, перераховуємо у базові одиниці (упаковки) для бази даних
         if (form.sellMode === 'piece' && hasPackage) {
             qtyToProcess = qtyToProcess / selectedItem.package_multiplier;
-            // Якщо ціна була за 1 штуку, то ціна за базу (упаковку) = ціна * множник
             if (!isNaN(priceToProcess)) {
                 priceToProcess = priceToProcess * selectedItem.package_multiplier;
             }
         }
 
         if (qtyToProcess > availableQtyBase) {
-            return showToast(`Недостатньо товару! Вільно: ${availableQtyBase} ${selectedItem?.unitName}`, 'error');
+            return safeShowToast(`Недостатньо товару! Вільно: ${availableQtyBase} ${selectedItem?.unitName}`, 'error');
         }
 
         setIsSubmitting(true);
@@ -282,17 +337,15 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
             const { error } = await supabase.from('stock_movements').insert([payload]);
             if (error) throw error;
 
-            showToast('Успішно відвантажено!', 'success');
+            safeShowToast('Успішно відвантажено!', 'success');
             onSuccess(); 
             onClose();   
         } catch (error) {
-            showToast(error.message, 'error');
+            safeShowToast(error.message, 'error');
         } finally {
             setIsSubmitting(false);
         }
     };
-
-    const totalAmount = (parseFloat(form.quantity) || 0) * (parseFloat(form.sale_price) || 0);
 
     return (
         <AnimatePresence>
@@ -308,7 +361,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                         initial={{ scale: 0.95, opacity: 0, y: 20 }} 
                         animate={{ scale: 1, opacity: 1, y: 0 }} 
                         exit={{ scale: 0.95, opacity: 0, y: 20 }} 
-                        className="bg-white rounded-[24px] w-full max-w-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden" 
+                        className="bg-white rounded-[24px] w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden" 
                         onClick={e => e.stopPropagation()}
                     >
                         {/* HEADER */}
@@ -345,7 +398,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                                 <section>
                                     <div className="flex justify-between items-end mb-4">
                                         <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                                            <FaUserTie /> Інформація про контрагента
+                                            <FaUserTie /> Інформація про відвантаження (Оберіть хоча б одне)
                                         </h3>
                                         {!isAddingClient && (
                                             <button type="button" onClick={() => setIsAddingClient(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-1 rounded-lg flex items-center gap-1 transition-colors">
@@ -382,21 +435,29 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                                         ) : (
                                             <>
                                                 <div>
-                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Клієнт / Партнер <span className="text-red-500">*</span></label>
+                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Клієнт / Партнер (Опціонально)</label>
                                                     <SearchableSelect 
-                                                        options={dictionaries.clients.map(c => ({ value: c.id, label: `${c.name} ${c.is_subcontract ? '(Партнер)' : ''}` }))}
+                                                        options={dictionaries.clients.map(c => ({ 
+                                                            value: c.id, 
+                                                            label: `${c.name} ${c.is_subcontract ? '(Партнер)' : ''}`,
+                                                            subLabel: `ID клієнта: #${c.custom_id || c.id}` 
+                                                        }))}
                                                         value={form.client_id}
                                                         onChange={(val) => setForm({...form, client_id: val})}
-                                                        placeholder="Пошук клієнта..."
+                                                        placeholder="Пошук (Ім'я або ID клієнта)..."
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Пов'язаний об'єкт (Опц.)</label>
+                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Пов'язаний об'єкт (Опціонально)</label>
                                                     <SearchableSelect 
-                                                        options={[{value: '', label: "Без прив'язки"}, ...dictionaries.installations.map(i => ({ value: i.custom_id, label: `Об'єкт #${i.custom_id} - ${i.name}` }))]}
+                                                        options={dictionaries.installations.map(i => ({ 
+                                                            value: i.custom_id, 
+                                                            label: `Об'єкт #${i.custom_id}`,
+                                                            subLabel: i.name 
+                                                        }))}
                                                         value={form.installation_custom_id}
                                                         onChange={(val) => setForm({...form, installation_custom_id: val})}
-                                                        placeholder="Оберіть активний об'єкт..."
+                                                        placeholder="Пошук за номером об'єкта..."
                                                     />
                                                 </div>
                                             </>
@@ -429,7 +490,6 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                                             />
                                         </div>
 
-                                        {/* Інформація про залишок та Дроблення */}
                                         <div className="md:col-span-2">
                                             <AnimatePresence mode="wait">
                                                 {form.warehouse_from_id && form.nomenclature_id && selectedItem && (
@@ -441,7 +501,6 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                                                             </span>
                                                         </div>
 
-                                                        {/* Логіка розпаковки (Zip Tie Problem) */}
                                                         {hasPackage && (
                                                             <div className="bg-white p-3 rounded-lg border border-blue-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                                                                 <div>
@@ -464,51 +523,59 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                                     </div>
                                 </section>
 
-                                {/* БЛОК 3: ФІНАНСИ */}
+                                {/* БЛОК 3: ФІНАНСИ (Повна свобода вводу) */}
                                 <section>
                                     <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2 border-t border-slate-100 pt-6">
-                                        <FaMoneyBillWave /> Кількість та Вартість
+                                        <FaMoneyBillWave /> Фінансові деталі (Вільно редагуються)
                                     </h3>
+                                    
+                                    <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 mb-4 text-[11px] text-amber-800 flex items-start gap-2">
+                                        <FaInfoCircle className="mt-0.5 shrink-0" />
+                                        <p><strong>Новий алгоритм:</strong> Ви можете редагувати <u>будь-яке</u> поле в цьому блоці. Наприклад, якщо ввести Загальну суму в ГРН вручну, система сама вирахує курс. Якщо змінити Загальну суму в Доларах — зміниться ціна за одиницю.</p>
+                                    </div>
+
                                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                        
                                         <div className="col-span-2 md:col-span-1">
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">
-                                                Віддаємо <span className="text-red-500">*</span>
-                                            </label>
+                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Віддаємо <span className="text-red-500">*</span></label>
                                             <div className="relative">
-                                                <input type="number" min="1" step={form.sellMode === 'piece' ? "1" : "0.001"} required value={form.quantity} onChange={e => setForm({...form, quantity: e.target.value})} className="w-full px-4 py-3 bg-white border-2 border-blue-200 rounded-xl focus:border-blue-500 outline-none text-lg font-black text-blue-700 transition-colors pr-12" placeholder="0" />
+                                                <input type="number" step="any" required value={form.quantity} onChange={e => updateFinances('quantity', e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-blue-200 rounded-xl focus:border-blue-500 outline-none text-lg font-black text-blue-700 transition-colors pr-16" placeholder="0" />
                                                 <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 uppercase">
                                                     {selectedItem ? (form.sellMode === 'piece' ? (selectedItem.package_name || 'шт') : selectedItem.unitName) : ''}
                                                 </div>
                                             </div>
                                         </div>
 
-                                        <div className="col-span-2 md:col-span-1">
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">
-                                                Ціна за 1 {selectedItem ? (form.sellMode === 'piece' ? (selectedItem.package_name || 'шт') : selectedItem.unitName) : 'од.'}
-                                            </label>
-                                            <input type="number" min="0" step="0.01" value={form.sale_price} onChange={e => setForm({...form, sale_price: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors" placeholder="0.00" />
-                                        </div>
-
-                                        <div className="col-span-1">
+                                        <div className="col-span-1 md:col-span-1">
                                             <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Валюта</label>
-                                            <select value={form.currency} onChange={e => setForm({...form, currency: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors">
-                                                <option value="UAH">UAH (₴)</option>
+                                            <select value={form.currency} onChange={e => updateFinances('currency', e.target.value)} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors">
                                                 <option value="USD">USD ($)</option>
                                                 <option value="EUR">EUR (€)</option>
+                                                <option value="UAH">UAH (₴)</option>
                                             </select>
                                         </div>
 
-                                        <div className="col-span-1">
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase" title="Курс відносно гривні">Курс</label>
-                                            <input type="number" min="0.0001" step="0.01" required value={form.exchange_rate} onChange={e => setForm({...form, exchange_rate: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors" placeholder="1.0" />
+                                        <div className="col-span-1 md:col-span-1">
+                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase" title="Ціна за 1 одиницю">Ціна за 1 од. ({form.currency})</label>
+                                            <input type="number" step="any" value={form.sale_price} onChange={e => updateFinances('sale_price', e.target.value)} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors" placeholder="0.00" />
                                         </div>
 
-                                        {/* Загальна сума */}
-                                        {totalAmount > 0 && (
-                                            <div className="col-span-2 md:col-span-4 bg-slate-50 rounded-xl p-4 flex justify-between items-center border border-slate-100">
-                                                <span className="text-sm font-bold text-slate-500">Загальна сума до сплати:</span>
-                                                <span className="text-xl font-black text-slate-800">{totalAmount.toLocaleString('uk-UA')} <span className="text-sm text-slate-500 font-bold">{form.currency}</span></span>
-                                            </div>
+                                        <div className="col-span-2 md:col-span-1">
+                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Сума ({form.currency})</label>
+                                            <input type="number" step="any" value={form.total_price} onChange={e => updateFinances('total_price', e.target.value)} className="w-full px-3 py-3 bg-indigo-50 border border-indigo-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-400 outline-none text-sm font-bold text-indigo-900 transition-colors" placeholder="Загальна сума" />
+                                        </div>
+
+                                        {form.currency !== 'UAH' && (
+                                            <>
+                                                <div className="col-span-1 md:col-span-2">
+                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Загальна сума (ГРН)</label>
+                                                    <input type="number" step="any" value={form.total_uah} onChange={e => updateFinances('total_uah', e.target.value)} className="w-full px-3 py-3 bg-emerald-50 border border-emerald-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-400 outline-none text-sm font-bold text-emerald-900 transition-colors" placeholder="Сума в гривнях" />
+                                                </div>
+                                                <div className="col-span-1 md:col-span-2">
+                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Курс</label>
+                                                    <input type="number" step="any" value={form.exchange_rate} onChange={e => updateFinances('exchange_rate', e.target.value)} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors" placeholder="Курс" />
+                                                </div>
+                                            </>
                                         )}
                                     </div>
                                 </section>
@@ -516,7 +583,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                                 {/* БЛОК 4: ДОДАТКОВО */}
                                 <section>
                                     <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2 border-t border-slate-100 pt-6">
-                                        <FaFileAlt /> Коментарі та Документи
+                                        <FaFileAlt /> Документація та коментарі
                                     </h3>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div>
@@ -525,7 +592,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                                         </div>
                                         <div>
                                             <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Коментар</label>
-                                            <input type="text" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm text-slate-800 transition-colors" placeholder="Деталі..." />
+                                            <input type="text" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm text-slate-800 transition-colors" placeholder="Умови доставки, домовленності..." />
                                         </div>
                                     </div>
                                 </section>
