@@ -4,11 +4,12 @@ import {
     FaFilePdf, FaUpload, FaCheck, FaExclamationTriangle, FaTimes, 
     FaSearch, FaChevronDown, FaHardHat, FaHistory, FaProjectDiagram,
     FaMagic, FaTrash, FaArchive, FaCheckCircle, FaSpinner, FaBoxOpen,
-    FaInfoCircle
+    FaInfoCircle, FaPlus
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import Layout from '../Layout';
 import { useAuth } from '../AuthProvider';
+import ManualSpecBuilder from './ManualSpecBuilder';
 
 // Оновлено URL на Cloudflare Worker API
 const OCR_API_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev/parse-pdf';
@@ -100,6 +101,9 @@ export default function ProjectSpecificationsPage() {
     const [mappedItems, setMappedItems] = useState([]); // Дані після OCR, готові до мапінгу
     const [pdfFileName, setPdfFileName] = useState('');
     const fileInputRef = useRef(null);
+
+    // Ручне внесення комплектації
+    const [isManualOpen, setIsManualOpen] = useState(false);
 
     // --- ЗАВАНТАЖЕННЯ ДОВІДНИКІВ ---
     const loadDictionaries = useCallback(async () => {
@@ -324,14 +328,20 @@ export default function ProjectSpecificationsPage() {
                         </select>
                     </div>
                     {selectedInstId && (
-                        <div className="w-full md:w-1/2 flex items-center justify-end">
+                        <div className="w-full md:w-1/2 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3">
+                            <button
+                                onClick={() => setIsManualOpen(true)}
+                                className="w-full sm:w-auto px-5 py-3.5 bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 rounded-xl font-bold shadow-sm transition-all active:scale-95 flex items-center justify-center gap-2"
+                            >
+                                <FaPlus/> Внести вручну
+                            </button>
                             <input type="file" accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
-                            <button 
-                                onClick={() => fileInputRef.current?.click()} 
+                            <button
+                                onClick={() => fileInputRef.current?.click()}
                                 disabled={isParsing}
                                 className="w-full sm:w-auto px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-md transition-all active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
                             >
-                                {isParsing ? <FaSpinner className="animate-spin"/> : <FaUpload/>} 
+                                {isParsing ? <FaSpinner className="animate-spin"/> : <FaUpload/>}
                                 {isParsing ? 'Розпізнавання...' : 'Завантажити PDF специфікацію'}
                             </button>
                         </div>
@@ -553,6 +563,18 @@ export default function ProjectSpecificationsPage() {
                         </motion.div>
                     )}
                 </AnimatePresence>
+
+                {/* --- РУЧНЕ ВНЕСЕННЯ КОМПЛЕКТАЦІЇ --- */}
+                {isManualOpen && selectedInstId && (
+                    <ManualSpecBuilder
+                        isOpen={isManualOpen}
+                        onClose={() => setIsManualOpen(false)}
+                        onSuccess={() => loadSpecifications(selectedInstId)}
+                        installationId={parseInt(selectedInstId)}
+                        title="Специфікація матеріалів"
+                        showToast={showToast}
+                    />
+                )}
 
             </div>
         </Layout>

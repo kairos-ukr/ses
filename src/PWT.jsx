@@ -13,6 +13,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
+import ManualSpecBuilder from "./pages/ManualSpecBuilder";
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 const OCR_API_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev/parse-pdf';
@@ -667,6 +668,8 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
   const fileInputRef = useRef(null);
   const ocrFileInputRef = useRef(null);
   const [ocrFile, setOcrFile] = useState(null);
+  const [showManualSpec, setShowManualSpec] = useState(false);
+  const [manualSpecRefresh, setManualSpecRefresh] = useState(0);
 
   const canUploadAnyFile = STAGES_WITH_UPLOADS.has(task.id);
   const canUploadPhotos = !["equipment", "proposal"].includes(stageGroupKey) || canUploadAnyFile;
@@ -734,11 +737,14 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
                   <EmployeeSelect label="Відповідальний" employees={employees} selectedId={assignedEmpId} onSelect={setAssignedEmpId} />
                   
                   {isComplectationTask ? (
-                    <div className="h-full">
-                        <button onClick={() => ocrFileInputRef.current?.click()} className="w-full h-full min-h-[70px] py-3 bg-white border-2 border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-400 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
+                    <div className="h-full flex flex-col gap-2">
+                        <button onClick={() => ocrFileInputRef.current?.click()} className="w-full flex-1 min-h-[70px] py-3 bg-white border-2 border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-400 rounded-xl text-sm font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2" type="button">
                             <div className="flex items-center gap-1.5"><FaMagic className="text-indigo-400 text-sm" /><FaFilePdf className="text-red-500 text-2xl" /></div>
                             <span>Завантажити специфікацію (PDF)</span>
                             <span className="text-[10px] font-medium text-slate-400">Оцифрування + збереження</span>
+                        </button>
+                        <button onClick={() => setShowManualSpec(true)} className="w-full py-2.5 bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 rounded-xl text-sm font-bold shadow-sm transition-all flex items-center justify-center gap-2" type="button">
+                            <FaPlus size={12}/> Внести вручну
                         </button>
                         <input
                             type="file"
@@ -806,8 +812,19 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
 
       {isComplectationTask && (
           <div className="w-full">
-              <SpecificationSummaryWidget installationId={installationId} taskId={task.id} refreshTrigger={task.history.length} nomenclatures={nomenclatures} />
+              <SpecificationSummaryWidget installationId={installationId} taskId={task.id} refreshTrigger={task.history.length + manualSpecRefresh} nomenclatures={nomenclatures} />
           </div>
+      )}
+
+      {showManualSpec && (
+          <ManualSpecBuilder
+              isOpen={showManualSpec}
+              onClose={() => setShowManualSpec(false)}
+              onSuccess={() => setManualSpecRefresh(v => v + 1)}
+              installationId={installationId}
+              taskId={task.id}
+              title={task.id === 'comp_protection' ? 'Специфікація ел. захисту' : 'Комплектація матеріалів'}
+          />
       )}
 
       {ocrFile && (

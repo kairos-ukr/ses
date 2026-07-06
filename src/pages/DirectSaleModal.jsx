@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-    FaTimes, FaShoppingCart, FaUserTie, FaBox, 
-    FaMoneyBillWave, FaMapMarkerAlt, FaFileAlt, FaInfoCircle,
-    FaPlus, FaSearch, FaCheck, FaChevronDown
+import {
+    FaTimes, FaShoppingCart, FaUserTie, FaBox,
+    FaMoneyBillWave, FaFileAlt, FaInfoCircle,
+    FaPlus, FaSearch, FaCheck, FaChevronDown, FaArrowUp, FaExclamationTriangle,
+    FaHandshake, FaTrash, FaWarehouse
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
 
-// --- ДОПОМІЖНИЙ КОМПОНЕНТ: Кастомний Select з пошуком ---
+// --- Кастомний Select з пошуком ---
 const SearchableSelect = ({ options, value, onChange, placeholder, disabled, icon: Icon }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
@@ -16,24 +17,21 @@ const SearchableSelect = ({ options, value, onChange, placeholder, disabled, ico
 
     useEffect(() => {
         function handleClickOutside(event) {
-            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
-                setIsOpen(false);
-            }
+            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) setIsOpen(false);
         }
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    const filteredOptions = options.filter(opt => 
-        opt.label.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    const filteredOptions = options.filter(opt =>
+        opt.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (opt.subLabel && opt.subLabel.toLowerCase().includes(searchTerm.toLowerCase()))
     );
-
     const selectedOption = options.find(opt => opt.value === value);
 
     return (
         <div ref={wrapperRef} className="relative w-full">
-            <div 
+            <div
                 onClick={() => !disabled && setIsOpen(!isOpen)}
                 className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between transition-colors ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-white focus-within:ring-2 focus-within:ring-blue-200 focus-within:bg-white'}`}
             >
@@ -45,40 +43,20 @@ const SearchableSelect = ({ options, value, onChange, placeholder, disabled, ico
                 </div>
                 <FaChevronDown className={`text-slate-400 text-xs transition-transform ${isOpen ? 'rotate-180' : ''}`} />
             </div>
-
             <AnimatePresence>
                 {isOpen && (
-                    <motion.div 
-                        initial={{ opacity: 0, y: -10 }} 
-                        animate={{ opacity: 1, y: 0 }} 
-                        exit={{ opacity: 0, y: -10 }}
-                        className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden"
-                    >
+                    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
                         <div className="p-2 border-b border-slate-100 flex items-center gap-2 bg-slate-50">
                             <FaSearch className="text-slate-400 ml-2" />
-                            <input 
-                                type="text"
-                                autoFocus
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                                placeholder="Пошук (Ім'я або ID)..."
-                                className="w-full bg-transparent border-none outline-none text-sm font-medium py-1"
-                            />
+                            <input type="text" autoFocus value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Пошук..." className="w-full bg-transparent border-none outline-none text-sm font-medium py-1" />
                         </div>
                         <div className="max-h-60 overflow-y-auto custom-scrollbar">
                             {filteredOptions.length === 0 ? (
                                 <div className="p-4 text-center text-sm text-slate-400">Нічого не знайдено</div>
                             ) : (
                                 filteredOptions.map(opt => (
-                                    <div 
-                                        key={opt.value}
-                                        onClick={() => {
-                                            onChange(opt.value);
-                                            setIsOpen(false);
-                                            setSearchTerm('');
-                                        }}
-                                        className={`p-3 hover:bg-blue-50 cursor-pointer border-l-2 transition-colors ${value === opt.value ? 'border-blue-500 bg-blue-50/50' : 'border-transparent'}`}
-                                    >
+                                    <div key={opt.value} onClick={() => { onChange(opt.value); setIsOpen(false); setSearchTerm(''); }}
+                                        className={`p-3 hover:bg-blue-50 cursor-pointer border-l-2 transition-colors ${value === opt.value ? 'border-blue-500 bg-blue-50/50' : 'border-transparent'}`}>
                                         <div className="text-sm font-bold text-slate-800">{opt.label}</div>
                                         {opt.subLabel && <div className="text-[10px] text-slate-500 mt-0.5">{opt.subLabel}</div>}
                                     </div>
@@ -92,59 +70,56 @@ const SearchableSelect = ({ options, value, onChange, placeholder, disabled, ico
     );
 };
 
+// Конфіг типів операції
+const KINDS = {
+    issue:   { label: "Видача під об'єкт", icon: FaArrowUp, op: 'issue',            money: false },
+    partner: { label: 'Передача партнеру', icon: FaHandshake, op: 'partner_transfer', money: false },
+    sale:    { label: 'Продаж',            icon: FaShoppingCart, op: 'sale',        money: true  },
+};
+const ACCENT = {
+    issue:   { head: 'bg-emerald-50', text: 'text-emerald-900', sub: 'text-emerald-700/70', chip: 'bg-emerald-100 text-emerald-600', btn: 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20', tabOn: 'text-emerald-700' },
+    partner: { head: 'bg-violet-50',  text: 'text-violet-900',  sub: 'text-violet-700/70',  chip: 'bg-violet-100 text-violet-600',  btn: 'bg-violet-600 hover:bg-violet-700 shadow-violet-600/20',  tabOn: 'text-violet-700' },
+    sale:    { head: 'bg-blue-50',    text: 'text-blue-900',    sub: 'text-blue-700/70',    chip: 'bg-blue-100 text-blue-600',      btn: 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20',       tabOn: 'text-blue-700' },
+};
+
 export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast }) {
     const { employee } = useAuth();
+    const safeShowToast = typeof showToast === 'function' ? showToast : (m) => console.warn('[DirectSaleModal]', m);
 
-    // Захист від краху, якщо батьківський компонент не передав showToast
-    // (тости просто не будуть показані, замість краху додатку).
-    // ВАЖЛИВО: перевірте виклик <DirectSaleModal ... /> у батьківському
-    // компоненті — там має передаватись реальна функція showToast.
-    const safeShowToast = typeof showToast === 'function' ? showToast : (msg) => console.warn('[DirectSaleModal] showToast не передано:', msg);
-    
-    const [dictionaries, setDictionaries] = useState({
-        nomenclatures: [],
-        warehouses: [],
-        clients: [],
-        installations: [],
-        stockBalances: []
-    });
-    
+    const [dict, setDict] = useState({ nomenclatures: [], warehouses: [], clients: [], installations: [], stock: [] });
+    const [objNeeds, setObjNeeds] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const [isAddingClient, setIsAddingClient] = useState(false);
     const [newClient, setNewClient] = useState({ name: '', phone: '', notes: '' });
 
-    // Оновлений початковий стан форми для гнучкої фіксації сум
-    const initialFormState = {
-        operation_type: 'sale',
+    const newKey = () => Math.random().toString(36).slice(2, 10);
+    const initialForm = {
+        kind: 'issue',
         client_id: '',
         installation_custom_id: '',
         warehouse_from_id: '',
-        nomenclature_id: '',
-        sellMode: 'base', 
-        quantity: '',
-        sale_price: '',    // Ціна за одиницю в обраній валюті
-        total_price: '',   // Загальна сума в обраній валюті
-        total_uah: '',     // Загальна сума в гривнях
         currency: 'USD',
-        exchange_rate: '41.5', 
+        exchange_rate: '41.5',
         reference_document: '',
         notes: ''
     };
-    
-    const [form, setForm] = useState(initialFormState);
+    const [form, setForm] = useState(initialForm);
+    const [lines, setLines] = useState([{ key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' }]);
 
     useEffect(() => {
         if (isOpen) {
-            setForm(initialFormState);
+            setForm(initialForm);
+            setLines([{ key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' }]);
             setIsAddingClient(false);
             setNewClient({ name: '', phone: '', notes: '' });
-            loadDictionaries();
+            setObjNeeds([]);
+            loadDict();
         }
-    }, [isOpen]);
+    }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const loadDictionaries = async () => {
+    const loadDict = async () => {
         setIsLoading(true);
         try {
             const [nomRes, catRes, whRes, clientsRes, instRes, stockRes] = await Promise.all([
@@ -153,31 +128,15 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
                 supabase.from('clients').select('id, custom_id, name, is_subcontract').order('name'),
                 supabase.from('installations').select('custom_id, name').in('status', ['planning', 'in_progress', 'pending']),
-                supabase.from('v_warehouse_stock_available').select('warehouse_id, nomenclature_id, quantity_available')
+                supabase.from('v_warehouse_stock_available').select('warehouse_id, nomenclature_id, quantity_on_hand, quantity_available')
             ]);
-
             const cats = catRes.data || [];
             const processedNom = (nomRes.data || []).map(item => {
-                let path = [];
-                let currentId = item.category_id;
-                while (currentId) {
-                    const cat = cats.find(c => c.id === currentId);
-                    if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break;
-                }
-                return {
-                    ...item,
-                    fullName: `${path.join(' ')} ${item.name}`.trim(),
-                    unitName: item.unit?.name || 'шт'
-                };
+                let path = []; let currentId = item.category_id;
+                while (currentId) { const cat = cats.find(c => c.id === currentId); if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break; }
+                return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim(), unitName: item.unit?.name || 'шт' };
             });
-
-            setDictionaries({
-                nomenclatures: processedNom,
-                warehouses: whRes.data || [],
-                clients: clientsRes.data || [],
-                installations: instRes.data || [],
-                stockBalances: stockRes.data || []
-            });
+            setDict({ nomenclatures: processedNom, warehouses: whRes.data || [], clients: clientsRes.data || [], installations: instRes.data || [], stock: stockRes.data || [] });
         } catch (error) {
             safeShowToast(`Помилка: ${error.message}`, 'error');
         } finally {
@@ -185,26 +144,25 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
         }
     };
 
+    useEffect(() => {
+        const load = async () => {
+            if (!form.installation_custom_id) { setObjNeeds([]); return; }
+            const { data } = await supabase.from('v_object_material_needs').select('*').eq('installation_custom_id', form.installation_custom_id);
+            setObjNeeds(data || []);
+        };
+        load();
+    }, [form.installation_custom_id]);
+
     const handleQuickAddClient = async () => {
-        if (!newClient.name.trim()) return safeShowToast('Ім\'я/Назва клієнта є обов\'язковим', 'error');
+        if (!newClient.name.trim()) return safeShowToast("Ім'я/Назва клієнта є обов'язковим", 'error');
         setIsSubmitting(true);
         try {
-            const { data, error } = await supabase
-                .from('clients')
-                .insert([{ name: newClient.name, phone: newClient.phone, notes: newClient.notes }])
-                .select()
-                .single();
-            
+            const { data, error } = await supabase.from('clients').insert([{ name: newClient.name, phone: newClient.phone, notes: newClient.notes }]).select().single();
             if (error) throw error;
-            
-            setDictionaries(prev => ({
-                ...prev,
-                clients: [...prev.clients, data].sort((a, b) => a.name.localeCompare(b.name))
-            }));
-            
+            setDict(prev => ({ ...prev, clients: [...prev.clients, data].sort((a, b) => a.name.localeCompare(b.name)) }));
             setForm(prev => ({ ...prev, client_id: data.id }));
             setIsAddingClient(false);
-            safeShowToast('Клієнта успішно додано!', 'success');
+            safeShowToast('Клієнта додано!', 'success');
         } catch (error) {
             safeShowToast(error.message, 'error');
         } finally {
@@ -212,400 +170,349 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
         }
     };
 
-    // --- РОЗУМНЕ ОНОВЛЕННЯ ФІНАНСІВ (Свобода вводу) ---
-    const updateFinances = (field, value) => {
-        let newForm = { ...form, [field]: value };
-        
-        // Перетворюємо введені дані у числа для розрахунків (або 0, якщо пусто)
-        const q = parseFloat(newForm.quantity) || 0;
-        const up = parseFloat(newForm.sale_price) || 0;
-        const tp = parseFloat(newForm.total_price) || 0;
-        const r = parseFloat(newForm.exchange_rate) || 0;
+    const kindCfg = KINDS[form.kind];
+    const accent = ACCENT[form.kind];
+    const isMoney = kindCfg.money;
 
-        if (field === 'quantity') {
-            const newQ = parseFloat(value) || 0;
-            const newTp = newQ * up;
-            newForm.total_price = newTp > 0 ? newTp.toFixed(2) : '';
-            newForm.total_uah = (newTp * r) > 0 ? (newTp * r).toFixed(2) : '';
-        } 
-        else if (field === 'sale_price') {
-            const newUp = parseFloat(value) || 0;
-            const newTp = q * newUp;
-            newForm.total_price = newTp > 0 ? newTp.toFixed(2) : '';
-            newForm.total_uah = (newTp * r) > 0 ? (newTp * r).toFixed(2) : '';
-        } 
-        else if (field === 'total_price') {
-            const newTp = parseFloat(value) || 0;
-            if (q > 0) newForm.sale_price = (newTp / q).toFixed(2);
-            newForm.total_uah = (newTp * r) > 0 ? (newTp * r).toFixed(2) : '';
-        } 
-        else if (field === 'exchange_rate') {
-            const newR = parseFloat(value) || 0;
-            newForm.total_uah = (tp * newR) > 0 ? (tp * newR).toFixed(2) : '';
-        } 
-        else if (field === 'total_uah') {
-            const newTu = parseFloat(value) || 0;
-            if (tp > 0) {
-                newForm.exchange_rate = (newTu / tp).toFixed(2);
-            }
-        } 
-        else if (field === 'currency') {
-            if (value === 'UAH') {
-                newForm.exchange_rate = '1';
-                newForm.total_uah = newForm.total_price;
-            } else {
-                newForm.exchange_rate = '41.5';
-                newForm.total_uah = (tp * 41.5) > 0 ? (tp * 41.5).toFixed(2) : '';
-            }
-        }
-        
-        setForm(newForm);
+    const nomById = (id) => dict.nomenclatures.find(n => n.id === parseInt(id));
+    const getBal = (nomId) => {
+        if (!nomId || !form.warehouse_from_id) return { onHand: 0, available: 0 };
+        const b = dict.stock.find(x => x.nomenclature_id === parseInt(nomId) && x.warehouse_id === parseInt(form.warehouse_from_id));
+        return { onHand: parseFloat(b?.quantity_on_hand || 0), available: parseFloat(b?.quantity_available || 0) };
     };
+    const needByNom = (nomId) => objNeeds.find(n => String(n.nomenclature_id) === String(nomId));
 
-    const selectedItem = dictionaries.nomenclatures.find(n => n.id === parseInt(form.nomenclature_id));
-    const hasPackage = selectedItem && selectedItem.package_multiplier > 1;
-    
-    const getAvailableStockBase = () => {
-        if (!form.nomenclature_id || !form.warehouse_from_id) return 0;
-        const balance = dictionaries.stockBalances.find(
-            b => b.nomenclature_id === parseInt(form.nomenclature_id) && 
-                 b.warehouse_id === parseInt(form.warehouse_from_id)
-        );
-        return balance ? parseFloat(balance.quantity_available) : 0;
-    };
-
-    const availableQtyBase = getAvailableStockBase();
-
-    const availableNomenclatureOptions = dictionaries.nomenclatures
+    // Опції номенклатури для обраного складу (issue враховує фізичну наявність)
+    const nomOptions = dict.nomenclatures
         .filter(nom => {
             if (!form.warehouse_from_id) return false;
-            const bal = dictionaries.stockBalances.find(b => b.warehouse_id === parseInt(form.warehouse_from_id) && b.nomenclature_id === nom.id);
-            return bal && parseFloat(bal.quantity_available) > 0;
+            const bal = getBal(nom.id);
+            return (form.kind === 'issue' ? bal.onHand : bal.available) > 0;
         })
         .map(nom => {
-            const bal = dictionaries.stockBalances.find(b => b.warehouse_id === parseInt(form.warehouse_from_id) && b.nomenclature_id === nom.id);
-            return {
-                value: nom.id,
-                label: nom.fullName,
-                subLabel: `SKU: ${nom.sku || '---'} | Вільно: ${bal ? bal.quantity_available : 0} ${nom.unitName}`
-            };
+            const bal = getBal(nom.id);
+            return { value: nom.id, label: nom.fullName, subLabel: `SKU: ${nom.sku || '---'} | ${form.kind === 'issue' ? 'На складі' : 'Вільно'}: ${form.kind === 'issue' ? bal.onHand : bal.available} ${nom.unitName}` };
         });
+
+    // --- Рядки кошика ---
+    const addLine = () => setLines(ls => [...ls, { key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' }]);
+    const removeLine = (key) => setLines(ls => ls.length > 1 ? ls.filter(l => l.key !== key) : ls);
+    const updateLine = (key, patch) => setLines(ls => ls.map(l => l.key === key ? { ...l, ...patch, error: '' } : l));
+
+    const lineQtyBase = (line) => {
+        let q = parseFloat(line.quantity); if (isNaN(q)) return 0;
+        const nom = nomById(line.nomenclature_id);
+        if (line.sellMode === 'piece' && nom?.package_multiplier > 1) q = q / nom.package_multiplier;
+        return q;
+    };
+    const linePriceBase = (line) => {
+        let p = parseFloat(line.unit_price); if (isNaN(p)) return null;
+        const nom = nomById(line.nomenclature_id);
+        if (line.sellMode === 'piece' && nom?.package_multiplier > 1) p = p * nom.package_multiplier;
+        return p;
+    };
+
+    // Підсумок по грошах (тільки sale)
+    const grandTotal = isMoney ? lines.reduce((s, l) => {
+        const q = parseFloat(l.quantity) || 0; const p = parseFloat(l.unit_price) || 0; return s + q * p;
+    }, 0) : 0;
+    const rate = parseFloat(form.exchange_rate) || 0;
+
+    // Чи потрібна причина (перевищення плану / поза специфікацією) по будь-якому рядку
+    const anyOverageOrOffSpec = form.installation_custom_id && lines.some(l => {
+        if (!l.nomenclature_id || !(parseFloat(l.quantity) > 0)) return false;
+        const need = needByNom(l.nomenclature_id);
+        if (!need) return true; // поза специфікацією
+        return lineQtyBase(l) > parseFloat(need.outstanding_need);
+    });
+
+    const validRecipient = () => {
+        if (form.kind === 'issue') return !!form.installation_custom_id;
+        if (form.kind === 'partner') return !!form.client_id;
+        return !!form.client_id || !!form.installation_custom_id; // sale
+    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        
-        // Валідація: хоча б клієнт АБО об'єкт
-        if (!form.client_id && !form.installation_custom_id) {
-            return safeShowToast("Будь ласка, оберіть хоча б Клієнта АБО Пов'язаний об'єкт!", 'error');
+        if (!validRecipient()) {
+            const msg = form.kind === 'issue' ? "Оберіть об'єкт для видачі" : form.kind === 'partner' ? 'Оберіть партнера' : "Оберіть клієнта або об'єкт";
+            return safeShowToast(msg, 'error');
         }
+        if (!form.warehouse_from_id) return safeShowToast('Оберіть склад списання', 'error');
 
-        let qtyToProcess = parseFloat(form.quantity);
-        let priceToProcess = parseFloat(form.sale_price); // Беремо ціну за одиницю, бо вона передається в БД
-        
-        if (isNaN(qtyToProcess) || qtyToProcess <= 0) return safeShowToast('Введіть коректну кількість (більше 0)', 'error');
-        
-        // Якщо вибрано штуки, перераховуємо у базові одиниці (упаковки) для бази даних
-        if (form.sellMode === 'piece' && hasPackage) {
-            qtyToProcess = qtyToProcess / selectedItem.package_multiplier;
-            if (!isNaN(priceToProcess)) {
-                priceToProcess = priceToProcess * selectedItem.package_multiplier;
-            }
-        }
-
-        if (qtyToProcess > availableQtyBase) {
-            return safeShowToast(`Недостатньо товару! Вільно: ${availableQtyBase} ${selectedItem?.unitName}`, 'error');
-        }
+        const valid = lines.filter(l => l.nomenclature_id && parseFloat(l.quantity) > 0);
+        if (valid.length === 0) return safeShowToast('Додайте хоча б одну позицію з кількістю', 'error');
+        if (isMoney && valid.some(l => !(parseFloat(l.unit_price) >= 0))) return safeShowToast('Вкажіть ціну для кожної позиції', 'error');
+        if (anyOverageOrOffSpec && !form.notes.trim()) return safeShowToast('Перевищення/позапланові позиції — вкажіть причину в коментарі', 'warning');
 
         setIsSubmitting(true);
+        let okCount = 0;
+        const failed = [];
+        const updatedLines = [...lines];
+
         try {
-            const payload = {
-                operation_type: form.operation_type,
-                nomenclature_id: parseInt(form.nomenclature_id),
-                warehouse_from_id: parseInt(form.warehouse_from_id),
-                quantity: qtyToProcess,
-                client_id: form.client_id ? parseInt(form.client_id) : null,
-                installation_custom_id: form.installation_custom_id ? parseInt(form.installation_custom_id) : null,
-                sale_price: !isNaN(priceToProcess) ? priceToProcess : null,
-                currency: form.currency,
-                exchange_rate: parseFloat(form.exchange_rate) || 1.0,
-                reference_document: form.reference_document || null,
-                notes: form.notes || null,
-                performed_by: employee?.id,
-                created_by: employee?.id
-            };
+            for (const line of valid) {
+                const qtyBase = lineQtyBase(line);
+                let data, error;
+                if (form.kind === 'issue') {
+                    ({ data, error } = await supabase.rpc('issue_to_object', {
+                        p_installation: parseInt(form.installation_custom_id),
+                        p_warehouse: parseInt(form.warehouse_from_id),
+                        p_nomenclature: parseInt(line.nomenclature_id),
+                        p_qty: qtyBase,
+                        p_reason: form.notes.trim() || null,
+                        p_emp: employee?.id ?? null,
+                    }));
+                } else {
+                    ({ data, error } = await supabase.rpc('sell_to_object', {
+                        p_installation: form.installation_custom_id ? parseInt(form.installation_custom_id) : null,
+                        p_warehouse: parseInt(form.warehouse_from_id),
+                        p_nomenclature: parseInt(line.nomenclature_id),
+                        p_qty: qtyBase,
+                        p_op: kindCfg.op,
+                        p_client: form.client_id ? parseInt(form.client_id) : null,
+                        p_sale_price: isMoney ? linePriceBase(line) : null,
+                        p_currency: isMoney ? form.currency : null,
+                        p_exchange_rate: isMoney ? (parseFloat(form.exchange_rate) || 1) : 1,
+                        p_reference: form.reference_document || null,
+                        p_reason: form.notes.trim() || null,
+                        p_emp: employee?.id ?? null,
+                    }));
+                }
+                const idx = updatedLines.findIndex(l => l.key === line.key);
+                if (error) { failed.push(line); if (idx >= 0) updatedLines[idx] = { ...updatedLines[idx], error: error.message }; }
+                else if (data && data.ok === false) { failed.push(line); if (idx >= 0) updatedLines[idx] = { ...updatedLines[idx], error: data.message || 'Відхилено' }; }
+                else { okCount++; }
+            }
 
-            const { error } = await supabase.from('stock_movements').insert([payload]);
-            if (error) throw error;
+            if (okCount > 0) onSuccess();
 
-            safeShowToast('Успішно відвантажено!', 'success');
-            onSuccess(); 
-            onClose();   
+            if (failed.length === 0) {
+                safeShowToast(`Проведено позицій: ${okCount}`, 'success');
+                onClose();
+            } else {
+                setLines(updatedLines);
+                safeShowToast(`Проведено ${okCount}, з помилкою ${failed.length}. Перевірте позиції.`, 'error');
+            }
         } catch (error) {
             safeShowToast(error.message, 'error');
         } finally {
             setIsSubmitting(false);
         }
     };
+
+    const clientOptions = dict.clients.map(c => ({ value: c.id, label: `${c.name} ${c.is_subcontract ? '(Партнер)' : ''}`, subLabel: `ID: #${c.custom_id || c.id}` }));
+    const instOptions = dict.installations.map(i => ({ value: i.custom_id, label: `Об'єкт #${i.custom_id}`, subLabel: i.name }));
 
     return (
         <AnimatePresence>
             {isOpen && (
-                <motion.div 
-                    initial={{ opacity: 0 }} 
-                    animate={{ opacity: 1 }} 
-                    exit={{ opacity: 0 }} 
-                    className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[80]" 
-                    onClick={onClose}
-                >
-                    <motion.div 
-                        initial={{ scale: 0.95, opacity: 0, y: 20 }} 
-                        animate={{ scale: 1, opacity: 1, y: 0 }} 
-                        exit={{ scale: 0.95, opacity: 0, y: 20 }} 
-                        className="bg-white rounded-[24px] w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden" 
-                        onClick={e => e.stopPropagation()}
-                    >
-                        {/* HEADER */}
-                        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-blue-50/50 flex-shrink-0">
-                            <div>
-                                <h2 className="text-xl sm:text-2xl font-black text-blue-900 flex items-center gap-3">
-                                    <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600">
-                                        <FaShoppingCart />
-                                    </div>
-                                    Відвантаження / Продаж
-                                </h2>
-                                <p className="text-sm font-medium text-blue-700/70 mt-1 ml-14">
-                                    Списання товару зі складу з фіксацією фінансів та контрагента
-                                </p>
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[80]">
+                    <motion.div initial={{ scale: 0.98, opacity: 0, y: 30 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0, y: 30 }} className="bg-white rounded-t-[24px] sm:rounded-[24px] w-full sm:max-w-4xl shadow-2xl flex flex-col max-h-[95vh] sm:max-h-[92vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+
+                        {/* HEADER + перемикач типу */}
+                        <div className={`p-4 sm:p-6 border-b border-slate-100 flex-shrink-0 ${accent.head}`}>
+                            <div className="flex justify-between items-start gap-3">
+                                <div className="min-w-0">
+                                    <h2 className={`text-lg sm:text-2xl font-black flex items-center gap-3 ${accent.text}`}>
+                                        <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${accent.chip}`}><kindCfg.icon /></div>
+                                        <span className="truncate">{kindCfg.label}</span>
+                                    </h2>
+                                </div>
+                                <button onClick={onClose} className="w-9 h-9 bg-white hover:bg-slate-100 text-slate-400 rounded-full flex items-center justify-center transition-colors shadow-sm flex-shrink-0"><FaTimes /></button>
                             </div>
-                            <button onClick={onClose} className="w-10 h-10 bg-white hover:bg-slate-100 text-slate-400 rounded-full flex items-center justify-center transition-colors shadow-sm"><FaTimes /></button>
+                            <div className="flex gap-1.5 mt-4 bg-white/70 p-1.5 rounded-xl">
+                                {Object.entries(KINDS).map(([k, cfg]) => (
+                                    <button key={k} type="button" onClick={() => setForm(f => ({ ...f, kind: k }))} className={`flex-1 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${form.kind === k ? `bg-white shadow-sm ${ACCENT[k].tabOn}` : 'text-slate-500 hover:bg-white/50'}`}>
+                                        <cfg.icon size={12} /> <span className="hidden sm:inline">{cfg.label}</span><span className="sm:hidden">{k === 'issue' ? 'Видача' : k === 'partner' ? 'Партнер' : 'Продаж'}</span>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
 
                         {/* BODY */}
-                        <div className="p-6 overflow-y-auto custom-scrollbar flex-1 relative">
+                        <div className="p-4 sm:p-6 overflow-y-auto custom-scrollbar flex-1 relative space-y-6">
                             {isLoading && (
                                 <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center backdrop-blur-sm">
-                                    <div className="animate-pulse flex gap-2">
-                                        <div className="w-3 h-3 bg-blue-400 rounded-full"></div>
-                                        <div className="w-3 h-3 bg-blue-400 rounded-full"></div>
-                                        <div className="w-3 h-3 bg-blue-400 rounded-full"></div>
-                                    </div>
+                                    <div className="animate-pulse flex gap-2"><div className="w-3 h-3 bg-blue-400 rounded-full"></div><div className="w-3 h-3 bg-blue-400 rounded-full"></div><div className="w-3 h-3 bg-blue-400 rounded-full"></div></div>
                                 </div>
                             )}
 
-                            <form id="direct-sale-form" onSubmit={handleSubmit} className="space-y-8">
-                                
-                                {/* БЛОК 1: КОНТРАГЕНТ */}
-                                <section>
-                                    <div className="flex justify-between items-end mb-4">
-                                        <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                                            <FaUserTie /> Інформація про відвантаження (Оберіть хоча б одне)
-                                        </h3>
-                                        {!isAddingClient && (
-                                            <button type="button" onClick={() => setIsAddingClient(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-1 rounded-lg flex items-center gap-1 transition-colors">
-                                                <FaPlus size={10} /> Новий клієнт
-                                            </button>
-                                        )}
-                                    </div>
+                            {/* ОТРИМУВАЧ */}
+                            <section>
+                                <div className="flex justify-between items-end mb-3">
+                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><FaUserTie /> {form.kind === 'issue' ? "Об'єкт" : 'Отримувач'}</h3>
+                                    {form.kind !== 'issue' && !isAddingClient && (
+                                        <button type="button" onClick={() => setIsAddingClient(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-1 rounded-lg flex items-center gap-1"><FaPlus size={10} /> Новий</button>
+                                    )}
+                                </div>
 
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="md:col-span-2 flex gap-4 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
-                                            <button type="button" onClick={() => setForm({...form, operation_type: 'sale'})} className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${form.operation_type === 'sale' ? 'bg-white text-blue-700 shadow-sm border border-slate-200/50' : 'text-slate-500 hover:bg-slate-200/50'}`}>Прямий продаж</button>
-                                            <button type="button" onClick={() => setForm({...form, operation_type: 'partner_transfer'})} className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${form.operation_type === 'partner_transfer' ? 'bg-white text-violet-700 shadow-sm border border-slate-200/50' : 'text-slate-500 hover:bg-slate-200/50'}`}>Передача партнеру</button>
+                                {isAddingClient && form.kind !== 'issue' ? (
+                                    <div className="bg-blue-50/40 border border-blue-100 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                        <input autoFocus type="text" value={newClient.name} onChange={e => setNewClient({ ...newClient, name: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400" placeholder="ПІБ / Назва *" />
+                                        <input type="text" value={newClient.phone} onChange={e => setNewClient({ ...newClient, phone: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400" placeholder="Телефон" />
+                                        <input type="text" value={newClient.notes} onChange={e => setNewClient({ ...newClient, notes: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400" placeholder="Коментар" />
+                                        <div className="sm:col-span-3 flex justify-end gap-2">
+                                            <button type="button" onClick={() => setIsAddingClient(false)} className="px-4 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-600">Скасувати</button>
+                                            <button type="button" onClick={handleQuickAddClient} disabled={isSubmitting} className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold shadow hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"><FaCheck /> Зберегти</button>
                                         </div>
-
-                                        {isAddingClient ? (
-                                            <div className="md:col-span-2 bg-blue-50/30 border border-blue-100 rounded-xl p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-                                                <div>
-                                                    <label className="block text-[10px] font-bold text-slate-500 mb-1 uppercase">ПІБ / Назва <span className="text-red-500">*</span></label>
-                                                    <input autoFocus type="text" value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400" placeholder="Іван Іваненко" />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-[10px] font-bold text-slate-500 mb-1 uppercase">Телефон</label>
-                                                    <input type="text" value={newClient.phone} onChange={e => setNewClient({...newClient, phone: e.target.value})} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400" placeholder="+380..." />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-[10px] font-bold text-slate-500 mb-1 uppercase">Коментар</label>
-                                                    <input type="text" value={newClient.notes} onChange={e => setNewClient({...newClient, notes: e.target.value})} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400" placeholder="Звідки дізнався..." />
-                                                </div>
-                                                <div className="md:col-span-3 flex justify-end gap-2 mt-1">
-                                                    <button type="button" onClick={() => setIsAddingClient(false)} className="px-4 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-600">Скасувати</button>
-                                                    <button type="button" onClick={handleQuickAddClient} disabled={isSubmitting} className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold shadow-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"><FaCheck/> Зберегти і обрати</button>
-                                                </div>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {form.kind !== 'issue' && (
+                                            <div>
+                                                <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">{form.kind === 'partner' ? 'Партнер' : 'Клієнт / Партнер'} {form.kind === 'partner' && <span className="text-red-500">*</span>}</label>
+                                                <SearchableSelect options={clientOptions} value={form.client_id} onChange={(val) => setForm({ ...form, client_id: val })} placeholder="Пошук (Ім'я або ID)..." />
                                             </div>
-                                        ) : (
-                                            <>
-                                                <div>
-                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Клієнт / Партнер (Опціонально)</label>
-                                                    <SearchableSelect 
-                                                        options={dictionaries.clients.map(c => ({ 
-                                                            value: c.id, 
-                                                            label: `${c.name} ${c.is_subcontract ? '(Партнер)' : ''}`,
-                                                            subLabel: `ID клієнта: #${c.custom_id || c.id}` 
-                                                        }))}
-                                                        value={form.client_id}
-                                                        onChange={(val) => setForm({...form, client_id: val})}
-                                                        placeholder="Пошук (Ім'я або ID клієнта)..."
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Пов'язаний об'єкт (Опціонально)</label>
-                                                    <SearchableSelect 
-                                                        options={dictionaries.installations.map(i => ({ 
-                                                            value: i.custom_id, 
-                                                            label: `Об'єкт #${i.custom_id}`,
-                                                            subLabel: i.name 
-                                                        }))}
-                                                        value={form.installation_custom_id}
-                                                        onChange={(val) => setForm({...form, installation_custom_id: val})}
-                                                        placeholder="Пошук за номером об'єкта..."
-                                                    />
-                                                </div>
-                                            </>
                                         )}
+                                        <div className={form.kind === 'issue' ? 'md:col-span-2' : ''}>
+                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Об'єкт {form.kind === 'issue' ? <span className="text-red-500">*</span> : '(опц.)'}</label>
+                                            <SearchableSelect options={instOptions} value={form.installation_custom_id} onChange={(val) => setForm({ ...form, installation_custom_id: val })} placeholder="Пошук за номером об'єкта..." />
+                                        </div>
                                     </div>
-                                </section>
+                                )}
+                            </section>
 
-                                {/* БЛОК 2: ТОВАР ТА СКЛАД */}
-                                <section>
-                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2 border-t border-slate-100 pt-6">
-                                        <FaBox /> Локація та Номенклатура
-                                    </h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Склад списання <span className="text-red-500">*</span></label>
-                                            <select required value={form.warehouse_from_id} onChange={e => setForm({...form, warehouse_from_id: e.target.value, nomenclature_id: ''})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors">
-                                                <option value="">Оберіть склад спочатку...</option>
-                                                {dictionaries.warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                                            </select>
-                                        </div>
+                            {/* СКЛАД */}
+                            <section>
+                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2 border-t border-slate-100 pt-5"><FaWarehouse /> Склад списання <span className="text-red-500">*</span></h3>
+                                <select required value={form.warehouse_from_id} onChange={e => setForm({ ...form, warehouse_from_id: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors">
+                                    <option value="">Оберіть склад...</option>
+                                    {dict.warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                                </select>
+                            </section>
 
-                                        <div>
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Пошук товару <span className="text-red-500">*</span></label>
-                                            <SearchableSelect 
-                                                options={availableNomenclatureOptions}
-                                                value={form.nomenclature_id}
-                                                onChange={(val) => setForm({...form, nomenclature_id: val, sellMode: 'base'})}
-                                                placeholder={form.warehouse_from_id ? "Почніть вводити назву..." : "Оберіть склад..."}
-                                                disabled={!form.warehouse_from_id}
-                                            />
-                                        </div>
+                            {/* КОШИК ПОЗИЦІЙ */}
+                            <section>
+                                <div className="flex justify-between items-center mb-3 border-t border-slate-100 pt-5">
+                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><FaBox /> Позиції ({lines.filter(l => l.nomenclature_id).length})</h3>
+                                    <button type="button" onClick={addLine} disabled={!form.warehouse_from_id} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-3 py-1.5 rounded-lg flex items-center gap-1.5 disabled:opacity-40"><FaPlus size={10} /> Додати рядок</button>
+                                </div>
 
-                                        <div className="md:col-span-2">
-                                            <AnimatePresence mode="wait">
-                                                {form.warehouse_from_id && form.nomenclature_id && selectedItem && (
-                                                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 space-y-4">
-                                                        <div className="flex items-center gap-3">
-                                                            <FaInfoCircle className="text-blue-500 flex-shrink-0" />
-                                                            <span className="text-sm font-medium text-slate-700">
-                                                                Доступно на складі: <span className={`font-black ml-1 ${availableQtyBase > 0 ? 'text-emerald-600' : 'text-red-500'}`}>{availableQtyBase} {selectedItem.unitName}</span>
-                                                            </span>
+                                {!form.warehouse_from_id ? (
+                                    <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-sm text-slate-400 font-medium">Спершу оберіть склад</div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {lines.map((line) => {
+                                            const nom = nomById(line.nomenclature_id);
+                                            const hasPkg = nom?.package_multiplier > 1;
+                                            const bal = getBal(line.nomenclature_id);
+                                            const need = needByNom(line.nomenclature_id);
+                                            const qtyB = lineQtyBase(line);
+                                            const over = need && qtyB > parseFloat(need.outstanding_need);
+                                            const offSpec = form.installation_custom_id && line.nomenclature_id && !need;
+                                            return (
+                                                <div key={line.key} className={`bg-white border rounded-xl p-3 shadow-sm ${line.error ? 'border-red-300' : 'border-slate-200'}`}>
+                                                    <div className="flex gap-2 items-start">
+                                                        <div className="flex-1 min-w-0">
+                                                            <SearchableSelect options={nomOptions} value={line.nomenclature_id} onChange={(val) => updateLine(line.key, { nomenclature_id: val, sellMode: 'base' })} placeholder="Оберіть товар..." />
                                                         </div>
+                                                        <button type="button" onClick={() => removeLine(line.key)} className="p-2.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0" title="Прибрати"><FaTrash size={14} /></button>
+                                                    </div>
 
-                                                        {hasPackage && (
-                                                            <div className="bg-white p-3 rounded-lg border border-blue-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                                                                <div>
-                                                                    <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                                                                        Цей товар надходить упаковками 
-                                                                        <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-[10px]">1 {selectedItem.unitName} = {selectedItem.package_multiplier} {selectedItem.package_name || 'шт'}</span>
-                                                                    </div>
-                                                                    <div className="text-[10px] text-slate-500 mt-0.5">Виберіть, в чому ви зараз здійснюєте продаж:</div>
+                                                    {line.nomenclature_id && (
+                                                        <div className="mt-2.5 flex flex-wrap items-end gap-2 sm:gap-3">
+                                                            {hasPkg && (
+                                                                <div className="flex bg-slate-100 p-0.5 rounded-lg">
+                                                                    <button type="button" onClick={() => updateLine(line.key, { sellMode: 'base' })} className={`px-2 py-1 rounded-md text-[10px] font-bold ${line.sellMode === 'base' ? 'bg-white shadow text-blue-700' : 'text-slate-500'}`}>{nom.unitName}</button>
+                                                                    <button type="button" onClick={() => updateLine(line.key, { sellMode: 'piece' })} className={`px-2 py-1 rounded-md text-[10px] font-bold ${line.sellMode === 'piece' ? 'bg-white shadow text-amber-700' : 'text-slate-500'}`}>{nom.package_name || 'шт'}</button>
                                                                 </div>
-                                                                <div className="flex bg-slate-100 p-1 rounded-lg">
-                                                                    <button type="button" onClick={() => setForm({...form, sellMode: 'base'})} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${form.sellMode === 'base' ? 'bg-white shadow border border-slate-200 text-blue-700' : 'text-slate-500'}`}>Упаковки ({selectedItem.unitName})</button>
-                                                                    <button type="button" onClick={() => setForm({...form, sellMode: 'piece'})} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${form.sellMode === 'piece' ? 'bg-white shadow border border-slate-200 text-amber-700' : 'text-slate-500'}`}>Штучно ({selectedItem.package_name || 'шт'})</button>
-                                                                </div>
+                                                            )}
+                                                            <div>
+                                                                <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">К-сть</label>
+                                                                <input type="number" step="any" min="0" inputMode="decimal" value={line.quantity} onChange={e => updateLine(line.key, { quantity: e.target.value })} className="w-24 px-3 py-2 bg-white border-2 border-slate-200 focus:border-blue-400 rounded-lg text-base font-black text-slate-800 outline-none" placeholder="0" />
                                                             </div>
-                                                        )}
-                                                    </motion.div>
-                                                )}
-                                            </AnimatePresence>
-                                        </div>
-                                    </div>
-                                </section>
+                                                            {isMoney && (
+                                                                <div>
+                                                                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Ціна/од ({form.currency})</label>
+                                                                    <input type="number" step="any" min="0" value={line.unit_price} onChange={e => updateLine(line.key, { unit_price: e.target.value })} className="w-28 px-3 py-2 bg-white border-2 border-slate-200 focus:border-blue-400 rounded-lg text-base font-black text-slate-800 outline-none" placeholder="0.00" />
+                                                                </div>
+                                                            )}
+                                                            {isMoney && (parseFloat(line.quantity) > 0 && parseFloat(line.unit_price) > 0) && (
+                                                                <div className="text-xs font-bold text-slate-500 pb-2">= {(parseFloat(line.quantity) * parseFloat(line.unit_price)).toLocaleString('uk-UA')} {form.currency}</div>
+                                                            )}
+                                                        </div>
+                                                    )}
 
-                                {/* БЛОК 3: ФІНАНСИ (Повна свобода вводу) */}
-                                <section>
-                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2 border-t border-slate-100 pt-6">
-                                        <FaMoneyBillWave /> Фінансові деталі (Вільно редагуються)
-                                    </h3>
-                                    
-                                    <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 mb-4 text-[11px] text-amber-800 flex items-start gap-2">
-                                        <FaInfoCircle className="mt-0.5 shrink-0" />
-                                        <p><strong>Новий алгоритм:</strong> Ви можете редагувати <u>будь-яке</u> поле в цьому блоці. Наприклад, якщо ввести Загальну суму в ГРН вручну, система сама вирахує курс. Якщо змінити Загальну суму в Доларах — зміниться ціна за одиницю.</p>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                        
-                                        <div className="col-span-2 md:col-span-1">
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Віддаємо <span className="text-red-500">*</span></label>
-                                            <div className="relative">
-                                                <input type="number" step="any" required value={form.quantity} onChange={e => updateFinances('quantity', e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-blue-200 rounded-xl focus:border-blue-500 outline-none text-lg font-black text-blue-700 transition-colors pr-16" placeholder="0" />
-                                                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 uppercase">
-                                                    {selectedItem ? (form.sellMode === 'piece' ? (selectedItem.package_name || 'шт') : selectedItem.unitName) : ''}
+                                                    {/* хінти: залишок / звірка / помилка */}
+                                                    {line.nomenclature_id && (
+                                                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
+                                                            <span className="font-bold text-slate-500 bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded">{form.kind === 'issue' ? 'На складі' : 'Вільно'}: {form.kind === 'issue' ? bal.onHand : bal.available} {nom?.unitName}</span>
+                                                            {need && <span className="font-bold text-slate-500 bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded">дефіцит: {parseFloat(need.outstanding_need)}</span>}
+                                                            {over && <span className="font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded flex items-center gap-1"><FaExclamationTriangle size={9} /> понад план</span>}
+                                                            {offSpec && <span className="font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded flex items-center gap-1"><FaExclamationTriangle size={9} /> поза специфікацією</span>}
+                                                            {line.error && <span className="font-bold text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">{line.error}</span>}
+                                                        </div>
+                                                    )}
                                                 </div>
-                                            </div>
-                                        </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </section>
 
-                                        <div className="col-span-1 md:col-span-1">
+                            {/* ФІНАНСИ (тільки продаж) */}
+                            {isMoney && (
+                                <section className="border-t border-slate-100 pt-5">
+                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><FaMoneyBillWave /> Фінанси</h3>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
+                                        <div>
                                             <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Валюта</label>
-                                            <select value={form.currency} onChange={e => updateFinances('currency', e.target.value)} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors">
-                                                <option value="USD">USD ($)</option>
-                                                <option value="EUR">EUR (€)</option>
-                                                <option value="UAH">UAH (₴)</option>
+                                            <select value={form.currency} onChange={e => setForm({ ...form, currency: e.target.value, exchange_rate: e.target.value === 'UAH' ? '1' : form.exchange_rate })} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm font-bold text-slate-800">
+                                                <option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="UAH">UAH (₴)</option>
                                             </select>
                                         </div>
-
-                                        <div className="col-span-1 md:col-span-1">
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase" title="Ціна за 1 одиницю">Ціна за 1 од. ({form.currency})</label>
-                                            <input type="number" step="any" value={form.sale_price} onChange={e => updateFinances('sale_price', e.target.value)} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors" placeholder="0.00" />
-                                        </div>
-
-                                        <div className="col-span-2 md:col-span-1">
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Сума ({form.currency})</label>
-                                            <input type="number" step="any" value={form.total_price} onChange={e => updateFinances('total_price', e.target.value)} className="w-full px-3 py-3 bg-indigo-50 border border-indigo-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-400 outline-none text-sm font-bold text-indigo-900 transition-colors" placeholder="Загальна сума" />
-                                        </div>
-
                                         {form.currency !== 'UAH' && (
-                                            <>
-                                                <div className="col-span-1 md:col-span-2">
-                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Загальна сума (ГРН)</label>
-                                                    <input type="number" step="any" value={form.total_uah} onChange={e => updateFinances('total_uah', e.target.value)} className="w-full px-3 py-3 bg-emerald-50 border border-emerald-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-400 outline-none text-sm font-bold text-emerald-900 transition-colors" placeholder="Сума в гривнях" />
-                                                </div>
-                                                <div className="col-span-1 md:col-span-2">
-                                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Курс</label>
-                                                    <input type="number" step="any" value={form.exchange_rate} onChange={e => updateFinances('exchange_rate', e.target.value)} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors" placeholder="Курс" />
-                                                </div>
-                                            </>
+                                            <div>
+                                                <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Курс</label>
+                                                <input type="number" step="any" value={form.exchange_rate} onChange={e => setForm({ ...form, exchange_rate: e.target.value })} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm font-bold text-slate-800" />
+                                            </div>
                                         )}
+                                        <div className="col-span-2 sm:col-span-1 sm:col-start-4 text-right">
+                                            <div className="text-[11px] font-bold text-slate-400 uppercase">Разом</div>
+                                            <div className="text-lg font-black text-slate-800">{grandTotal.toLocaleString('uk-UA')} {form.currency}</div>
+                                            {form.currency !== 'UAH' && rate > 0 && <div className="text-[11px] font-bold text-emerald-600">≈ {(grandTotal * rate).toLocaleString('uk-UA')} ₴</div>}
+                                        </div>
                                     </div>
                                 </section>
+                            )}
 
-                                {/* БЛОК 4: ДОДАТКОВО */}
-                                <section>
-                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2 border-t border-slate-100 pt-6">
-                                        <FaFileAlt /> Документація та коментарі
-                                    </h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* ДОКУМЕНТ + КОМЕНТАР */}
+                            <section className="border-t border-slate-100 pt-5">
+                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><FaFileAlt /> Документ і коментар</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {isMoney && (
                                         <div>
                                             <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Документ (Акт / Накладна)</label>
-                                            <input type="text" value={form.reference_document} onChange={e => setForm({...form, reference_document: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm text-slate-800 transition-colors" placeholder="№..." />
+                                            <input type="text" value={form.reference_document} onChange={e => setForm({ ...form, reference_document: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm text-slate-800" placeholder="№..." />
                                         </div>
-                                        <div>
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Коментар</label>
-                                            <input type="text" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm text-slate-800 transition-colors" placeholder="Умови доставки, домовленності..." />
-                                        </div>
+                                    )}
+                                    <div className={isMoney ? '' : 'md:col-span-2'}>
+                                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Коментар {anyOverageOrOffSpec && <span className="text-red-500">* причина</span>}</label>
+                                        <input type="text" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className={`w-full px-4 py-3 bg-slate-50 border rounded-xl outline-none text-sm text-slate-800 ${anyOverageOrOffSpec ? 'border-amber-300' : 'border-slate-200'}`} placeholder={anyOverageOrOffSpec ? 'Обов’язково: причина перевищення/поза планом...' : 'Опційно...'} />
                                     </div>
-                                </section>
-
-                            </form>
+                                </div>
+                                {anyOverageOrOffSpec && (
+                                    <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
+                                        <FaInfoCircle className="text-amber-500 mt-0.5 shrink-0" />
+                                        <p className="text-[11px] text-amber-800 font-medium">Є позиції понад план або поза специфікацією об'єкта. Операцію буде проведено, але вкажіть причину.</p>
+                                    </div>
+                                )}
+                            </section>
                         </div>
 
                         {/* FOOTER */}
-                        <div className="p-6 border-t border-slate-100 flex flex-col-reverse sm:flex-row justify-end gap-3 flex-shrink-0 bg-slate-50 rounded-b-[24px]">
-                            <button type="button" onClick={onClose} className="w-full sm:w-auto px-6 py-3.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
-                            <button form="direct-sale-form" type="submit" disabled={isSubmitting || isLoading} className="w-full sm:w-auto px-8 py-3.5 bg-blue-600 text-white rounded-xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-colors text-sm flex items-center justify-center gap-2 disabled:opacity-70">
-                                {isSubmitting ? 'Проведення...' : 'Підтвердити відвантаження'}
-                            </button>
+                        <div className="p-4 sm:p-5 border-t border-slate-100 flex flex-col-reverse sm:flex-row justify-between sm:items-center gap-3 flex-shrink-0 bg-slate-50 rounded-b-[24px] pb-safe">
+                            <div className="text-xs font-bold text-slate-500 text-center sm:text-left">
+                                Позицій: <span className="text-slate-800">{lines.filter(l => l.nomenclature_id && parseFloat(l.quantity) > 0).length}</span>
+                                {isMoney && grandTotal > 0 && <span className="ml-3">Разом: <span className="text-slate-800">{grandTotal.toLocaleString('uk-UA')} {form.currency}</span></span>}
+                            </div>
+                            <div className="flex gap-3">
+                                <button type="button" onClick={onClose} className="flex-1 sm:flex-none px-6 py-3 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
+                                <button type="button" onClick={handleSubmit} disabled={isSubmitting || isLoading} className={`flex-1 sm:flex-none px-6 sm:px-8 py-3 text-white rounded-xl font-bold shadow-lg transition-colors text-sm flex items-center justify-center gap-2 disabled:opacity-70 ${accent.btn}`}>
+                                    {isSubmitting ? 'Проведення...' : `Провести${form.kind === 'issue' ? ' видачу' : form.kind === 'partner' ? ' передачу' : ' продаж'}`}
+                                </button>
+                            </div>
                         </div>
                     </motion.div>
                 </motion.div>

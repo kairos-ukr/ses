@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-    FaFileExcel, FaArrowDown, FaArrowUp, FaExchangeAlt, 
-    FaTrash, FaLock, FaUnlock, FaFileAlt, FaCheck, FaExclamationTriangle, 
-    FaTimes, FaInfoCircle, FaHistory, FaCalendarAlt, FaShoppingCart, FaHandshake
+import {
+    FaFileExcel, FaArrowDown, FaArrowUp, FaExchangeAlt,
+    FaTrash, FaLock, FaUnlock, FaFileAlt, FaCheck, FaExclamationTriangle,
+    FaTimes, FaInfoCircle, FaHistory, FaCalendarAlt, FaShoppingCart, FaHandshake, FaEdit
 } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
@@ -48,10 +48,20 @@ const OP_CONFIG = {
 
 // Приймаємо externalSearch та externalActionTrigger від батьківського компонента (InventoryWorkspace)
 export default function StockMovementsPage({ externalSearch = '', externalActionTrigger = 0 }) {
-    const { loading: authLoading } = useAuth();
-    
+    const { employee, loading: authLoading } = useAuth();
+
     const [movements, setMovements] = useState([]);
     const [loading, setLoading] = useState(true);
+
+    // Редагування інфо-полів руху
+    const [editModal, setEditModal] = useState({ isOpen: false, mov: null });
+    const [editForm, setEditForm] = useState({ reference_document: '', notes: '', operation_date: '', sale_price: '', currency: 'USD', exchange_rate: '' });
+    const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+    // Повернення операції
+    const [returnModal, setReturnModal] = useState({ isOpen: false, mov: null, maxQty: 0 });
+    const [returnForm, setReturnForm] = useState({ quantity: '', reason: '' });
+    const [isReturning, setIsReturning] = useState(false);
     
     const [dicts, setDicts] = useState({ nom: {}, emp: {}, wh: {}, inst: {}, sup: {}, po: {}, clients: {} });
     
@@ -220,6 +230,15 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
     // --- ФІЛЬТРАЦІЯ ТА ПАГІНАЦІЯ ---
     const processedMovements = movements.map(m => ({ ...m, ...buildRowData(m) }));
 
+    // Скільки вже повернено по кожній вихідній операції
+    const returnedBySource = {};
+    movements.forEach(m => {
+        if (m.operation_type === 'return' && m.source_movement_id) {
+            returnedBySource[m.source_movement_id] = (returnedBySource[m.source_movement_id] || 0) + parseFloat(m.quantity);
+        }
+    });
+    const DISPATCH_TYPES = ['issue', 'sale', 'partner_transfer'];
+
     const filteredMovements = processedMovements.filter(m => {
         const term = externalSearch.toLowerCase();
         const matchesSearch = 
@@ -269,6 +288,90 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
         XLSX.writeFile(workbook, `Рух_Товарів_${new Date().toISOString().slice(0,10)}.xlsx`);
     };
 
+    // --- РЕДАГУВАННЯ ІНФО-ПОЛІВ РУХУ ---
+    const toLocalInput = (iso) => {
+        if (!iso) return '';
+        const d = new Date(iso);
+        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+        return local.toISOString().slice(0, 16);
+    };
+
+    const openEdit = (mov) => {
+        setEditForm({
+            reference_document: mov.reference_document || '',
+            notes: mov.notes || '',
+            operation_date: toLocalInput(mov.operation_date || mov.created_at),
+            sale_price: mov.sale_price ?? '',
+            currency: mov.currency || 'USD',
+            exchange_rate: mov.exchange_rate ?? '',
+        });
+        setEditModal({ isOpen: true, mov });
+    };
+
+    const handleSaveEdit = async (e) => {
+        e.preventDefault();
+        const mov = editModal.mov;
+        if (!mov) return;
+        setIsSavingEdit(true);
+        try {
+            const payload = {
+                reference_document: editForm.reference_document.trim() || null,
+                notes: editForm.notes.trim() || null,
+                updated_by: employee?.id ?? null,
+                updated_at: new Date().toISOString(),
+            };
+            if (editForm.operation_date) payload.operation_date = new Date(editForm.operation_date).toISOString();
+            const isSale = mov.operation_type === 'sale' || mov.operation_type === 'partner_transfer';
+            if (isSale) {
+                payload.sale_price = editForm.sale_price === '' ? null : parseFloat(editForm.sale_price);
+                payload.currency = editForm.currency;
+                payload.exchange_rate = editForm.exchange_rate === '' ? null : parseFloat(editForm.exchange_rate);
+            }
+            const { error } = await supabase.from('stock_movements').update(payload).eq('id', mov.id);
+            if (error) throw error;
+            showToast('Запис оновлено', 'success');
+            setEditModal({ isOpen: false, mov: null });
+            loadData();
+        } catch (error) {
+            showToast(error.message, 'error');
+        } finally {
+            setIsSavingEdit(false);
+        }
+    };
+
+    // --- ПОВЕРНЕННЯ ОПЕРАЦІЇ ---
+    const openReturn = (mov, maxQty) => {
+        setReturnForm({ quantity: maxQty, reason: '' });
+        setReturnModal({ isOpen: true, mov, maxQty });
+    };
+
+    const handleReturn = async (e) => {
+        e.preventDefault();
+        const mov = returnModal.mov;
+        if (!mov) return;
+        const qty = parseFloat(returnForm.quantity);
+        if (!qty || qty <= 0) return showToast('Введіть кількість більше 0', 'error');
+        if (qty > returnModal.maxQty) return showToast(`Можна повернути не більше ${returnModal.maxQty}`, 'error');
+        setIsReturning(true);
+        try {
+            const { data, error } = await supabase.rpc('return_movement', {
+                p_source_movement_id: mov.id,
+                p_qty: qty,
+                p_reason: returnForm.reason.trim() || null,
+                p_emp: employee?.id ?? null,
+            });
+            if (error) throw error;
+            if (data && data.ok === false) return showToast(data.message || 'Повернення відхилено', 'error');
+            showToast(`Повернення проведено (${qty} ${mov.nom?.unitCode || ''})`, 'success');
+            setReturnModal({ isOpen: false, mov: null, maxQty: 0 });
+            loadData();
+        } catch (error) {
+            showToast(error.message, 'error');
+        } finally {
+            setIsReturning(false);
+        }
+    };
+
     if (authLoading) return <div className="flex-1 flex items-center justify-center text-slate-500">Завантаження...</div>;
 
     return (
@@ -293,6 +396,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                         <button onClick={() => setTypeFilter('purchase')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'purchase' ? 'bg-emerald-100 text-emerald-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Приходи</button>
                         <button onClick={() => setTypeFilter('issue')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'issue' ? 'bg-amber-100 text-amber-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Видачі</button>
                         <button onClick={() => setTypeFilter('sale')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'sale' ? 'bg-blue-100 text-blue-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Продажі</button>
+                        <button onClick={() => setTypeFilter('return')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'return' ? 'bg-teal-100 text-teal-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Повернення</button>
                         <button onClick={() => setTypeFilter('transfer')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'transfer' ? 'bg-indigo-100 text-indigo-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Переміщення</button>
                     </div>
                 </div>
@@ -386,13 +490,25 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                                                 {m.notes && <div className="text-[10px] text-slate-400 italic mt-2 p-1.5 bg-slate-50 rounded border border-slate-100 line-clamp-1" title={m.notes}><span className="font-bold">Комент:</span> {m.notes}</div>}
                                             </td>
 
-                                            {/* Відповідальний */}
+                                            {/* Відповідальний + редагування */}
                                             <td className="px-5 py-4 w-40 text-right align-middle border-l border-slate-50">
-                                                <div className="inline-flex items-center justify-end gap-2 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-100 w-full">
-                                                    <div className="w-5 h-5 rounded-full bg-[#0F172A] text-white flex items-center justify-center text-[9px] font-bold flex-shrink-0">
-                                                        {m.empName.charAt(0)}
+                                                <div className="flex flex-col items-end gap-1.5">
+                                                    <div className="inline-flex items-center justify-end gap-2 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-100 w-full">
+                                                        <div className="w-5 h-5 rounded-full bg-[#0F172A] text-white flex items-center justify-center text-[9px] font-bold flex-shrink-0">
+                                                            {m.empName.charAt(0)}
+                                                        </div>
+                                                        <span className="font-bold text-slate-600 text-xs truncate" title={m.empName}>{m.empName}</span>
                                                     </div>
-                                                    <span className="font-bold text-slate-600 text-xs truncate" title={m.empName}>{m.empName}</span>
+                                                    <div className="flex items-center gap-1">
+                                                        <button onClick={() => openEdit(m)} className="text-[10px] font-bold text-slate-400 hover:text-indigo-600 flex items-center gap-1 px-2 py-1 rounded hover:bg-indigo-50 transition-colors" title="Редагувати інфо запису">
+                                                            <FaEdit size={10}/> Ред.
+                                                        </button>
+                                                        {DISPATCH_TYPES.includes(m.operation_type) && (parseFloat(m.quantity) - (returnedBySource[m.id] || 0)) > 0 && (
+                                                            <button onClick={() => openReturn(m, parseFloat(m.quantity) - (returnedBySource[m.id] || 0))} className="text-[10px] font-bold text-teal-600 hover:text-white hover:bg-teal-600 flex items-center gap-1 px-2 py-1 rounded bg-teal-50 border border-teal-100 transition-colors" title="Повернути цю операцію">
+                                                                <FaArrowDown size={10}/> Повернути
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </td>
                                         </tr>
@@ -432,14 +548,123 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                 </div>
             )}
 
-            { 
-            <DirectSaleModal 
-                isOpen={isSaleModalOpen} 
-                onClose={() => setIsSaleModalOpen(false)} 
-                onSuccess={loadData} 
+            {
+            <DirectSaleModal
+                isOpen={isSaleModalOpen}
+                onClose={() => setIsSaleModalOpen(false)}
+                onSuccess={loadData}
                 showToast={showToast}
-            /> 
+            />
             }
+
+            {/* --- МОДАЛКА: РЕДАГУВАННЯ ІНФО ЗАПИСУ --- */}
+            <AnimatePresence>
+                {editModal.isOpen && editModal.mov && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[85]">
+                        <motion.div initial={{ scale: 0.98, opacity: 0, y: 30 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0, y: 30 }} className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg shadow-2xl flex flex-col max-h-[95vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 flex-shrink-0">
+                                <div className="min-w-0">
+                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><FaEdit className="text-indigo-500"/> Редагування запису</h2>
+                                    <p className="text-[11px] text-slate-500 mt-0.5 truncate">{editModal.mov.conf?.label} • {editModal.mov.nom?.fullName}</p>
+                                </div>
+                                <button onClick={() => setEditModal({ isOpen: false, mov: null })} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm flex-shrink-0"><FaTimes/></button>
+                            </div>
+
+                            <form id="edit-mov-form" onSubmit={handleSaveEdit} className="p-5 overflow-y-auto custom-scrollbar flex-1 space-y-4">
+                                <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 text-[11px] text-amber-800 flex items-start gap-2">
+                                    <FaInfoCircle className="mt-0.5 shrink-0"/>
+                                    <p>Редагуються лише <b>інформаційні</b> поля. Кількість, тип, склад і номенклатура не змінюються (щоб не порушити баланси). Для виправлення к-сті зробіть повернення/сторно.</p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Документ (Акт / Накладна)</label>
+                                    <input type="text" value={editForm.reference_document} onChange={e => setEditForm(f => ({ ...f, reference_document: e.target.value }))} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-200 outline-none text-sm text-slate-800 transition-colors" placeholder="№..." />
+                                </div>
+
+                                <div>
+                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Дата операції</label>
+                                    <input type="datetime-local" value={editForm.operation_date} onChange={e => setEditForm(f => ({ ...f, operation_date: e.target.value }))} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-200 outline-none text-sm text-slate-800 transition-colors" />
+                                </div>
+
+                                {(editModal.mov.operation_type === 'sale' || editModal.mov.operation_type === 'partner_transfer') && (
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Ціна за од.</label>
+                                            <input type="number" step="any" value={editForm.sale_price} onChange={e => setEditForm(f => ({ ...f, sale_price: e.target.value }))} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-200 outline-none text-sm font-bold text-slate-800 transition-colors" placeholder="0.00" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Валюта</label>
+                                            <select value={editForm.currency} onChange={e => setEditForm(f => ({ ...f, currency: e.target.value }))} className="w-full px-2 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-200 outline-none text-sm font-bold text-slate-800 transition-colors">
+                                                <option value="USD">USD</option>
+                                                <option value="EUR">EUR</option>
+                                                <option value="UAH">UAH</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Курс</label>
+                                            <input type="number" step="any" value={editForm.exchange_rate} onChange={e => setEditForm(f => ({ ...f, exchange_rate: e.target.value }))} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-200 outline-none text-sm font-bold text-slate-800 transition-colors" placeholder="1.0" />
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div>
+                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Коментар</label>
+                                    <textarea rows="2" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-200 outline-none text-sm text-slate-800 transition-colors resize-none" placeholder="Примітки..." />
+                                </div>
+                            </form>
+
+                            <div className="p-4 sm:p-5 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 flex-shrink-0 pb-safe">
+                                <button type="button" onClick={() => setEditModal({ isOpen: false, mov: null })} className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
+                                <button form="edit-mov-form" type="submit" disabled={isSavingEdit} className="px-8 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-md hover:bg-indigo-700 transition-colors text-sm flex items-center gap-2 disabled:opacity-50">
+                                    {isSavingEdit ? 'Збереження...' : 'Зберегти зміни'}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* --- МОДАЛКА: ПОВЕРНЕННЯ ОПЕРАЦІЇ --- */}
+            <AnimatePresence>
+                {returnModal.isOpen && returnModal.mov && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[85]">
+                        <motion.div initial={{ scale: 0.98, opacity: 0, y: 30 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0, y: 30 }} className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl flex flex-col max-h-[95vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-teal-50 flex-shrink-0">
+                                <div className="min-w-0">
+                                    <h2 className="text-lg font-bold text-teal-900 flex items-center gap-2"><FaArrowDown className="text-teal-500"/> Повернення операції</h2>
+                                    <p className="text-[11px] text-teal-700/70 mt-0.5 truncate">{returnModal.mov.conf?.label} • {returnModal.mov.nom?.fullName}</p>
+                                </div>
+                                <button onClick={() => setReturnModal({ isOpen: false, mov: null, maxQty: 0 })} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm flex-shrink-0"><FaTimes/></button>
+                            </div>
+
+                            <form id="return-mov-form" onSubmit={handleReturn} className="p-5 overflow-y-auto custom-scrollbar flex-1 space-y-4">
+                                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[12px] text-slate-600 flex items-start gap-2">
+                                    <FaInfoCircle className="text-teal-500 mt-0.5 shrink-0"/>
+                                    <p>Товар повернеться на склад <b>«{returnModal.mov.routeStr?.split(' → ')[0] || '—'}»</b>. Доступно до повернення: <b className="text-teal-700">{returnModal.maxQty} {returnModal.mov.nom?.unitCode}</b>.</p>
+                                </div>
+                                <div>
+                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Кількість до повернення</label>
+                                    <div className="flex items-center gap-3">
+                                        <input type="number" step="any" min="0" max={returnModal.maxQty} required autoFocus value={returnForm.quantity} onChange={e => setReturnForm(f => ({ ...f, quantity: e.target.value }))} className="w-32 px-4 py-3 bg-white border-2 border-teal-200 focus:border-teal-500 rounded-xl text-xl font-black text-teal-700 text-center outline-none transition-colors" />
+                                        <span className="text-sm font-bold text-slate-400 uppercase">{returnModal.mov.nom?.unitCode}</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Причина (напр. переплутали товар)</label>
+                                    <input type="text" value={returnForm.reason} onChange={e => setReturnForm(f => ({ ...f, reason: e.target.value }))} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-teal-200 outline-none text-sm text-slate-800 transition-colors" placeholder="Опційно..." />
+                                </div>
+                            </form>
+
+                            <div className="p-4 sm:p-5 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 flex-shrink-0 pb-safe">
+                                <button type="button" onClick={() => setReturnModal({ isOpen: false, mov: null, maxQty: 0 })} className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
+                                <button form="return-mov-form" type="submit" disabled={isReturning} className="px-8 py-2.5 bg-teal-600 text-white rounded-xl font-bold shadow-md hover:bg-teal-700 transition-colors text-sm flex items-center gap-2 disabled:opacity-50">
+                                    {isReturning ? 'Обробка...' : 'Підтвердити повернення'}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

@@ -43,7 +43,7 @@ export default function InventoryWorkspace() {
                     actionText: 'СТВОРИТИ/ІМПОРТ ЗАМОВЛЕННЯ',
                 };
             case 'movements':
-                return { title: 'ІСТОРІЯ РУХУ ТОВАРІВ', actionText: 'НОВЕ ПЕРЕМІЩЕННЯ' };
+                return { title: 'ІСТОРІЯ РУХУ ТОВАРІВ', actionText: 'ВИДАЧА / ПРОДАЖ' };
             default:
                 return { title: 'СКЛАД', actionText: 'ДОДАТИ' };
         }

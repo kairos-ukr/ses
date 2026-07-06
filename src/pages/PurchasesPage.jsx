@@ -305,7 +305,41 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
                 if (stErr) throw stErr;
             }
 
-            showToast('Товари успішно прийняті на склад', 'success');
+            // --- АВТО-РЕЗЕРВ ПІД ОБ'ЄКТ (якщо PO прив'язане до об'єкта) ---
+            let reservedCount = 0;
+            if (selectedOrder.installation_custom_id) {
+                try {
+                    const instId = selectedOrder.installation_custom_id;
+                    const { data: needs } = await supabase
+                        .from('v_object_material_needs')
+                        .select('nomenclature_id, outstanding_need')
+                        .eq('installation_custom_id', instId);
+                    const outstandingByNom = {};
+                    (needs || []).forEach(n => {
+                        outstandingByNom[n.nomenclature_id] = (outstandingByNom[n.nomenclature_id] || 0) + parseFloat(n.outstanding_need);
+                    });
+                    for (const item of validItems) {
+                        const need = outstandingByNom[item.nomenclature_id] || 0;
+                        const qty = Math.min(parseInt(item.receive_now, 10), need);
+                        if (qty > 0) {
+                            const { data: rr } = await supabase.rpc('reserve_for_object', {
+                                p_installation: instId,
+                                p_warehouse: parseInt(receivingForm.warehouse_id),
+                                p_nomenclature: item.nomenclature_id,
+                                p_spec_item: null,
+                                p_qty: qty,
+                                p_emp: employee?.id ?? null,
+                            });
+                            if (rr && rr.ok) reservedCount++;
+                            outstandingByNom[item.nomenclature_id] = need - qty;
+                        }
+                    }
+                } catch (rErr) {
+                    console.warn('Авто-резерв під об\'єкт не вдався:', rErr.message);
+                }
+            }
+
+            showToast(reservedCount > 0 ? `Прийнято на склад. Авто-резерв під об'єкт: ${reservedCount} поз.` : 'Товари успішно прийняті на склад', 'success');
             setIsReceivingModalOpen(false);
             loadData();
         } catch (error) { showToast(error.message, 'error'); }

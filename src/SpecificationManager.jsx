@@ -7,6 +7,7 @@ import {
 } from 'react-icons/fa';
 import { supabase } from './supabaseClient';
 import { useAuth } from './AuthProvider';
+import ManualSpecBuilder from './pages/ManualSpecBuilder';
 
 const OCR_API_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev/parse-pdf';
 
@@ -77,6 +78,8 @@ export default function SpecificationManager({ installationId, onClose }) {
     const [mappedItems, setMappedItems] = useState([]); 
     const [pdfFileName, setPdfFileName] = useState('');
     const fileInputRef = useRef(null);
+
+    const [isManualOpen, setIsManualOpen] = useState(false);
 
     // --- ЗАВАНТАЖЕННЯ ДОВІДНИКІВ ТА СПЕЦИФІКАЦІЙ ---
     const loadData = useCallback(async () => {
@@ -256,14 +259,20 @@ export default function SpecificationManager({ installationId, onClose }) {
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
-                    {/* Кнопка завантаження */}
-                    <div className="mb-6 flex justify-end">
+                    {/* Кнопки завантаження / ручне внесення */}
+                    <div className="mb-6 flex justify-end gap-3">
+                        <button
+                            onClick={() => setIsManualOpen(true)} disabled={loading}
+                            className="px-5 py-3 bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 rounded-xl font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50"
+                        >
+                            <FaPlus/> Внести вручну
+                        </button>
                         <input type="file" accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
-                        <button 
+                        <button
                             onClick={() => fileInputRef.current?.click()} disabled={isParsing || loading}
                             className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
                         >
-                            {isParsing ? <FaSpinner className="animate-spin"/> : <FaUpload/>} 
+                            {isParsing ? <FaSpinner className="animate-spin"/> : <FaUpload/>}
                             {isParsing ? 'Розпізнавання...' : 'Завантажити новий PDF'}
                         </button>
                     </div>
@@ -458,6 +467,18 @@ export default function SpecificationManager({ installationId, onClose }) {
                         </motion.div>
                     )}
                 </AnimatePresence>
+
+                {/* --- РУЧНЕ ВНЕСЕННЯ КОМПЛЕКТАЦІЇ --- */}
+                {isManualOpen && (
+                    <ManualSpecBuilder
+                        isOpen={isManualOpen}
+                        onClose={() => setIsManualOpen(false)}
+                        onSuccess={loadData}
+                        installationId={parseInt(installationId)}
+                        title="Специфікація матеріалів"
+                        showToast={(m, t) => { if (t === 'error') alert(m); }}
+                    />
+                )}
 
             </div>
         </div>
