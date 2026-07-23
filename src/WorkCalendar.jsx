@@ -4,7 +4,8 @@ import {
   FaCalendarAlt, FaSearch, FaPlus, FaTrash, FaUserPlus, 
   FaMapMarkerAlt, FaCheck, FaTimes, FaSave, FaBriefcase, 
   FaExclamationTriangle, FaArrowLeft, FaArrowRight, FaPen, FaTasks, FaUser,
-  FaBed, FaChevronLeft, FaEye, FaPencilAlt, FaRegCalendarAlt, FaUserSlash, FaLock
+  FaBed, FaChevronLeft, FaEye, FaPencilAlt, FaRegCalendarAlt, FaUserSlash, FaLock,
+  FaRoute, FaHistory
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider"; // 1. ІМПОРТ AUTH CONTEXT
@@ -45,11 +46,32 @@ const useIsDesktop = () => {
 const isDateInPast = (date) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const target = new Date(date);
     target.setHours(0, 0, 0, 0);
-    
+
     return target < today;
+};
+
+// Групування рядків installation_workers у картки завдань (об'єкт/кастом + працівники)
+const groupWorkRows = (rows) => {
+    const groups = [];
+    (rows || []).forEach(item => {
+        const groupKey = item.installation_custom_id || 'custom_' + item.notes;
+        let existing = groups.find(g => g._groupKey === groupKey);
+        if (!existing) {
+            existing = {
+                id: Date.now() + Math.random(),
+                _groupKey: groupKey,
+                installationId: item.installation_custom_id || 'custom',
+                notes: item.notes,
+                workers: []
+            };
+            groups.push(existing);
+        }
+        if (item.employee_custom_id) existing.workers.push(item.employee_custom_id);
+    });
+    return groups;
 };
 
 // --- КОМПОНЕНТИ ---
@@ -206,6 +228,58 @@ const QuickAbsenceAdder = ({ employees, date, onAdd }) => {
     );
 };
 
+// --- ПАНЕЛЬ ЗАПЛАНОВАНИХ ВИЇЗДІВ (підказки з розділу «Виїзди») ---
+const VisitPlansPanel = ({ visits, installations, employees, schedule, onAddVisit, canEdit }) => {
+    if (!visits || visits.length === 0) return null;
+    return (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+            <h4 className="text-xs font-bold text-emerald-600 uppercase tracking-wider mb-2 flex items-center gap-2">
+                <FaRoute /> Заплановані виїзди на цей день ({visits.length})
+            </h4>
+            <div className="space-y-2">
+                {visits.map(v => {
+                    const instName = v.installationId
+                        ? (installations.find(i => String(i.custom_id) === String(v.installationId))?.name || `Об'єкт #${v.installationId}`)
+                        : (v.title || 'Завдання без об\'єкта');
+                    const inSchedule = schedule.some(a => v.installationId
+                        ? String(a.installationId) === String(v.installationId)
+                        : (a.installationId === 'custom' && (a.notes || '') === (v.title || 'Виїзд за планом')));
+                    return (
+                        <div key={v.id} className="bg-white rounded-lg border border-emerald-100 p-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                    <div className="text-sm font-bold text-slate-800 truncate">
+                                        {instName} {v.installationId && <span className="text-slate-400 font-normal">#{v.installationId}</span>}
+                                    </div>
+                                    {v.workerCustomIds.length > 0 && (
+                                        <div className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                                            У плані: <span className="font-medium text-slate-600">{v.workerCustomIds.map(w => employees.find(e => e.custom_id === w)?.name || w).join(', ')}</span>
+                                        </div>
+                                    )}
+                                    {v.comment && <div className="text-[10px] text-slate-400 italic mt-0.5">«{v.comment}»</div>}
+                                </div>
+                                {inSchedule ? (
+                                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-lg whitespace-nowrap">✔ У графіку</span>
+                                ) : canEdit ? (
+                                    <button
+                                        onClick={() => onAddVisit(v)}
+                                        title="Додати цей виїзд у графік разом із призначеними людьми"
+                                        className="text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-2.5 py-1.5 rounded-lg whitespace-nowrap shadow-sm transition-colors"
+                                    >
+                                        + У графік
+                                    </button>
+                                ) : (
+                                    <span className="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg whitespace-nowrap">Не в графіку</span>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
 const AbsentEmployeesList = ({ employees }) => {
     if (!employees || employees.length === 0) return null;
     return (
@@ -228,7 +302,7 @@ const AbsentEmployeesList = ({ employees }) => {
 };
 
 // --- КОМПОНЕНТ ПЕРЕГЛЯДУ (З УРАХУВАННЯМ ПРАВ) ---
-const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, onEdit, onSave, onCancel, isSaving, absentEmployees, isPast, canManageSchedule }) => {
+const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, onEdit, onSave, onCancel, isSaving, absentEmployees, isPast, canManageSchedule, visits = [] }) => {
     return (
         <div className="flex flex-col h-full bg-slate-50">
             <div className="p-4 border-b flex items-center justify-between bg-white rounded-t-2xl shadow-sm z-20 flex-none">
@@ -240,6 +314,13 @@ const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, on
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <VisitPlansPanel
+                    visits={visits}
+                    installations={installations}
+                    employees={employees}
+                    schedule={schedule}
+                    canEdit={false}
+                />
                 {schedule.length === 0 ? (
                     <div className="text-center py-10 text-gray-400">
                         <FaCalendarAlt className="mx-auto text-4xl mb-3 opacity-20"/>
@@ -363,10 +444,18 @@ export default function WorkCalendar() {
 
     const [installations, setInstallations] = useState([]);
     const [employees, setEmployees] = useState([]);
-    const [timeOffMap, setTimeOffMap] = useState({}); 
-    
+    const [timeOffMap, setTimeOffMap] = useState({});
+    const [visitsMap, setVisitsMap] = useState({}); // dateStr -> [{ id, installationId, title, workerCustomIds }]
+
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+
+    // Легке сповіщення (копіювання дня, підказки)
+    const [notice, setNotice] = useState(null);
+    const showNotice = useCallback((msg) => {
+        setNotice(msg);
+        setTimeout(() => setNotice(null), 3500);
+    }, []);
 
     const todayRef = useRef(null);
     const dateInputRef = useRef(null);
@@ -409,7 +498,7 @@ export default function WorkCalendar() {
 
             const { data: empData } = await supabase
                 .from('employees')
-                .select('custom_id, name, department, position')
+                .select('id, custom_id, name, department, position')
                 .order('name');
 
             const { data: attendanceData } = await supabase
@@ -425,8 +514,35 @@ export default function WorkCalendar() {
                 .gte('work_date', startDateStr)
                 .lte('work_date', endDateStr);
 
+            // Заплановані виїзди на цей тиждень (з призначеними людьми)
+            const { data: visitData } = await supabase
+                .from('installation_visit_plan')
+                .select('id, installation_custom_id, planned_date, status, custom_task_title, comment, assignees:installation_visit_plan_employees(employee_id)')
+                .gte('planned_date', startDateStr)
+                .lte('planned_date', endDateStr)
+                .neq('status', 'cancelled');
+
             setInstallations(instData || []);
             setEmployees(empData || []);
+
+            // Мапа виїздів по датах; людей конвертуємо employees.id -> custom_id (як у графіку)
+            const empById = {};
+            (empData || []).forEach(e => { empById[e.id] = e; });
+            const vMap = {};
+            (visitData || []).forEach(v => {
+                const date = v.planned_date;
+                if (!vMap[date]) vMap[date] = [];
+                vMap[date].push({
+                    id: v.id,
+                    installationId: v.installation_custom_id,
+                    title: v.custom_task_title || null,
+                    comment: v.comment || null,
+                    workerCustomIds: (v.assignees || [])
+                        .map(a => empById[a.employee_id]?.custom_id)
+                        .filter(Boolean)
+                });
+            });
+            setVisitsMap(vMap);
 
             const offMap = {};
             attendanceData?.forEach(item => {
@@ -435,30 +551,13 @@ export default function WorkCalendar() {
             });
             setTimeOffMap(offMap);
 
+            const rowsByDate = {};
+            (workData || []).forEach(item => {
+                if (!rowsByDate[item.work_date]) rowsByDate[item.work_date] = [];
+                rowsByDate[item.work_date].push(item);
+            });
             const scheduleMap = {};
-            if (workData) {
-                workData.forEach(item => {
-                    const date = item.work_date;
-                    if (!scheduleMap[date]) scheduleMap[date] = [];
-                    
-                    const instId = item.installation_custom_id || 'custom_' + item.notes;
-                    let existingGroup = scheduleMap[date].find(g => g._groupKey === instId);
-                    
-                    if (!existingGroup) {
-                        existingGroup = {
-                            id: Date.now() + Math.random(),
-                            _groupKey: instId,
-                            installationId: item.installation_custom_id || 'custom',
-                            notes: item.notes,
-                            workers: []
-                        };
-                        scheduleMap[date].push(existingGroup);
-                    }
-                    if (item.employee_custom_id) {
-                        existingGroup.workers.push(item.employee_custom_id);
-                    }
-                });
-            }
+            Object.keys(rowsByDate).forEach(d => { scheduleMap[d] = groupWorkRows(rowsByDate[d]); });
             setAssignmentsByDate(scheduleMap);
 
         } catch (error) {
@@ -554,6 +653,78 @@ export default function WorkCalendar() {
     };
 
     const addCard = () => setDayAssignments([...dayAssignments, { id: Date.now(), installationId: null, workers: [], notes: "" }]);
+
+    // --- ВЗЯТИ ЗА ОСНОВУ ПОПЕРЕДНІЙ ДЕНЬ ---
+    // Шукаємо назад (до 7 днів) останній день, де був план, і копіюємо його картки.
+    const handleCopyPreviousDay = async () => {
+        if (!editingDate) return;
+        const targetDateStr = formatDateToYYYYMMDD(editingDate);
+        const offs = timeOffMap[targetDateStr] || {};
+
+        for (let i = 1; i <= 7; i++) {
+            const d = addDays(editingDate, -i);
+            const ds = formatDateToYYYYMMDD(d);
+
+            let dayData = assignmentsByDate[ds];
+            if (dayData === undefined) {
+                const { data } = await supabase
+                    .from('installation_workers')
+                    .select('installation_custom_id, employee_custom_id, work_date, notes')
+                    .eq('work_date', ds);
+                dayData = groupWorkRows(data || []);
+            }
+
+            if (dayData && dayData.length > 0) {
+                setDayAssignments(prev => {
+                    const meaningful = prev.filter(a => a.installationId || a.workers.length > 0);
+                    const existingIds = new Set(meaningful.map(a => String(a.installationId)));
+                    const copied = dayData
+                        .filter(g => g.installationId === 'custom' || !existingIds.has(String(g.installationId)))
+                        .map(g => ({
+                            id: Date.now() + Math.random(),
+                            installationId: g.installationId,
+                            notes: g.notes || "",
+                            // відсутніх у цільовий день не копіюємо
+                            workers: g.workers.filter(w => !offs.hasOwnProperty(w))
+                        }));
+                    return [...meaningful, ...copied];
+                });
+                showNotice(`Скопійовано план за ${d.toLocaleDateString('uk-UA', { weekday: 'short', day: 'numeric', month: 'short' })} — внесіть правки`);
+                return;
+            }
+        }
+        showNotice('За попередні 7 днів не знайдено плану для копіювання');
+    };
+
+    // --- ДОДАТИ ЗАПЛАНОВАНИЙ ВИЇЗД У ГРАФІК ---
+    const addVisitToSchedule = (visit) => {
+        const targetDateStr = formatDateToYYYYMMDD(editingDate);
+        const offs = timeOffMap[targetDateStr] || {};
+
+        setDayAssignments(prev => {
+            const meaningful = prev.filter(a => a.installationId || a.workers.length > 0);
+            // працівники, вже зайняті в інших картках
+            const busy = new Set();
+            meaningful.forEach(a => a.workers.forEach(w => busy.add(w)));
+            const availableWorkers = visit.workerCustomIds.filter(w => !offs.hasOwnProperty(w) && !busy.has(w));
+
+            const isCustom = !visit.installationId;
+            const existing = !isCustom && meaningful.find(a => String(a.installationId) === String(visit.installationId));
+            if (existing) {
+                // об'єкт вже в графіку — просто доукомплектовуємо людьми з плану
+                return meaningful.map(a => a === existing
+                    ? { ...a, workers: [...a.workers, ...availableWorkers.filter(w => !a.workers.includes(w))] }
+                    : a);
+            }
+            return [...meaningful, {
+                id: Date.now() + Math.random(),
+                installationId: isCustom ? 'custom' : visit.installationId,
+                notes: isCustom ? (visit.title || 'Виїзд за планом') : (visit.comment || ""),
+                workers: availableWorkers
+            }];
+        });
+        showNotice('Виїзд додано в графік — перевірте склад людей');
+    };
     
     const removeCard = (idx) => {
         const newAssignments = dayAssignments.filter((_, i) => i !== idx);
@@ -711,6 +882,18 @@ export default function WorkCalendar() {
 
     return (
         <div className="min-h-screen bg-slate-100 pb-20">
+            {/* Легке сповіщення */}
+            <AnimatePresence>
+                {notice && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }}
+                        className="fixed top-16 left-1/2 -translate-x-1/2 z-[110] bg-slate-900 text-white text-sm font-bold px-4 py-2.5 rounded-xl shadow-2xl max-w-[90vw] text-center"
+                    >
+                        {notice}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             {/* Header */}
             <div className="bg-white relative z-30 shadow-sm border-b border-gray-200">
                 <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -748,7 +931,7 @@ export default function WorkCalendar() {
             {/* Grid */}
             <div className="max-w-7xl mx-auto p-2 sm:p-4 overflow-x-auto">
                 {/* Змінено на 6 колонок */}
-                <div className="grid grid-cols-1 md:grid-cols-6 gap-3 min-w-[300px]">
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-2 sm:gap-3 min-w-[300px]">
                     {loading ? (
                          Array.from({ length: 6 }).map((_, i) => (
                             <div key={i} className="min-h-[120px] bg-white rounded-xl border border-gray-100 p-3 flex flex-col gap-2 animate-pulse">
@@ -810,9 +993,18 @@ export default function WorkCalendar() {
                                         )}
                                     </div>
 
-                                    {dayOffsCount > 0 && (
-                                        <div className="mt-auto pt-2 text-[10px] text-red-400 font-medium flex items-center gap-1">
-                                            <FaExclamationTriangle size={10}/> {dayOffsCount} відсутні
+                                    {(dayOffsCount > 0 || (visitsMap[dateStr]?.length > 0)) && (
+                                        <div className="mt-auto pt-2 space-y-0.5">
+                                            {visitsMap[dateStr]?.length > 0 && (
+                                                <div className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
+                                                    <FaRoute size={10}/> {visitsMap[dateStr].length} виїзд(и) у плані
+                                                </div>
+                                            )}
+                                            {dayOffsCount > 0 && (
+                                                <div className="text-[10px] text-red-400 font-medium flex items-center gap-1">
+                                                    <FaExclamationTriangle size={10}/> {dayOffsCount} відсутні
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -852,6 +1044,7 @@ export default function WorkCalendar() {
                                     isPast={isPastDate}
                                     // ПЕРЕДАЄМО ПРАВА В КОМПОНЕНТ ПЕРЕГЛЯДУ
                                     canManageSchedule={canManageSchedule}
+                                    visits={editingDate ? (visitsMap[formatDateToYYYYMMDD(editingDate)] || []) : []}
                                 />
                             )}
 
@@ -872,6 +1065,24 @@ export default function WorkCalendar() {
                                     </div>
 
                                     <div className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-6">
+                                        {/* Швидкий старт: копія попереднього дня + заплановані виїзди */}
+                                        <div className="space-y-3">
+                                            <button
+                                                onClick={handleCopyPreviousDay}
+                                                className="w-full py-2.5 bg-white border border-indigo-200 text-indigo-600 rounded-xl text-sm font-bold hover:bg-indigo-50 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                                            >
+                                                <FaHistory /> Взяти за основу попередній день
+                                            </button>
+                                            <VisitPlansPanel
+                                                visits={editingDate ? (visitsMap[formatDateToYYYYMMDD(editingDate)] || []) : []}
+                                                installations={installations}
+                                                employees={employees}
+                                                schedule={dayAssignments}
+                                                onAddVisit={addVisitToSchedule}
+                                                canEdit={true}
+                                            />
+                                        </div>
+
                                         {/* Секція завдань */}
                                         <div className="space-y-4">
                                             {dayAssignments.map((assign, idx) => (
@@ -908,6 +1119,18 @@ export default function WorkCalendar() {
                                                                 autoFocus
                                                             />
                                                             {validationErrors[idx]?.notes && <p className="text-red-500 text-xs mt-1">{validationErrors[idx].notes}</p>}
+                                                        </div>
+                                                    )}
+
+                                                    {assign.installationId && assign.installationId !== 'custom' && (
+                                                        <div className="mb-3">
+                                                            <input
+                                                                type="text"
+                                                                placeholder="Коментар до завдання (опц.) — що саме робимо..."
+                                                                value={assign.notes || ''}
+                                                                onChange={(e) => updateCard(idx, 'notes', e.target.value)}
+                                                                className="w-full border border-gray-200 bg-gray-50/60 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-100 focus:bg-white transition-colors"
+                                                            />
                                                         </div>
                                                     )}
 

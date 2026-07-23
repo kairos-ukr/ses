@@ -3,8 +3,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   FaBars, FaTimes, FaUsers, FaUserTie, 
   FaTasks, FaFolderOpen, FaSignOutAlt,
-  FaHardHat, FaProjectDiagram, FaCalendarAlt,
-  FaHandshake, FaWarehouse, FaTruck 
+  FaHardHat, FaProjectDiagram,
+  FaHandshake, FaWarehouse, FaTruck
 } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -30,7 +30,6 @@ const Layout = ({ children }) => {
       { path: '/provisioning', label: "Забезпечення об'єктів", icon: FaTruck },
       { path: '/partners', label: 'Партнерство', icon: FaHandshake },
       { path: '/inventory', label: 'Склад', icon: FaWarehouse },
-      { path: '/plans', label: 'Плани', icon: FaCalendarAlt },
       { path: '/employees', label: 'Працівники', icon: FaUserTie },
       { path: '/tasks', label: 'Задачі', icon: FaTasks },
       { path: '/documents', label: 'Документи', icon: FaFolderOpen },

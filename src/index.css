@@ -2,3 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Сенсорні пристрої: шрифт полів вводу мінімум 16px,
+   інакше iOS/Android Chrome автоматично зумлять екран при фокусі */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

@@ -1,106 +1,127 @@
 import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
-  FaUsers, FaCalendarAlt, FaUmbrellaBeach, FaUserTie 
+import {
+    FaUsers, FaCalendarAlt, FaUmbrellaBeach, FaUserTie, FaArrowLeft, FaRoute
 } from "react-icons/fa";
-import Layout from "./Layout";
 
-// Імпорт твоїх робочих компонентів
 import EmployeeList from "./EmployeeList";
 import WorkCalendar from "./WorkCalendar";
 import TimeOffManager from "./TimeOffManager";
+import PlannedVisitsPage from "./PlannedVisitsPage";
+
+// Розділи сервісу «Персонал» — власне меню, окреме від CRM (як у складу)
+const SECTIONS = [
+    { id: "team", label: "Команда", icon: FaUsers, title: "Команда та персонал" },
+    { id: "planning", label: "Календар", icon: FaCalendarAlt, title: "Робочий календар" },
+    { id: "visits", label: "Виїзди", icon: FaRoute, title: "Планування виїздів" },
+    { id: "timeoff", label: "Вихідні", icon: FaUmbrellaBeach, title: "Вихідні та відпустки" },
+];
 
 export default function MainEmployeesPage() {
-    // Активна вкладка (default: team)
+    const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState("team");
 
-    const tabs = [
-        { id: "team", label: "Огляд", icon: FaUsers },
-        { id: "planning", label: "Календар", icon: FaCalendarAlt },
-        { id: "timeoff", label: "Вихідні", icon: FaUmbrellaBeach },
-    ];
+    const current = SECTIONS.find(s => s.id === activeTab) || SECTIONS[0];
 
     return (
-        <Layout>
-            <div className="flex flex-col min-h-full bg-slate-50">
-                
-                {/* --- HEADER (Sticky) --- */}
-                <div className="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-sm">
-                    <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-4">
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                            
-                            {/* Заголовок сторінки */}
-                            <div>
-                                <h1 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
-                                    <FaUserTie className="text-indigo-600"/> 
-                                    Управління командою
-                                </h1>
-                                <p className="text-xs text-slate-500 mt-1 font-medium">
-                                    Персонал, планування та облік часу
-                                </p>
-                            </div>
+        <div className="flex h-[100dvh] w-full bg-slate-100 overflow-hidden text-slate-800">
 
-                            {/* Таби навігації */}
-                            {/* FIX: Використовуємо GRID замість FLEX, щоб прибрати скрол і розділити ширину порівну */}
-                            <div className="grid grid-cols-3 bg-slate-100 p-1 rounded-xl w-full md:w-auto">
-                                {tabs.map((tab) => {
-                                    const isActive = activeTab === tab.id;
-                                    return (
-                                        <button
-                                            key={tab.id}
-                                            onClick={() => setActiveTab(tab.id)}
-                                            className={`
-                                                flex items-center justify-center gap-2 px-2 md:px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-200 whitespace-nowrap
-                                                ${isActive 
-                                                    ? "bg-white text-indigo-600 shadow-sm ring-1 ring-black/5" 
-                                                    : "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50"}
-                                            `}
-                                        >
-                                            <tab.icon className={isActive ? "text-indigo-600" : "text-slate-400"} />
-                                            {/* На дуже малих екранах можна ховати текст, якщо треба, але grid має вмістити */}
-                                            <span>{tab.label}</span>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
+            {/* --- БІЧНЕ МЕНЮ ПЕРСОНАЛУ (DESKTOP) --- */}
+            <aside className="hidden lg:flex flex-col w-60 bg-[#0F172A] text-white flex-shrink-0">
+                <div className="p-5 flex items-center gap-3 border-b border-white/10 min-h-[72px]">
+                    <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center flex-shrink-0">
+                        <FaUserTie className="text-indigo-400 text-xl" />
+                    </div>
+                    <div>
+                        <div className="font-black tracking-widest text-sm leading-tight">ПЕРСОНАЛ</div>
+                        <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">K-Core</div>
                     </div>
                 </div>
 
-                {/* --- CONTENT AREA --- */}
-                <div className="flex-1 w-full max-w-[1600px] mx-auto">
+                <nav className="flex-1 p-3 space-y-1 overflow-y-auto custom-scrollbar">
+                    {SECTIONS.map(s => {
+                        const isActive = activeTab === s.id;
+                        return (
+                            <button
+                                key={s.id}
+                                onClick={() => setActiveTab(s.id)}
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-colors ${isActive
+                                    ? "bg-indigo-500 text-white shadow-lg shadow-indigo-950/40"
+                                    : "text-slate-300 hover:bg-white/5 hover:text-white"}`}
+                            >
+                                <s.icon size={16} className={isActive ? "text-white" : "text-slate-500"} />
+                                {s.label}
+                            </button>
+                        );
+                    })}
+                </nav>
+
+                <div className="p-3 border-t border-white/10">
+                    <button
+                        onClick={() => navigate("/my-workflow")}
+                        className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold text-slate-300 hover:bg-white/5 hover:text-white transition-colors"
+                    >
+                        <FaArrowLeft size={14} className="text-slate-500" /> До CRM
+                    </button>
+                </div>
+            </aside>
+
+            {/* --- ОСНОВНА ЧАСТИНА --- */}
+            <div className="flex-1 flex flex-col min-w-0 h-full">
+
+                {/* Хедер */}
+                <header className="bg-white border-b border-slate-200 flex-shrink-0 z-30">
+                    <div className="px-3 sm:px-5 py-3 flex items-center gap-2 sm:gap-3">
+                        <button
+                            onClick={() => navigate("/my-workflow")}
+                            className="lg:hidden p-2.5 text-slate-500 bg-slate-50 rounded-xl border border-slate-100 flex-shrink-0"
+                            title="Повернутись до CRM"
+                        >
+                            <FaArrowLeft size={15} />
+                        </button>
+                        <h1 className="text-sm sm:text-lg font-black text-[#0F172A] uppercase tracking-tight truncate flex-1 min-w-0">
+                            {current.title}
+                        </h1>
+                    </div>
+                </header>
+
+                {/* Контент розділу */}
+                <main className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pb-24 lg:pb-0">
                     <AnimatePresence mode="wait">
                         <motion.div
                             key={activeTab}
-                            initial={{ opacity: 0, y: 10 }}
+                            initial={{ opacity: 0, y: 8 }}
                             animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -10 }}
-                            transition={{ duration: 0.2 }}
-                            className="h-full"
+                            exit={{ opacity: 0, y: -8 }}
+                            transition={{ duration: 0.15 }}
+                            className="min-h-full"
                         >
-                            {/* Рендеринг активного компонента */}
-                            {activeTab === "team" && (
-                                <div className="pb-safe">
-                                    <EmployeeList />
-                                </div>
-                            )}
-                            
-                            {activeTab === "planning" && (
-                                <div className="h-full">
-                                    <WorkCalendar />
-                                </div>
-                            )}
-                            
-                            {activeTab === "timeoff" && (
-                                <div className="h-full">
-                                    <TimeOffManager />
-                                </div>
-                            )}
+                            {activeTab === "team" && <EmployeeList />}
+                            {activeTab === "planning" && <WorkCalendar />}
+                            {activeTab === "visits" && <PlannedVisitsPage embedded />}
+                            {activeTab === "timeoff" && <TimeOffManager />}
                         </motion.div>
                     </AnimatePresence>
-                </div>
-
+                </main>
             </div>
-        </Layout>
+
+            {/* --- НИЖНЯ НАВІГАЦІЯ (MOBILE / TABLET) --- */}
+            <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 flex z-40 pb-safe shadow-[0_-4px_16px_rgba(15,23,42,0.08)]">
+                {SECTIONS.map(s => {
+                    const isActive = activeTab === s.id;
+                    return (
+                        <button
+                            key={s.id}
+                            onClick={() => setActiveTab(s.id)}
+                            className="flex-1 flex flex-col items-center gap-1 py-2.5 transition-colors"
+                        >
+                            <s.icon size={18} className={isActive ? "text-indigo-500" : "text-slate-400"} />
+                            <span className={`text-[10px] font-bold ${isActive ? "text-slate-900" : "text-slate-400"}`}>{s.label}</span>
+                        </button>
+                    );
+                })}
+            </nav>
+        </div>
     );
 }

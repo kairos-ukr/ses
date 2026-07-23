@@ -146,7 +146,8 @@ const ConfirmationModal = ({ config, onClose }) => {
 
 // --- MAIN PAGE ---
 
-export default function PlannedVisitsPage() {
+// embedded=true — рендер без власного Layout (для вбудовування в розділ «Персонал»)
+export default function PlannedVisitsPage({ embedded = false }) {
   const { user } = useAuth();
   const createdByEmail = user?.email || null;
 
@@ -826,8 +827,10 @@ export default function PlannedVisitsPage() {
     setIsMoveOpen(true);
   };
 
+  const Wrapper = embedded ? React.Fragment : Layout;
+
   return (
-    <Layout>
+    <Wrapper>
       <div className="max-w-4xl mx-auto px-4 py-6 pb-20">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
@@ -1568,6 +1571,6 @@ export default function PlannedVisitsPage() {
         </ModalShell>
 
       </div>
-    </Layout>
+    </Wrapper>
   );
 }

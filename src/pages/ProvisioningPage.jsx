@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     FaSearch, FaChevronLeft, FaCheck, FaExclamationTriangle,
     FaTimes, FaHardHat, FaBoxOpen, FaLock, FaWarehouse,
-    FaArrowUp, FaUndo, FaClipboardList
+    FaArrowUp, FaUndo, FaClipboardList, FaUnlock, FaShoppingCart, FaTrash
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import Layout from '../Layout';
@@ -36,6 +36,16 @@ const OP_MODES = {
     reserve: { label: 'Резервування', verb: 'Зарезервувати', icon: FaLock, accent: 'indigo', headBg: 'bg-indigo-50', headText: 'text-indigo-900', headIcon: 'text-indigo-500', btn: 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200', ring: 'focus:ring-indigo-500', border: 'border-indigo-200 focus:border-indigo-500', text: 'text-indigo-700' },
     issue:   { label: 'Видача під об\'єкт', verb: 'Видати', icon: FaArrowUp, accent: 'emerald', headBg: 'bg-emerald-50', headText: 'text-emerald-900', headIcon: 'text-emerald-500', btn: 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200', ring: 'focus:ring-emerald-500', border: 'border-emerald-200 focus:border-emerald-500', text: 'text-emerald-700' },
     return:  { label: 'Повернення на склад', verb: 'Повернути', icon: FaUndo, accent: 'amber', headBg: 'bg-amber-50', headText: 'text-amber-900', headIcon: 'text-amber-500', btn: 'bg-amber-600 hover:bg-amber-700 shadow-amber-200', ring: 'focus:ring-amber-500', border: 'border-amber-200 focus:border-amber-500', text: 'text-amber-700' },
+    unreserve: { label: 'Зняття резерву', verb: 'Зняти резерв', icon: FaUnlock, accent: 'slate', headBg: 'bg-slate-100', headText: 'text-slate-800', headIcon: 'text-slate-500', btn: 'bg-slate-700 hover:bg-slate-800 shadow-slate-300', ring: 'focus:ring-slate-500', border: 'border-slate-300 focus:border-slate-500', text: 'text-slate-700' },
+};
+
+// Статуси заявок на закупівлю (procurement_requests) — гнучкі, без жорстких переходів
+const REQ_STATUSES = {
+    requested: { label: 'Потрібно замовити', cls: 'bg-orange-50 text-orange-700 border-orange-200' },
+    ordered: { label: 'Замовлено', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+    stock_confirmed: { label: 'Є на складі', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    done: { label: 'Закрито', cls: 'bg-slate-100 text-slate-500 border-slate-200' },
+    rejected: { label: 'Відхилено', cls: 'bg-red-50 text-red-600 border-red-200' },
 };
 
 export default function ProvisioningPage() {
@@ -57,7 +67,13 @@ export default function ProvisioningPage() {
     const [stockRows, setStockRows] = useState([]);        // повний v_warehouse_stock_available
     const [objReservations, setObjReservations] = useState([]); // активні резерви цього об'єкта
     const [offSpecIssued, setOffSpecIssued] = useState([]); // видано на об'єкт поза специфікацією
+    const [objRequests, setObjRequests] = useState([]);     // заявки на закупівлю цього об'єкта
     const [detailLoading, setDetailLoading] = useState(false);
+
+    // Модалка нової заявки на закупівлю
+    const [reqModal, setReqModal] = useState({ isOpen: false, item: null });
+    const [reqForm, setReqForm] = useState({ quantity: '', note: '' });
+    const [isReqSubmitting, setIsReqSubmitting] = useState(false);
 
     // Єдина модалка операцій (reserve / issue / return)
     const [opModal, setOpModal] = useState({ isOpen: false, mode: null, item: null });
@@ -74,7 +90,7 @@ export default function ProvisioningPage() {
     const loadDashboard = useCallback(async () => {
         setLoading(true);
         try {
-            const [instRes, needsRes, whRes, nomRes, catRes, poRes] = await Promise.all([
+            const [instRes, needsRes, whRes, nomRes, catRes, poRes, reqRes] = await Promise.all([
                 supabase.from('installations').select(`custom_id, name, status, gps_link, client:clients(name, company_name)`).in('status', ['planning', 'in_progress', 'pending']).order('created_at', { ascending: false }),
                 supabase.from('v_object_material_needs').select('*'),
                 supabase.from('warehouses').select('id, name, is_active').order('name'),
@@ -84,7 +100,9 @@ export default function ProvisioningPage() {
                 supabase.from('purchase_order_items')
                     .select('nomenclature_id, quantity, po:purchase_orders!inner(installation_custom_id, status), movements:stock_movements(quantity, operation_type)')
                     .in('po.status', ['draft', 'sent', 'partially_received'])
-                    .not('po.installation_custom_id', 'is', null)
+                    .not('po.installation_custom_id', 'is', null),
+                // Необроблені заявки на закупівлю — для лічильника на картках
+                supabase.from('procurement_requests').select('installation_custom_id, status').eq('status', 'requested')
             ]);
 
             if (instRes.error) throw instRes.error;
@@ -120,6 +138,12 @@ export default function ProvisioningPage() {
                 incoming[instId][poi.nomenclature_id] = (incoming[instId][poi.nomenclature_id] || 0) + remaining;
             });
             setIncomingMap(incoming);
+
+            // Лічильник необроблених заявок по об'єктах
+            const reqCounts = {};
+            (reqRes.data || []).forEach(r => {
+                reqCounts[r.installation_custom_id] = (reqCounts[r.installation_custom_id] || 0) + 1;
+            });
 
             const processedInst = (instRes.data || []).map(inst => {
                 const objectNeeds = needsData.filter(n => String(n.installation_custom_id) === String(inst.custom_id));
@@ -164,7 +188,7 @@ export default function ProvisioningPage() {
                     }
                 }
 
-                return { ...inst, readiness, statusBadge, badgeColor, provStatus, okCount, waitingCount, hardDeficitCount, needsCount: objectNeeds.length };
+                return { ...inst, readiness, statusBadge, badgeColor, provStatus, okCount, waitingCount, hardDeficitCount, needsCount: objectNeeds.length, requestsCount: reqCounts[inst.custom_id] || 0 };
             });
 
             setInstallations(processedInst);
@@ -182,12 +206,13 @@ export default function ProvisioningPage() {
         setSelectedInst(inst);
         setDetailLoading(true);
         try {
-            const [needsRes, stockRes, resRes, movRes] = await Promise.all([
+            const [needsRes, stockRes, resRes, movRes, reqRes] = await Promise.all([
                 supabase.from('v_object_material_needs').select('*').eq('installation_custom_id', inst.custom_id),
                 supabase.from('v_warehouse_stock_available').select('*'),
                 supabase.from('reservations').select('id, warehouse_id, nomenclature_id, reserved_quantity, released_quantity, status').eq('installation_custom_id', inst.custom_id).eq('status', 'active'),
                 // Фактичні видачі/повернення по об'єкту — щоб побачити й те, чого немає в специфікації
-                supabase.from('stock_movements').select('nomenclature_id, quantity, operation_type').eq('installation_custom_id', inst.custom_id).in('operation_type', ['issue', 'return'])
+                supabase.from('stock_movements').select('nomenclature_id, quantity, operation_type').eq('installation_custom_id', inst.custom_id).in('operation_type', ['issue', 'return']),
+                supabase.from('procurement_requests').select('*').eq('installation_custom_id', inst.custom_id).order('created_at', { ascending: false })
             ]);
 
             if (needsRes.error) throw needsRes.error;
@@ -197,6 +222,7 @@ export default function ProvisioningPage() {
             setSpecNeeds(needs);
             setStockRows(stockRes.data || []);
             setObjReservations(resRes.data || []);
+            setObjRequests(reqRes.data || []);
 
             // Видано поза специфікацією: чисті видачі (видача − повернення) по номенклатурі, якої немає в плані
             const specNomIds = new Set(needs.map(n => n.nomenclature_id));
@@ -261,6 +287,10 @@ export default function ProvisioningPage() {
             if (candidates.length === 0) return showToast('Немає доступного залишку для видачі (все зайнято/відсутнє)', 'warning');
             // пріоритет складу, де є власний резерв цього об'єкта
             candidates.sort((a, b) => reservedHereAt(b.id, nomId) - reservedHereAt(a.id, nomId));
+        } else if (mode === 'unreserve') {
+            candidates = activeWh.filter(w => reservedHereAt(w.id, nomId) > 0);
+            if (candidates.length === 0) return showToast("Немає активних резервів цього об'єкта по цій позиції", 'warning');
+            candidates.sort((a, b) => reservedHereAt(b.id, nomId) - reservedHereAt(a.id, nomId));
         } else { // return
             candidates = activeWh.length ? activeWh : warehouses;
             if (candidates.length === 0) return showToast('Немає активних складів для повернення', 'warning');
@@ -274,6 +304,8 @@ export default function ProvisioningPage() {
             const rHere = reservedHereAt(wh.id, nomId);
             const target = rHere > 0 ? rHere : outstanding;
             qty = Math.min(target > 0 ? target : 0, issuableAt(wh.id, nomId));
+        } else if (mode === 'unreserve') {
+            qty = reservedHereAt(wh.id, nomId);
         } else {
             qty = parseFloat(needItem.issued_quantity) || 0;
         }
@@ -308,6 +340,61 @@ export default function ProvisioningPage() {
         return { over: false, ref: 0 };
     };
 
+    // --- ЗАЯВКИ НА ЗАКУПІВЛЮ ---
+    const openReqModal = (item, defaultQty) => {
+        setReqForm({ quantity: defaultQty > 0 ? defaultQty : '', note: '' });
+        setReqModal({ isOpen: true, item });
+    };
+
+    const handleSaveRequest = async (e) => {
+        e.preventDefault();
+        const qty = parseFloat(reqForm.quantity);
+        if (!qty || qty <= 0) return showToast('Вкажіть кількість більше 0', 'error');
+        setIsReqSubmitting(true);
+        try {
+            const { error } = await supabase.from('procurement_requests').insert([{
+                installation_custom_id: selectedInst.custom_id,
+                nomenclature_id: reqModal.item.nomenclature_id,
+                quantity: qty,
+                note: reqForm.note.trim() || null,
+                requested_by: employee?.id ?? null,
+                status: 'requested'
+            }]);
+            if (error) throw error;
+            showToast('Заявку на закупівлю створено', 'success');
+            setReqModal({ isOpen: false, item: null });
+            await refreshDetails();
+        } catch (error) {
+            showToast(error.message, 'error');
+        } finally {
+            setIsReqSubmitting(false);
+        }
+    };
+
+    const handleRequestStatus = async (reqId, newStatus) => {
+        try {
+            const { error } = await supabase.from('procurement_requests')
+                .update({ status: newStatus, resolved_by: employee?.id ?? null, updated_at: new Date().toISOString() })
+                .eq('id', reqId);
+            if (error) throw error;
+            showToast('Статус заявки оновлено', 'success');
+            await refreshDetails();
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    };
+
+    const handleDeleteRequest = async (reqId) => {
+        try {
+            const { error } = await supabase.from('procurement_requests').delete().eq('id', reqId);
+            if (error) throw error;
+            showToast('Заявку видалено', 'success');
+            await refreshDetails();
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    };
+
     // --- ВИКОНАННЯ ОПЕРАЦІЇ ---
     const executeOp = async (e) => {
         e.preventDefault();
@@ -324,6 +411,36 @@ export default function ProvisioningPage() {
         const item = opModal.item;
         setIsSubmitting(true);
         try {
+            // Зняття резерву: знімаємо активні резерви цього об'єкта на обраному складі послідовно
+            if (opModal.mode === 'unreserve') {
+                const whId = parseInt(opForm.warehouse_id);
+                const targets = objReservations
+                    .filter(r => String(r.warehouse_id) === String(whId) && String(r.nomenclature_id) === String(item.nomenclature_id))
+                    .map(r => ({ id: r.id, active: parseFloat(r.reserved_quantity) - parseFloat(r.released_quantity) }))
+                    .filter(r => r.active > 0);
+                const totalActive = targets.reduce((sum, t) => sum + t.active, 0);
+                if (qty > totalActive) {
+                    setIsSubmitting(false);
+                    return showToast(`На цьому складі активний резерв лише ${totalActive}`, 'error');
+                }
+                let remaining = qty;
+                for (const t of targets) {
+                    if (remaining <= 0) break;
+                    const rel = Math.min(t.active, remaining);
+                    const { data, error } = await supabase.rpc('release_reservation', {
+                        p_reservation_id: t.id, p_qty: rel, p_emp: employee?.id ?? null
+                    });
+                    if (error) throw error;
+                    if (data && data.ok === false) throw new Error(data.message || 'Не вдалося зняти резерв');
+                    remaining -= rel;
+                }
+                showToast(`Резерв знято (${qty} ${unitOf(item.nomenclature_id)})`, 'success');
+                closeOp();
+                await refreshDetails();
+                setIsSubmitting(false);
+                return;
+            }
+
             let rpcName, args;
             if (opModal.mode === 'reserve') {
                 rpcName = 'reserve_for_object';
@@ -463,11 +580,12 @@ export default function ProvisioningPage() {
                                             </div>
                                             <h3 className="font-bold text-lg text-slate-800 group-hover:text-indigo-700 transition-colors leading-tight mb-1">{inst.name}</h3>
                                             <p className="text-xs font-medium text-slate-500">{inst.client?.company_name || inst.client?.name || 'Невідомий клієнт'} • Позицій у специфікації: {inst.needsCount}</p>
-                                            {inst.needsCount > 0 && (
+                                            {(inst.needsCount > 0 || inst.requestsCount > 0) && (
                                                 <div className="flex items-center gap-2 mt-2 flex-wrap">
                                                     {inst.okCount > 0 && <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">✔ {inst.okCount} забезпечено</span>}
                                                     {inst.waitingCount > 0 && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">🚚 {inst.waitingCount} в дорозі</span>}
                                                     {inst.hardDeficitCount > 0 && <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-100 px-2 py-0.5 rounded-full">⚠ {inst.hardDeficitCount} не вистачає</span>}
+                                                    {inst.requestsCount > 0 && <span className="text-[10px] font-bold text-orange-700 bg-orange-50 border border-orange-100 px-2 py-0.5 rounded-full">📝 {inst.requestsCount} заявки на закупівлю</span>}
                                                 </div>
                                             )}
                                         </div>
@@ -549,6 +667,7 @@ export default function ProvisioningPage() {
                                                 const canIssue = myReserved > 0 || (defect > 0 && availableGlobal > 0);
                                                 const incoming = (incomingMap[selectedInst.custom_id] || {})[item.nomenclature_id] || 0;
                                                 const coveredByIncoming = defect > 0 && incoming >= defect;
+                                                const activeReq = objRequests.find(r => r.nomenclature_id === item.nomenclature_id && ['requested', 'ordered'].includes(r.status));
 
                                                 return (
                                                     <div key={item.specification_item_id} className={`p-4 sm:px-5 hover:bg-slate-50/50 transition-colors ${isFullyCovered ? 'bg-emerald-50/20' : ''}`}>
@@ -614,6 +733,15 @@ export default function ProvisioningPage() {
                                                                 >
                                                                     <FaArrowUp size={11}/> Видати
                                                                 </button>
+                                                                {myReserved > 0 && (
+                                                                    <button
+                                                                        onClick={() => openOp('unreserve', item)}
+                                                                        title={`Зняти резерв (у резерві: ${myReserved} ${unitName})`}
+                                                                        className="px-3 py-2 bg-slate-100 text-slate-600 hover:bg-slate-700 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 border border-slate-200"
+                                                                    >
+                                                                        <FaUnlock size={11}/> Зняти
+                                                                    </button>
+                                                                )}
                                                                 {iss > 0 && (
                                                                     <button
                                                                         onClick={() => openOp('return', item)}
@@ -623,8 +751,73 @@ export default function ProvisioningPage() {
                                                                         <FaUndo size={11}/> Повернути
                                                                     </button>
                                                                 )}
+                                                                {defect > 0 && !coveredByIncoming && !activeReq && (
+                                                                    <button
+                                                                        onClick={() => openReqModal(item, defect)}
+                                                                        title="Створити заявку на закупівлю під цей об'єкт"
+                                                                        className="px-3 py-2 bg-orange-50 text-orange-700 hover:bg-orange-600 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 border border-orange-200"
+                                                                    >
+                                                                        <FaShoppingCart size={11}/> Замовити
+                                                                    </button>
+                                                                )}
+                                                                {activeReq && (
+                                                                    <span
+                                                                        title={`Заявка №${activeReq.id} на ${activeReq.quantity} ${unitName}`}
+                                                                        className={`px-2.5 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider border ${REQ_STATUSES[activeReq.status]?.cls || 'bg-slate-50 text-slate-500 border-slate-200'}`}
+                                                                    >
+                                                                        📝 {REQ_STATUSES[activeReq.status]?.label || activeReq.status}
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                         </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* --- ЗАЯВКИ НА ЗАКУПІВЛЮ ПІД ОБ'ЄКТ --- */}
+                                {objRequests.length > 0 && (
+                                    <div className="bg-white rounded-2xl shadow-sm border border-orange-200 overflow-hidden">
+                                        <div className="px-5 py-3 bg-orange-50 border-b border-orange-100 flex items-center gap-2 flex-wrap">
+                                            <FaShoppingCart className="text-orange-500" />
+                                            <span className="text-sm font-bold text-orange-900">Заявки на закупівлю</span>
+                                            <span className="text-[10px] font-bold text-orange-600 bg-white border border-orange-200 px-2 py-0.5 rounded-full">{objRequests.length}</span>
+                                            <span className="text-[11px] text-orange-700/70 font-medium hidden md:inline ml-auto">Статус можна змінювати вільно — «Замовлено», «Є на складі» тощо</span>
+                                        </div>
+                                        <div className="divide-y divide-slate-100">
+                                            {objRequests.map(req => {
+                                                const nom = nomenclatures.find(n => n.id === req.nomenclature_id);
+                                                const unitName = nom?.unit?.name || 'шт';
+                                                const isClosed = ['done', 'rejected'].includes(req.status);
+                                                return (
+                                                    <div key={req.id} className={`p-4 sm:px-5 flex flex-wrap items-center gap-3 transition-colors ${isClosed ? 'opacity-50' : 'hover:bg-orange-50/20'}`}>
+                                                        <div className="flex-1 min-w-[220px]">
+                                                            <div className="font-bold text-slate-800 text-sm leading-tight">{nom?.fullName || `Номенклатура #${req.nomenclature_id}`}</div>
+                                                            <div className="text-[10px] text-slate-400 font-medium mt-1 flex items-center gap-2 flex-wrap">
+                                                                <span>{new Date(req.created_at).toLocaleDateString('uk-UA')}</span>
+                                                                {req.note && <span className="italic text-slate-500">«{req.note}»</span>}
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-center px-2.5 py-1 rounded-lg border border-orange-100 bg-orange-50 min-w-[70px]">
+                                                            <div className="text-[9px] font-black uppercase text-orange-500">К-сть</div>
+                                                            <div className="font-black text-sm text-orange-700">{parseFloat(req.quantity)} <span className="text-[9px] font-bold text-orange-400 uppercase">{unitName}</span></div>
+                                                        </div>
+                                                        <select
+                                                            value={req.status}
+                                                            onChange={e => handleRequestStatus(req.id, e.target.value)}
+                                                            className={`h-10 px-2.5 rounded-lg border text-xs font-bold outline-none cursor-pointer transition-colors ${REQ_STATUSES[req.status]?.cls || 'bg-slate-50 text-slate-600 border-slate-200'}`}
+                                                        >
+                                                            {Object.entries(REQ_STATUSES).map(([key, val]) => <option key={key} value={key}>{val.label}</option>)}
+                                                        </select>
+                                                        <button
+                                                            onClick={() => handleDeleteRequest(req.id)}
+                                                            title="Видалити заявку"
+                                                            className="p-2.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                                        >
+                                                            <FaTrash size={13} />
+                                                        </button>
                                                     </div>
                                                 );
                                             })}
@@ -722,13 +915,15 @@ export default function ProvisioningPage() {
                                                 className={`w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 ${modeCfg.ring} focus:bg-white outline-none text-sm font-bold text-slate-800 transition-colors`}
                                             >
                                                 <option value="">Оберіть склад...</option>
-                                                {warehouses.filter(w => w.is_active).map(w => {
+                                                {warehouses.filter(w => w.is_active && (opModal.mode !== 'unreserve' || reservedHereAt(w.id, opModal.item.nomenclature_id) > 0)).map(w => {
                                                     const s = stockAt(w.id, opModal.item.nomenclature_id);
                                                     const hint = opModal.mode === 'reserve'
                                                         ? `вільно: ${s.available}`
                                                         : opModal.mode === 'issue'
                                                             ? `можна видати: ${issuableAt(w.id, opModal.item.nomenclature_id)}`
-                                                            : `на складі: ${s.onHand}`;
+                                                            : opModal.mode === 'unreserve'
+                                                                ? `резерв об'єкта: ${reservedHereAt(w.id, opModal.item.nomenclature_id)}`
+                                                                : `на складі: ${s.onHand}`;
                                                     return <option key={w.id} value={w.id}>{w.name} ({hint})</option>;
                                                 })}
                                             </select>
@@ -787,6 +982,47 @@ export default function ProvisioningPage() {
                                     <button type="button" onClick={closeOp} className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
                                     <button form="op-form" type="submit" disabled={isSubmitting} className={`px-8 py-2.5 text-white rounded-xl font-bold shadow-md transition-colors text-sm flex items-center gap-2 disabled:opacity-50 ${modeCfg.btn}`}>
                                         {isSubmitting ? 'Обробка...' : modeCfg.verb}
+                                    </button>
+                                </div>
+                            </motion.div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
+                {/* --- МОДАЛКА: НОВА ЗАЯВКА НА ЗАКУПІВЛЮ --- */}
+                <AnimatePresence>
+                    {reqModal.isOpen && reqModal.item && (
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[80]">
+                            <motion.div initial={{ scale: 0.98, opacity: 0, y: 30 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0, y: 30 }} className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl flex flex-col overflow-hidden max-h-[95vh]" onClick={e => e.stopPropagation()}>
+                                <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-orange-50 flex-shrink-0">
+                                    <div className="min-w-0">
+                                        <h2 className="text-lg font-bold text-orange-900 flex items-center gap-2"><FaShoppingCart className="text-orange-500"/> Заявка на закупівлю</h2>
+                                        <p className="text-[11px] text-orange-700/70 mt-0.5">Інформативна заявка — її побачить менеджер закупівель</p>
+                                    </div>
+                                    <button onClick={() => setReqModal({ isOpen: false, item: null })} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm flex-shrink-0"><FaTimes/></button>
+                                </div>
+                                <form id="req-form" onSubmit={handleSaveRequest} className="p-5 flex-1 overflow-y-auto custom-scrollbar space-y-4">
+                                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Позиція</div>
+                                        <div className="font-bold text-slate-800 text-sm leading-tight">{nameOf(reqModal.item)}</div>
+                                        <div className="text-[11px] text-slate-500 mt-1.5">Дефіцит по специфікації: <b className="text-red-600">{parseFloat(reqModal.item.outstanding_need)}</b> {unitOf(reqModal.item.nomenclature_id)}</div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Кількість до замовлення <span className="text-red-500">*</span></label>
+                                        <div className="flex items-center gap-3">
+                                            <input type="number" min="0" step="any" required autoFocus value={reqForm.quantity} onChange={e => setReqForm(f => ({ ...f, quantity: e.target.value }))} className="w-32 px-4 py-3 bg-white border-2 border-orange-200 focus:border-orange-500 rounded-xl text-xl font-black text-orange-700 text-center outline-none transition-colors" />
+                                            <span className="text-sm font-bold text-slate-400 uppercase">{unitOf(reqModal.item.nomenclature_id)}</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Коментар (постачальник, терміновість...)</label>
+                                        <textarea rows="2" value={reqForm.note} onChange={e => setReqForm(f => ({ ...f, note: e.target.value }))} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-200 outline-none text-sm text-slate-800 transition-colors resize-none" placeholder="Опційно..." />
+                                    </div>
+                                </form>
+                                <div className="p-4 sm:p-5 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 flex-shrink-0 pb-safe">
+                                    <button type="button" onClick={() => setReqModal({ isOpen: false, item: null })} className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
+                                    <button form="req-form" type="submit" disabled={isReqSubmitting} className="px-8 py-2.5 bg-orange-600 text-white rounded-xl font-bold shadow-md hover:bg-orange-700 transition-colors text-sm flex items-center gap-2 disabled:opacity-50">
+                                        {isReqSubmitting ? 'Створення...' : 'Створити заявку'}
                                     </button>
                                 </div>
                             </motion.div>

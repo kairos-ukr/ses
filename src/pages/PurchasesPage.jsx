@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-    FaPlus, FaSearch, FaEdit, FaTimes, FaCheck, FaExclamationTriangle, 
+    FaPlus, FaSearch, FaEdit, FaTimes, FaCheck, FaExclamationTriangle,
     FaInfoCircle, FaFileInvoiceDollar, FaBoxOpen, FaRegCalendarAlt,
-    FaBuilding, FaHardHat, FaChevronRight, 
-    FaTruckLoading, FaFileExcel, FaMoneyBillAlt, FaUniversity
+    FaBuilding, FaHardHat, FaChevronRight, FaChevronDown,
+    FaTruckLoading, FaFileExcel, FaMoneyBillAlt, FaUniversity, FaShoppingCart, FaWarehouse
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
@@ -51,8 +51,12 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
     const [employeesDict, setEmployeesDict] = useState({});
     
     const [loading, setLoading] = useState(true);
-    const [expandedRowId, setExpandedRowId] = useState(null); 
+    const [expandedRowId, setExpandedRowId] = useState(null);
     const [statusFilter, setStatusFilter] = useState('all');
+
+    // Вхідні заявки на закупівлю від об'єктів (procurement_requests, status='requested')
+    const [incomingRequests, setIncomingRequests] = useState([]);
+    const [requestsExpanded, setRequestsExpanded] = useState(true);
     const [toast, setToast] = useState({ isVisible: false, message: '', type: 'success' });
     const showToast = useCallback((message, type = 'success') => setToast({ isVisible: true, message, type }), []);
 
@@ -103,20 +107,22 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            const [supRes, instRes, nomRes, catRes, whRes, empRes, memRes] = await Promise.all([
+            const [supRes, instRes, nomRes, catRes, whRes, empRes, memRes, reqRes] = await Promise.all([
                 supabase.from('suppliers').select('id, name').order('name'),
                 supabase.from('installations').select('custom_id, name, status').in('status', ['planning', 'in_progress', 'pending']),
                 supabase.from('nomenclature').select('id, name, sku, category_id, type, package_name, package_multiplier, unit:units(name)').eq('is_active', true).order('name'),
                 supabase.from('categories').select('*'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
                 supabase.from('employees').select('id, name'),
-                supabase.from('supplier_mappings').select('*') 
+                supabase.from('supplier_mappings').select('*'),
+                supabase.from('procurement_requests').select('*').eq('status', 'requested').order('created_at', { ascending: true })
             ]);
             
             setSuppliers(supRes.data || []);
             setInstallations(instRes.data || []);
             setWarehouses(whRes.data || []);
             setSystemMemory(memRes.data || []);
+            setIncomingRequests(reqRes.data || []);
             
             const empDict = {};
             (empRes.data || []).forEach(e => empDict[e.id] = e.name);
@@ -176,6 +182,21 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
 
     const getItemReceivedQty = (item) => {
         return (item.movements || []).filter(m => m.operation_type === 'purchase').reduce((sum, m) => sum + parseFloat(m.quantity), 0);
+    };
+
+    // --- ОБРОБКА ЗАЯВОК НА ЗАКУПІВЛЮ ВІД ОБ'ЄКТІВ ---
+    const handleRequestAction = async (reqId, newStatus) => {
+        try {
+            const { error } = await supabase.from('procurement_requests')
+                .update({ status: newStatus, resolved_by: employee?.id ?? null, updated_at: new Date().toISOString() })
+                .eq('id', reqId);
+            if (error) throw error;
+            setIncomingRequests(prev => prev.filter(r => r.id !== reqId));
+            const labels = { ordered: 'Позначено як «Замовлено»', stock_confirmed: 'Підтверджено наявність на складі', rejected: 'Заявку відхилено' };
+            showToast(labels[newStatus] || 'Статус оновлено', 'success');
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
     };
 
     const handleQuickAddSupplier = async (name) => {
@@ -387,6 +408,63 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
                     </button>
                 </div>
             </div>
+
+            {/* --- ВХІДНІ ЗАЯВКИ НА ЗАКУПІВЛЮ ВІД ОБ'ЄКТІВ --- */}
+            {incomingRequests.length > 0 && (
+                <div className="bg-white rounded-[16px] shadow-sm border border-orange-200 mb-4 flex-none overflow-hidden">
+                    <button
+                        onClick={() => setRequestsExpanded(v => !v)}
+                        className="w-full px-4 sm:px-5 py-3 bg-orange-50 flex items-center gap-2 flex-wrap text-left"
+                    >
+                        <FaShoppingCart className="text-orange-500" />
+                        <span className="text-sm font-bold text-orange-900">Заявки від об'єктів — потрібно замовити</span>
+                        <span className="text-[10px] font-black text-white bg-orange-500 px-2 py-0.5 rounded-full">{incomingRequests.length}</span>
+                        <FaChevronDown className={`text-orange-400 text-xs ml-auto transition-transform ${requestsExpanded ? 'rotate-180' : ''}`} />
+                    </button>
+                    <AnimatePresence>
+                        {requestsExpanded && (
+                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                                <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto custom-scrollbar">
+                                    {incomingRequests.map(req => {
+                                        const nom = nomenclatures.find(n => n.id === req.nomenclature_id);
+                                        const inst = installations.find(i => i.custom_id === req.installation_custom_id);
+                                        const unitName = nom?.unit?.name || 'шт';
+                                        const empName = employeesDict[req.requested_by] || null;
+                                        return (
+                                            <div key={req.id} className="px-4 sm:px-5 py-3 flex flex-wrap items-center gap-3 hover:bg-orange-50/20 transition-colors">
+                                                <div className="flex-1 min-w-[220px]">
+                                                    <div className="font-bold text-slate-800 text-sm leading-tight">{nom?.fullName || `Номенклатура #${req.nomenclature_id}`}</div>
+                                                    <div className="text-[10px] text-slate-500 font-medium mt-1 flex items-center gap-2 flex-wrap">
+                                                        <span className="flex items-center gap-1"><FaHardHat className="text-slate-400" /> {inst ? `[#${inst.custom_id}] ${inst.name}` : `Об'єкт #${req.installation_custom_id}`}</span>
+                                                        <span>{new Date(req.created_at).toLocaleDateString('uk-UA')}</span>
+                                                        {empName && <span>від: {empName}</span>}
+                                                        {req.note && <span className="italic text-slate-400">«{req.note}»</span>}
+                                                    </div>
+                                                </div>
+                                                <div className="text-center px-2.5 py-1 rounded-lg border border-orange-100 bg-orange-50 min-w-[70px]">
+                                                    <div className="text-[9px] font-black uppercase text-orange-500">К-сть</div>
+                                                    <div className="font-black text-sm text-orange-700">{parseFloat(req.quantity)} <span className="text-[9px] font-bold text-orange-400 uppercase">{unitName}</span></div>
+                                                </div>
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <button onClick={() => handleRequestAction(req.id, 'ordered')} title="Позначити: замовлення зроблено" className="px-3 py-2 bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white rounded-lg text-xs font-bold transition-colors border border-blue-200 flex items-center gap-1.5">
+                                                        <FaCheck size={10} /> Замовлено
+                                                    </button>
+                                                    <button onClick={() => handleRequestAction(req.id, 'stock_confirmed')} title="Підтвердити: це є на складі, замовляти не треба" className="px-3 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-lg text-xs font-bold transition-colors border border-emerald-200 flex items-center gap-1.5">
+                                                        <FaWarehouse size={10} /> Є на складі
+                                                    </button>
+                                                    <button onClick={() => handleRequestAction(req.id, 'rejected')} title="Відхилити заявку" className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                                                        <FaTimes size={13} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </div>
+            )}
 
             {/* ТАБЛИЦЯ */}
             <div className="bg-white rounded-[16px] shadow-sm border border-slate-200 flex-1 overflow-hidden flex flex-col min-h-0">
