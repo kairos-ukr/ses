@@ -203,17 +203,18 @@ export default function ManualSpecBuilder({ isOpen, onClose, onSuccess, installa
 
         setSaving(true);
         try {
-            let existingQuery = supabase.from('specifications').select('version').eq('installation_custom_id', installationId);
-            if (taskId) existingQuery = existingQuery.eq('notes', taskId);
-            const { data: existing } = await existingQuery;
-            const nextVersion = existing && existing.length > 0 ? Math.max(...existing.map(s => s.version)) + 1 : 1;
+            // Версія наскрізна по ВСІХ специфікаціях об'єкта (у БД унікальний ключ installation+version,
+            // без типу) — інакше "матеріали" і "ел. захист" конфліктують за version=1
+            const { data: existingAll } = await supabase.from('specifications')
+                .select('version')
+                .eq('installation_custom_id', installationId);
+            const nextVersion = existingAll && existingAll.length > 0 ? Math.max(...existingAll.map(s => s.version)) + 1 : 1;
 
-            if (existing && existing.length > 0) {
-                let archQuery = supabase.from('specifications').update({ status: 'archived' }).eq('installation_custom_id', installationId);
-                if (taskId) archQuery = archQuery.eq('notes', taskId);
-                const { error: archErr } = await archQuery;
-                if (archErr) throw archErr;
-            }
+            // Архівуємо лише специфікації ЦЬОГО типу (notes = taskId)
+            let archQuery = supabase.from('specifications').update({ status: 'archived' }).eq('installation_custom_id', installationId);
+            if (taskId) archQuery = archQuery.eq('notes', taskId);
+            const { error: archErr } = await archQuery;
+            if (archErr) throw archErr;
 
             const { data: newSpec, error: hErr } = await supabase.from('specifications').insert([{
                 installation_custom_id: installationId,

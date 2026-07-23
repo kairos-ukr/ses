@@ -15,6 +15,7 @@ import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
 import ManualSpecBuilder from "./pages/ManualSpecBuilder";
 import { NomenclatureModal } from "./pages/NomenclatureModal";
+import { findBestNomenclatureMatch, normalizeName } from "./utils/nameMatching";
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 const OCR_API_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev/parse-pdf';
@@ -281,11 +282,14 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
 
     // Пам'ять співставлень (supplier_mappings): "назва з документа" -> номенклатура
     const [memory, setMemory] = useState([]);
-    // Позиції, створені "на льоту" (їх ще немає у списку nomenclatures з пропсів)
+    // Свіжий список номенклатури — тягнеться з бази при відкритті модалки,
+    // щоб щойно додані позиції (з іншого екрана) одразу брали участь у співставленні
+    const [baseNoms, setBaseNoms] = useState(nomenclatures);
+    // Позиції, створені "на льоту" в цій модалці
     const [extraNoms, setExtraNoms] = useState([]);
     const [quickAdd, setQuickAdd] = useState({ open: false, name: '', rowIndex: null });
 
-    const allNoms = [...nomenclatures.filter(n => !extraNoms.some(e => e.id === n.id)), ...extraNoms];
+    const allNoms = [...baseNoms.filter(n => !extraNoms.some(e => e.id === n.id)), ...extraNoms];
 
     const notify = (m, t) => { if (t === 'error') alert(m); };
 
@@ -310,69 +314,34 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
         setQuickAdd({ open: false, name: '', rowIndex: null });
     };
 
-    const autoMatchItem = useCallback((originalName) => {
-        if (!originalName || !nomenclatures.length) return '';
-        const lowerName = originalName.toLowerCase().trim();
-
-        // 1. Exact SKU match (highest priority)
-        const skuMatch = nomenclatures.find(n => n.sku && lowerName.includes(n.sku.toLowerCase()));
-        if (skuMatch) return skuMatch.id;
-
-        // 2. Exact full name match
-        const exactMatch = nomenclatures.find(n => n.name.toLowerCase() === lowerName);
-        if (exactMatch) return exactMatch.id;
-
-        // 3. Tokenize the input: filter out short tokens and stopwords
-        const stopwords = new Set(['шт', 'пк', 'м', 'мм', 'см', 'кг', 'вт', 'кВт', 'а', 'в', 'кв', 'ом', 'на', 'та', 'або', 'для', 'від', 'до', 'із', 'по', 'з', 'і', 'й', 'the', 'for', 'and', 'or', 'mm', 'cm', 'kg', 'kw', 'a', 'v', 'w'].map(s => s.toLowerCase()));
-        const tokens = lowerName.split(/[\s,.\-\/\\()+:;]+/).filter(t => t.length > 2 && !stopwords.has(t));
-
-        let bestMatch = null;
-        let maxScore = 0;
-
-        for (const nom of nomenclatures) {
-            const nomSearchStr = [
-                nom.name,
-                nom.brand || '',
-                nom.model || '',
-                nom.categoryPath || '',
-                nom.sku || ''
-            ].join(' ').toLowerCase();
-
-            let score = 0;
-            let matchedTokens = 0;
-
-            for (const token of tokens) {
-                if (nomSearchStr.includes(token)) {
-                    // Longer tokens = more specific match = higher weight
-                    const weight = Math.min(token.length, 10);
-                    score += weight;
-                    matchedTokens++;
-                }
-            }
-
-            // Bonus: brand match is very strong signal
-            if (nom.brand && lowerName.includes(nom.brand.toLowerCase())) score += 15;
-            // Bonus: model match
-            if (nom.model && lowerName.includes(nom.model.toLowerCase())) score += 10;
-            // Penalty: low token coverage
-            const coverage = tokens.length > 0 ? matchedTokens / tokens.length : 0;
-            if (coverage < 0.4) score = Math.floor(score * 0.5);
-
-            if (score > maxScore) { maxScore = score; bestMatch = nom; }
-        }
-
-        // Only return a match if confidence is high enough
-        return maxScore >= 8 && bestMatch ? bestMatch.id : '';
-    }, [nomenclatures]);
-
     useEffect(() => {
         const parseFile = async () => {
-            // Спершу підтягуємо словник співставлень — точні збіги мають пріоритет над скорингом
+            // Свіжі дані для співставлення: словник пам'яті + актуальна номенклатура з бази
+            // (пропси можуть бути застарілими, якщо позицію щойно додали з іншого екрана)
             let memRows = [];
+            let freshNoms = nomenclatures;
             try {
-                const { data: memData } = await supabase.from('supplier_mappings').select('*');
-                memRows = memData || [];
-            } catch { /* без словника працюємо лише на скорингу */ }
+                const [memRes, nomRes, catRes] = await Promise.all([
+                    supabase.from('supplier_mappings').select('*'),
+                    supabase.from('nomenclature').select('id, name, sku, brand, model, technical_characteristics, category_id, unit:units(name)').eq('is_active', true),
+                    supabase.from('categories').select('id, name, parent_id')
+                ]);
+                memRows = memRes.data || [];
+                if (nomRes.data) {
+                    const cats = catRes.data || [];
+                    freshNoms = nomRes.data.map(item => {
+                        let path = [];
+                        let currentId = item.category_id;
+                        while (currentId) {
+                            const cat = cats.find(c => c.id === currentId);
+                            if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break;
+                        }
+                        const categoryPath = path.join(' › ');
+                        return { ...item, categoryPath, fullName: categoryPath ? `${categoryPath} › ${item.name}` : item.name };
+                    });
+                    setBaseNoms(freshNoms);
+                }
+            } catch { /* якщо не вийшло — працюємо на пропсах */ }
             setMemory(memRows);
 
             const formData = new FormData();
@@ -388,21 +357,16 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
                     const initialMapping = data.items.map(item => {
                         const rawName = item.original_name + (item.technical_chars ? ` ${item.technical_chars}` : '');
                         const displayName = item.original_name + (item.technical_chars ? ` (${item.technical_chars})` : '');
-                        const cleanRaw = rawName.toLowerCase().trim();
-                        const cleanDisplay = displayName.toLowerCase().trim();
-                        const memMatch = memRows.find(m => {
-                            const mName = String(m.supplier_item_name).toLowerCase().trim();
-                            return mName === cleanRaw || mName === cleanDisplay;
-                        });
-                        const matchedId = memMatch ? memMatch.nomenclature_id : autoMatchItem(rawName);
+                        // Нормалізоване співставлення: пам'ять -> точна назва -> SKU -> схожість
+                        const match = findBestNomenclatureMatch(rawName, freshNoms, memRows);
                         return {
                             id: Math.random().toString(36).substr(2, 9),
                             original_name: displayName,
                             quantity: parseFloat(item.quantity) || 1,
                             unit: item.unit || 'шт',
-                            nomenclature_id: matchedId,
-                            // auto: джерело прив'язки — 'memory' (словник) чи 'fuzzy' (скоринг за схожістю)
-                            auto: memMatch ? 'memory' : (matchedId ? 'fuzzy' : null)
+                            nomenclature_id: match.id || '',
+                            // auto: 'memory' (словник) | 'exact' (точна назва/SKU) | 'fuzzy' (схожість)
+                            auto: match.id ? match.source : null
                         };
                     });
                     setMappedItems(initialMapping);
@@ -416,7 +380,7 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
             }
         };
         parseFile();
-    }, [file, autoMatchItem]);
+    }, [file]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleConfirm = async () => {
         const unmapped = mappedItems.filter(item => !item.nomenclature_id);
@@ -425,18 +389,17 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
 
         setIsParsing(true);
         try {
-            // Only count/archive specs of the SAME task type (stored in notes)
-            const { data: existing } = await supabase.from('specifications')
+            // Версія наскрізна по ВСІХ специфікаціях об'єкта (у БД унікальний ключ installation+version,
+            // без типу) — інакше "матеріали" і "ел. захист" конфліктують за version=1
+            const { data: existingAll } = await supabase.from('specifications')
                 .select('version')
+                .eq('installation_custom_id', installationId);
+            const nextVersion = existingAll && existingAll.length > 0 ? Math.max(...existingAll.map(s => s.version)) + 1 : 1;
+
+            // Архівуємо лише специфікації ЦЬОГО типу (notes = taskId)
+            await supabase.from('specifications').update({ status: 'archived' })
                 .eq('installation_custom_id', installationId)
                 .eq('notes', taskId);
-            const nextVersion = existing && existing.length > 0 ? Math.max(...existing.map(s => s.version)) + 1 : 1;
-
-            if (existing && existing.length > 0) {
-                await supabase.from('specifications').update({ status: 'archived' })
-                    .eq('installation_custom_id', installationId)
-                    .eq('notes', taskId);
-            }
 
             const { data: newSpec, error: hErr } = await supabase.from('specifications').insert([{
                 installation_custom_id: installationId, version: nextVersion, status: 'confirmed',
@@ -459,10 +422,10 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
             const seenNames = new Set();
             for (const item of mappedItems) {
                 if (!item.original_name || !item.nomenclature_id) continue;
-                const cleanName = String(item.original_name).toLowerCase().trim();
-                if (seenNames.has(cleanName)) continue;
+                const cleanName = normalizeName(item.original_name);
+                if (!cleanName || seenNames.has(cleanName)) continue;
                 seenNames.add(cleanName);
-                const existing = memory.find(m => String(m.supplier_item_name).toLowerCase().trim() === cleanName);
+                const existing = memory.find(m => normalizeName(m.supplier_item_name) === cleanName);
                 if (!existing || existing.nomenclature_id !== item.nomenclature_id) {
                     changedMappings.push({ supplier_item_name: item.original_name.trim(), nomenclature_id: item.nomenclature_id });
                 }
@@ -530,6 +493,7 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
                                                             className="w-full text-sm font-medium text-slate-700 bg-transparent border-0 border-b border-dashed border-slate-200 focus:border-indigo-400 outline-none py-1 leading-tight"
                                                         />
                                                         {item.auto === 'memory' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">🧠 З пам'яті</span>}
+                                                        {item.auto === 'exact' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">= Точна назва</span>}
                                                         {item.auto === 'fuzzy' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">≈ Схоже — перевірте</span>}
                                                     </td>
                                                     <td className="px-2 py-4 align-middle border-r border-slate-200 text-center">
@@ -651,31 +615,12 @@ function SpecificationSummaryWidget({ installationId, taskId, refreshTrigger, no
                     {specData.status === 'confirmed' ? 'Затверджено' : specData.status}
                 </div>
             </div>
-            <div className="p-5">
-                <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Всі завантажені позиції ({totalItems})</div>
-                <div className="max-h-[400px] overflow-y-auto custom-scrollbar pr-2 border border-slate-100 rounded-xl p-3 bg-slate-50/30">
-                    <div className="flex flex-col gap-1">
-                        {items.map(item => {
-                            const nomEntry = nomenclatures.find(n => n.id === item.nomenclature?.id);
-                            const categoryPath = nomEntry?.categoryPath || null;
-                            const displayName = item.nomenclature?.name || item.original_name || 'Невідома позиція';
-                            return (
-                                <div key={item.id} className="flex justify-between items-start text-xs py-2 border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors px-2 rounded gap-3">
-                                    <div className="flex flex-col flex-1 min-w-0">
-                                        {categoryPath && (
-                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider truncate">{categoryPath}</span>
-                                        )}
-                                        <span className="font-medium text-slate-800 leading-tight">{displayName}</span>
-                                        {item.nomenclature?.brand && (
-                                            <span className="text-[10px] text-slate-400">{item.nomenclature.brand}</span>
-                                        )}
-                                    </div>
-                                    <span className="font-bold text-slate-900 shrink-0 bg-white border border-slate-200 shadow-sm px-2.5 py-1 rounded whitespace-nowrap">{item.quantity} шт</span>
-                                </div>
-                            );
-                        })}
-                    </div>
+            {/* Компактне резюме без переліку позицій — повний список живе в «Забезпеченні об'єктів» */}
+            <div className="px-5 py-3.5 flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-xs font-bold text-slate-500">
+                    Завантажено позицій: <span className="text-slate-800 text-base font-black ml-1">{totalItems}</span>
                 </div>
+                <div className="text-[10px] text-slate-400 font-medium">Повний перелік і забезпечення — у розділі «Забезпечення об'єктів»</div>
             </div>
         </div>
     );

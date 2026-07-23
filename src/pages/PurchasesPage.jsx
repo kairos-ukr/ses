@@ -110,7 +110,7 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
             const [supRes, instRes, nomRes, catRes, whRes, empRes, memRes, reqRes] = await Promise.all([
                 supabase.from('suppliers').select('id, name').order('name'),
                 supabase.from('installations').select('custom_id, name, status').in('status', ['planning', 'in_progress', 'pending']),
-                supabase.from('nomenclature').select('id, name, sku, category_id, type, package_name, package_multiplier, unit:units(name)').eq('is_active', true).order('name'),
+                supabase.from('nomenclature').select('id, name, sku, brand, model, technical_characteristics, category_id, type, package_name, package_multiplier, unit:units(name)').eq('is_active', true).order('name'),
                 supabase.from('categories').select('*'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
                 supabase.from('employees').select('id, name'),

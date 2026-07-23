@@ -6,6 +6,7 @@ import {
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient'; // Перевірте шлях до вашого клієнта
 import { NomenclatureModal } from './NomenclatureModal';
+import { findBestNomenclatureMatch, normalizeName } from '../utils/nameMatching';
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 // Оновлено URL на ваш Cloudflare Worker (якщо парсер знаходиться на головному маршруті, замініть на "https://quiet-water-a1ad.kairosost38500.workers.dev/")
@@ -21,38 +22,8 @@ const ORDER_STATUSES = {
 
 const CURRENCIES = ['UAH', 'USD', 'EUR'];
 
-// --- ДОПОМІЖНІ АЛГОРИТМИ ТА КОМПОНЕНТИ ---
-const findBestMatch = (supplierName, memory, noms) => {
-    const cleanSupplier = String(supplierName).toLowerCase().trim();
-    const memMatch = memory.find(m => String(m.supplier_item_name).toLowerCase().trim() === cleanSupplier);
-    if (memMatch) return memMatch.nomenclature_id;
-    const exactNom = noms.find(n => String(n.fullName).toLowerCase().trim() === cleanSupplier || String(n.name).toLowerCase().trim() === cleanSupplier);
-    if (exactNom) return exactNom.id;
-
-    const tokenize = (str) => String(str).toLowerCase().replace(/[()\[\]{}:;,.\/\\-]/g, ' ').split(/\s+/).filter(w => w.length > 2);
-    const supplierTokens = tokenize(supplierName);
-    if (supplierTokens.length === 0) return '';
-
-    let bestMatch = '';
-    let maxScore = 0;
-
-    noms.forEach(nom => {
-        const nomTokens = tokenize(nom.fullName);
-        let score = 0;
-        supplierTokens.forEach(sToken => {
-            nomTokens.forEach(nToken => {
-                if (nToken.includes(sToken) || sToken.includes(nToken)) score += 1;
-            });
-        });
-        if (nom.sku && cleanSupplier.includes(String(nom.sku).toLowerCase())) score += 5;
-        const threshold = Math.min(supplierTokens.length, 2);
-        if (score >= threshold && score > maxScore) {
-            maxScore = score;
-            bestMatch = nom.id;
-        }
-    });
-    return bestMatch;
-};
+// --- ДОПОМІЖНІ КОМПОНЕНТИ ---
+// (алгоритм співставлення назв винесено в utils/nameMatching.js — спільний з оцифруванням специфікацій)
 
 async function uploadInvoiceFile(file, objectId, invoiceNumber, invoiceDate) {
     const fd = new FormData();
@@ -292,17 +263,16 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
             
             if (data.items && data.items.length > 0) {
                 const parsedItems = data.items.map(item => {
-                    const cleanName = String(item.name).toLowerCase().trim();
-                    const memMatch = systemMemory.find(m => String(m.supplier_item_name).toLowerCase().trim() === cleanName);
-                    const matchedId = memMatch ? memMatch.nomenclature_id : findBestMatch(item.name, systemMemory, nomenclatures);
+                    // Нормалізоване співставлення: пам'ять -> точна назва -> SKU -> схожість
+                    const match = findBestNomenclatureMatch(item.name, nomenclatures, systemMemory);
                     return {
                         id: Math.random().toString(),
                         supplier_item_name: item.name,
                         quantity: parseInt(item.quantity, 10) || 1,
                         unit_price: parseFloat(item.price) || 0,
-                        nomenclature_id: matchedId,
-                        // auto: звідки взялася прив'язка — 'memory' (словник співставлень) чи 'fuzzy' (схожість назв)
-                        auto: memMatch ? 'memory' : (matchedId ? 'fuzzy' : null),
+                        nomenclature_id: match.id || '',
+                        // auto: 'memory' (словник) | 'exact' (точна назва/SKU) | 'fuzzy' (схожість)
+                        auto: match.id ? match.source : null,
                         is_package: false
                     };
                 });
@@ -364,10 +334,10 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
         const seenNames = new Set();
         for (const item of orderData.items) {
             if (!item.supplier_item_name || !item.nomenclature_id) continue;
-            const cleanName = String(item.supplier_item_name).toLowerCase().trim();
-            if (seenNames.has(cleanName)) continue;
+            const cleanName = normalizeName(item.supplier_item_name);
+            if (!cleanName || seenNames.has(cleanName)) continue;
             seenNames.add(cleanName);
-            const existing = systemMemory.find(m => String(m.supplier_item_name).toLowerCase().trim() === cleanName);
+            const existing = systemMemory.find(m => normalizeName(m.supplier_item_name) === cleanName);
             if (!existing || existing.nomenclature_id !== item.nomenclature_id) {
                 changedMappings.push({ supplier_item_name: item.supplier_item_name.trim(), nomenclature_id: item.nomenclature_id });
             }
@@ -605,6 +575,7 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
                                                             <td className="px-4 py-3 align-middle border-r border-slate-100">
                                                                 <div className="text-sm font-bold text-slate-700">{item.supplier_item_name}</div>
                                                                 {item.auto === 'memory' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">🧠 З пам'яті</span>}
+                                                                {item.auto === 'exact' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">= Точна назва</span>}
                                                                 {item.auto === 'fuzzy' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">≈ Схоже — перевірте</span>}
                                                             </td>
                                                             <td className="px-2 py-3 align-middle border-r border-slate-100 text-center">
