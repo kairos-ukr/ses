@@ -46,12 +46,17 @@ export default function ProvisioningPage() {
     const [nomenclatures, setNomenclatures] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const [statusFilter, setStatusFilter] = useState('all'); // all | ready | waiting | deficit | nospec
+
+    // Очікуване постачання: { [installation_custom_id]: { [nomenclature_id]: кількість, що ще не отримана } }
+    const [incomingMap, setIncomingMap] = useState({});
 
     // Стан для детального перегляду об'єкта
     const [selectedInst, setSelectedInst] = useState(null);
     const [specNeeds, setSpecNeeds] = useState([]);
     const [stockRows, setStockRows] = useState([]);        // повний v_warehouse_stock_available
     const [objReservations, setObjReservations] = useState([]); // активні резерви цього об'єкта
+    const [offSpecIssued, setOffSpecIssued] = useState([]); // видано на об'єкт поза специфікацією
     const [detailLoading, setDetailLoading] = useState(false);
 
     // Єдина модалка операцій (reserve / issue / return)
@@ -69,12 +74,17 @@ export default function ProvisioningPage() {
     const loadDashboard = useCallback(async () => {
         setLoading(true);
         try {
-            const [instRes, needsRes, whRes, nomRes, catRes] = await Promise.all([
+            const [instRes, needsRes, whRes, nomRes, catRes, poRes] = await Promise.all([
                 supabase.from('installations').select(`custom_id, name, status, gps_link, client:clients(name, company_name)`).in('status', ['planning', 'in_progress', 'pending']).order('created_at', { ascending: false }),
                 supabase.from('v_object_material_needs').select('*'),
                 supabase.from('warehouses').select('id, name, is_active').order('name'),
                 supabase.from('nomenclature').select('id, name, sku, category_id, unit:units(name)'),
-                supabase.from('categories').select('*')
+                supabase.from('categories').select('*'),
+                // Незакриті замовлення, прив'язані до об'єктів — щоб бачити "замовлено / в дорозі"
+                supabase.from('purchase_order_items')
+                    .select('nomenclature_id, quantity, po:purchase_orders!inner(installation_custom_id, status), movements:stock_movements(quantity, operation_type)')
+                    .in('po.status', ['draft', 'sent', 'partially_received'])
+                    .not('po.installation_custom_id', 'is', null)
             ]);
 
             if (instRes.error) throw instRes.error;
@@ -96,12 +106,30 @@ export default function ProvisioningPage() {
 
             const needsData = needsRes.data || [];
 
+            // Будуємо мапу очікуваного постачання: об'єкт -> номенклатура -> ще не отримано
+            const incoming = {};
+            (poRes.data || []).forEach(poi => {
+                const instId = poi.po?.installation_custom_id;
+                if (!instId) return;
+                const received = (poi.movements || [])
+                    .filter(m => m.operation_type === 'purchase')
+                    .reduce((sum, m) => sum + parseFloat(m.quantity || 0), 0);
+                const remaining = Math.max(0, parseFloat(poi.quantity || 0) - received);
+                if (remaining <= 0) return;
+                if (!incoming[instId]) incoming[instId] = {};
+                incoming[instId][poi.nomenclature_id] = (incoming[instId][poi.nomenclature_id] || 0) + remaining;
+            });
+            setIncomingMap(incoming);
+
             const processedInst = (instRes.data || []).map(inst => {
                 const objectNeeds = needsData.filter(n => String(n.installation_custom_id) === String(inst.custom_id));
+                const objIncoming = incoming[inst.custom_id] || {};
 
                 let readiness = 0;
                 let statusBadge = "Без специфікації";
                 let badgeColor = "bg-slate-100 text-slate-500";
+                let provStatus = 'nospec';
+                let okCount = 0, waitingCount = 0, hardDeficitCount = 0;
 
                 if (objectNeeds.length > 0) {
                     let totalPercent = 0;
@@ -109,22 +137,34 @@ export default function ProvisioningPage() {
                         const required = parseFloat(need.required_quantity) || 1;
                         const covered = (parseFloat(need.reserved_quantity) || 0) + (parseFloat(need.issued_quantity) || 0);
                         totalPercent += Math.min(100, (covered / required) * 100);
+
+                        const outstanding = parseFloat(need.outstanding_need) || 0;
+                        if (outstanding <= 0) {
+                            okCount++;
+                        } else if ((objIncoming[need.nomenclature_id] || 0) >= outstanding) {
+                            waitingCount++;
+                        } else {
+                            hardDeficitCount++;
+                        }
                     });
                     readiness = Math.round(totalPercent / objectNeeds.length);
 
                     if (readiness === 100) {
-                        statusBadge = "Скомплектовано";
+                        statusBadge = "Скомплектовано — можна починати";
                         badgeColor = "bg-emerald-100 text-emerald-700 border-emerald-200";
-                    } else if (readiness > 0) {
-                        statusBadge = "Частково забезпечено";
+                        provStatus = 'ready';
+                    } else if (hardDeficitCount === 0) {
+                        statusBadge = "Очікує постачання";
                         badgeColor = "bg-blue-100 text-blue-700 border-blue-200";
+                        provStatus = 'waiting';
                     } else {
-                        statusBadge = "Очікує матеріалів";
-                        badgeColor = "bg-amber-100 text-amber-700 border-amber-200";
+                        statusBadge = `Дефіцит: ${hardDeficitCount} поз.`;
+                        badgeColor = "bg-red-100 text-red-700 border-red-200";
+                        provStatus = 'deficit';
                     }
                 }
 
-                return { ...inst, readiness, statusBadge, badgeColor, needsCount: objectNeeds.length };
+                return { ...inst, readiness, statusBadge, badgeColor, provStatus, okCount, waitingCount, hardDeficitCount, needsCount: objectNeeds.length };
             });
 
             setInstallations(processedInst);
@@ -142,18 +182,34 @@ export default function ProvisioningPage() {
         setSelectedInst(inst);
         setDetailLoading(true);
         try {
-            const [needsRes, stockRes, resRes] = await Promise.all([
+            const [needsRes, stockRes, resRes, movRes] = await Promise.all([
                 supabase.from('v_object_material_needs').select('*').eq('installation_custom_id', inst.custom_id),
                 supabase.from('v_warehouse_stock_available').select('*'),
-                supabase.from('reservations').select('id, warehouse_id, nomenclature_id, reserved_quantity, released_quantity, status').eq('installation_custom_id', inst.custom_id).eq('status', 'active')
+                supabase.from('reservations').select('id, warehouse_id, nomenclature_id, reserved_quantity, released_quantity, status').eq('installation_custom_id', inst.custom_id).eq('status', 'active'),
+                // Фактичні видачі/повернення по об'єкту — щоб побачити й те, чого немає в специфікації
+                supabase.from('stock_movements').select('nomenclature_id, quantity, operation_type').eq('installation_custom_id', inst.custom_id).in('operation_type', ['issue', 'return'])
             ]);
 
             if (needsRes.error) throw needsRes.error;
             if (stockRes.error) throw stockRes.error;
 
-            setSpecNeeds(needsRes.data || []);
+            const needs = needsRes.data || [];
+            setSpecNeeds(needs);
             setStockRows(stockRes.data || []);
             setObjReservations(resRes.data || []);
+
+            // Видано поза специфікацією: чисті видачі (видача − повернення) по номенклатурі, якої немає в плані
+            const specNomIds = new Set(needs.map(n => n.nomenclature_id));
+            const netIssued = {};
+            (movRes.data || []).forEach(m => {
+                const sign = m.operation_type === 'issue' ? 1 : -1;
+                netIssued[m.nomenclature_id] = (netIssued[m.nomenclature_id] || 0) + sign * parseFloat(m.quantity || 0);
+            });
+            setOffSpecIssued(
+                Object.entries(netIssued)
+                    .filter(([nomId, qty]) => qty > 0.0001 && !specNomIds.has(parseInt(nomId)))
+                    .map(([nomId, qty]) => ({ nomenclature_id: parseInt(nomId), quantity: qty }))
+            );
         } catch (error) {
             showToast(error.message, 'error');
         } finally {
@@ -320,8 +376,25 @@ export default function ProvisioningPage() {
     // --- ФІЛЬТРАЦІЯ ДАШБОРДУ ---
     const filteredInst = installations.filter(i => {
         const term = searchTerm.toLowerCase();
-        return i.name?.toLowerCase().includes(term) || String(i.custom_id).includes(term) || i.client?.name?.toLowerCase().includes(term);
+        const matchesSearch = i.name?.toLowerCase().includes(term) || String(i.custom_id).includes(term) || i.client?.name?.toLowerCase().includes(term);
+        const matchesStatus = statusFilter === 'all' || i.provStatus === statusFilter;
+        return matchesSearch && matchesStatus;
     });
+
+    const statusCounts = {
+        all: installations.length,
+        ready: installations.filter(i => i.provStatus === 'ready').length,
+        waiting: installations.filter(i => i.provStatus === 'waiting').length,
+        deficit: installations.filter(i => i.provStatus === 'deficit').length,
+        nospec: installations.filter(i => i.provStatus === 'nospec').length,
+    };
+    const FILTER_TABS = [
+        { id: 'all', label: 'Всі', activeCls: 'bg-slate-800 text-white border-slate-800' },
+        { id: 'ready', label: 'Готові', activeCls: 'bg-emerald-600 text-white border-emerald-600' },
+        { id: 'waiting', label: 'Очікують постачання', activeCls: 'bg-blue-600 text-white border-blue-600' },
+        { id: 'deficit', label: 'Дефіцит', activeCls: 'bg-red-600 text-white border-red-600' },
+        { id: 'nospec', label: 'Без специфікації', activeCls: 'bg-slate-500 text-white border-slate-500' },
+    ];
 
     if (authLoading) return <div className="p-8 text-center text-slate-500">Завантаження...</div>;
 
@@ -346,9 +419,22 @@ export default function ProvisioningPage() {
                             </div>
                         </div>
 
-                        <div className="relative mb-6">
+                        <div className="relative mb-4">
                             <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
                             <input type="text" placeholder="Пошук за назвою або номером об'єкта..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm shadow-sm transition-colors" />
+                        </div>
+
+                        {/* Фільтри за станом забезпечення */}
+                        <div className="flex gap-2 mb-6 overflow-x-auto hide-scrollbar pb-1">
+                            {FILTER_TABS.map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setStatusFilter(tab.id)}
+                                    className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap border transition-colors shadow-sm ${statusFilter === tab.id ? tab.activeCls : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
+                                >
+                                    {tab.label} <span className={`ml-1 ${statusFilter === tab.id ? 'opacity-80' : 'text-slate-400'}`}>({statusCounts[tab.id]})</span>
+                                </button>
+                            ))}
                         </div>
 
                         {loading ? (
@@ -377,6 +463,13 @@ export default function ProvisioningPage() {
                                             </div>
                                             <h3 className="font-bold text-lg text-slate-800 group-hover:text-indigo-700 transition-colors leading-tight mb-1">{inst.name}</h3>
                                             <p className="text-xs font-medium text-slate-500">{inst.client?.company_name || inst.client?.name || 'Невідомий клієнт'} • Позицій у специфікації: {inst.needsCount}</p>
+                                            {inst.needsCount > 0 && (
+                                                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                                    {inst.okCount > 0 && <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">✔ {inst.okCount} забезпечено</span>}
+                                                    {inst.waitingCount > 0 && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">🚚 {inst.waitingCount} в дорозі</span>}
+                                                    {inst.hardDeficitCount > 0 && <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-100 px-2 py-0.5 rounded-full">⚠ {inst.hardDeficitCount} не вистачає</span>}
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="w-full md:w-32 text-right">
@@ -401,6 +494,13 @@ export default function ProvisioningPage() {
                                 </button>
                                 <h2 className="text-xl sm:text-2xl font-bold text-slate-800 leading-tight">Комплектація: {selectedInst.name}</h2>
                                 <p className="text-sm text-slate-500 mt-1 font-medium">СЕС-{selectedInst.custom_id} • Резерв · Видача · Повернення</p>
+                                {selectedInst.needsCount > 0 && (
+                                    <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                        {selectedInst.okCount > 0 && <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">✔ {selectedInst.okCount} забезпечено</span>}
+                                        {selectedInst.waitingCount > 0 && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">🚚 {selectedInst.waitingCount} в дорозі</span>}
+                                        {selectedInst.hardDeficitCount > 0 && <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-100 px-2 py-0.5 rounded-full">⚠ {selectedInst.hardDeficitCount} не вистачає</span>}
+                                    </div>
+                                )}
                             </div>
                             <div className="flex items-center gap-3 w-full md:w-auto">
                                 <button
@@ -418,30 +518,20 @@ export default function ProvisioningPage() {
 
                         {detailLoading ? (
                             <div className="flex-1 flex items-center justify-center"><div className="animate-pulse text-indigo-500 font-bold text-lg">Завантаження специфікації...</div></div>
-                        ) : specNeeds.length === 0 ? (
-                            <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-slate-300 flex-1">
-                                <FaBoxOpen className="mx-auto text-5xl text-slate-300 mb-4" />
-                                <h3 className="text-lg font-bold text-slate-600">Специфікація порожня або не затверджена</h3>
-                                <p className="text-slate-400 text-sm mt-1 mb-5">Оцифруйте PDF або внесіть комплектацію вручну для цього об'єкта.</p>
-                                <button onClick={() => setIsManualOpen(true)} className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm shadow-md hover:bg-indigo-700 transition-colors">
-                                    <FaClipboardList size={13}/> Внести комплектацію вручну
-                                </button>
-                            </div>
                         ) : (
-                            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex-1 overflow-hidden flex flex-col">
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-left border-collapse min-w-[1050px]">
-                                        <thead>
-                                            <tr className="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-500">
-                                                <th className="px-5 py-4 font-bold w-1/3">Номенклатура</th>
-                                                <th className="px-4 py-4 font-bold text-center border-l border-slate-200">Потреба</th>
-                                                <th className="px-4 py-4 font-bold text-center bg-amber-50/50">У резерві</th>
-                                                <th className="px-4 py-4 font-bold text-center bg-blue-50/50">Видано</th>
-                                                <th className="px-4 py-4 font-bold text-center bg-red-50/50">Дефіцит</th>
-                                                <th className="px-5 py-4 font-bold text-right border-l border-slate-200 w-[280px]">Дії</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100">
+                            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar flex flex-col gap-4 pb-4">
+                                {specNeeds.length === 0 ? (
+                                    <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-300">
+                                        <FaBoxOpen className="mx-auto text-5xl text-slate-300 mb-4" />
+                                        <h3 className="text-lg font-bold text-slate-600">Специфікація порожня або не затверджена</h3>
+                                        <p className="text-slate-400 text-sm mt-1 mb-5">Оцифруйте PDF або внесіть комплектацію вручну для цього об'єкта.</p>
+                                        <button onClick={() => setIsManualOpen(true)} className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm shadow-md hover:bg-indigo-700 transition-colors">
+                                            <FaClipboardList size={13}/> Внести комплектацію вручну
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                                        <div className="divide-y divide-slate-100">
                                             {specNeeds.map(item => {
                                                 const req = parseFloat(item.required_quantity);
                                                 const iss = parseFloat(item.issued_quantity);
@@ -457,31 +547,55 @@ export default function ProvisioningPage() {
                                                     .reduce((sum, s) => sum + parseFloat(s.quantity_available), 0);
                                                 const myReserved = reservedHereTotal(item.nomenclature_id);
                                                 const canIssue = myReserved > 0 || (defect > 0 && availableGlobal > 0);
+                                                const incoming = (incomingMap[selectedInst.custom_id] || {})[item.nomenclature_id] || 0;
+                                                const coveredByIncoming = defect > 0 && incoming >= defect;
 
                                                 return (
-                                                    <tr key={item.specification_item_id} className={`hover:bg-slate-50/50 transition-colors ${isFullyCovered ? 'bg-emerald-50/20' : ''}`}>
-                                                        <td className="px-5 py-4 align-middle">
-                                                            <div className="font-bold text-slate-800 text-sm leading-tight">{nom?.fullName || item.nomenclature_name}</div>
-                                                            {nom?.sku && <div className="text-[10px] text-slate-400 font-mono mt-1 tracking-widest uppercase">SKU: {nom.sku}</div>}
-                                                        </td>
-                                                        <td className="px-4 py-4 align-middle text-center border-l border-slate-100">
-                                                            <span className="font-black text-slate-700 text-base">{req}</span> <span className="text-[10px] font-bold text-slate-400 uppercase">{unitName}</span>
-                                                        </td>
-                                                        <td className="px-4 py-4 align-middle text-center bg-amber-50/10">
-                                                            <span className="font-bold text-amber-600 text-sm">{res}</span>
-                                                        </td>
-                                                        <td className="px-4 py-4 align-middle text-center bg-blue-50/10">
-                                                            <span className="font-bold text-blue-600 text-sm">{iss}</span>
-                                                        </td>
-                                                        <td className="px-4 py-4 align-middle text-center bg-red-50/10">
-                                                            {defect > 0 ? (
-                                                                <span className="font-black text-red-600 text-base bg-red-100 px-2 py-0.5 rounded border border-red-200">{defect}</span>
-                                                            ) : (
-                                                                <FaCheck className="mx-auto text-emerald-500" />
-                                                            )}
-                                                        </td>
-                                                        <td className="px-5 py-4 align-middle text-right border-l border-slate-100">
-                                                            <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                                    <div key={item.specification_item_id} className={`p-4 sm:px-5 hover:bg-slate-50/50 transition-colors ${isFullyCovered ? 'bg-emerald-50/20' : ''}`}>
+                                                        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+                                                            {/* Назва + статус позиції */}
+                                                            <div className="flex-1 min-w-[240px]">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <span className="font-bold text-slate-800 text-sm leading-tight">{nom?.fullName || item.nomenclature_name}</span>
+                                                                    {defect <= 0
+                                                                        ? <span className="text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">✔ Забезпечено</span>
+                                                                        : coveredByIncoming
+                                                                            ? <span className="text-[9px] font-black uppercase tracking-wider text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded">🚚 В дорозі</span>
+                                                                            : <span className="text-[9px] font-black uppercase tracking-wider text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">⚠ Дефіцит {defect}</span>}
+                                                                </div>
+                                                                {nom?.sku && <div className="text-[10px] text-slate-400 font-mono mt-1 tracking-widest uppercase">SKU: {nom.sku}</div>}
+                                                            </div>
+
+                                                            {/* Показники */}
+                                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                                <div className="text-center px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 min-w-[62px]">
+                                                                    <div className="text-[9px] font-black uppercase text-slate-400">Потреба</div>
+                                                                    <div className="font-black text-sm text-slate-700">{req} <span className="text-[9px] font-bold text-slate-400 uppercase">{unitName}</span></div>
+                                                                </div>
+                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${res > 0 ? 'border-amber-100 bg-amber-50' : 'border-slate-100 bg-white'}`}>
+                                                                    <div className={`text-[9px] font-black uppercase ${res > 0 ? 'text-amber-500' : 'text-slate-300'}`}>Резерв</div>
+                                                                    <div className={`font-black text-sm ${res > 0 ? 'text-amber-700' : 'text-slate-300'}`}>{res > 0 ? res : '—'}</div>
+                                                                </div>
+                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${iss > 0 ? 'border-blue-100 bg-blue-50' : 'border-slate-100 bg-white'}`}>
+                                                                    <div className={`text-[9px] font-black uppercase ${iss > 0 ? 'text-blue-500' : 'text-slate-300'}`}>Видано</div>
+                                                                    <div className={`font-black text-sm ${iss > 0 ? 'text-blue-700' : 'text-slate-300'}`}>{iss > 0 ? iss : '—'}</div>
+                                                                </div>
+                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${defect > 0 ? 'border-red-200 bg-red-50' : 'border-slate-100 bg-white'}`}>
+                                                                    <div className={`text-[9px] font-black uppercase ${defect > 0 ? 'text-red-500' : 'text-slate-300'}`}>Дефіцит</div>
+                                                                    <div className={`font-black text-sm ${defect > 0 ? 'text-red-600' : 'text-slate-300'}`}>{defect > 0 ? defect : '—'}</div>
+                                                                </div>
+                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${incoming > 0 ? 'border-sky-200 bg-sky-50' : 'border-slate-100 bg-white'}`}>
+                                                                    <div className={`text-[9px] font-black uppercase ${incoming > 0 ? 'text-sky-500' : 'text-slate-300'}`}>В дорозі</div>
+                                                                    <div className={`font-black text-sm ${incoming > 0 ? 'text-sky-700' : 'text-slate-300'}`}>{incoming > 0 ? incoming : '—'}</div>
+                                                                </div>
+                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${availableGlobal > 0 ? 'border-emerald-100 bg-emerald-50' : 'border-slate-100 bg-white'}`} title="Вільний залишок на всіх складах">
+                                                                    <div className={`text-[9px] font-black uppercase ${availableGlobal > 0 ? 'text-emerald-500' : 'text-slate-300'}`}>Склад</div>
+                                                                    <div className={`font-black text-sm ${availableGlobal > 0 ? 'text-emerald-700' : 'text-slate-300'}`}>{availableGlobal > 0 ? availableGlobal : '—'}</div>
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Дії */}
+                                                            <div className="flex items-center gap-1.5 ml-auto">
                                                                 {defect > 0 && (
                                                                     <button
                                                                         onClick={() => openOp('reserve', item)}
@@ -510,16 +624,49 @@ export default function ProvisioningPage() {
                                                                     </button>
                                                                 )}
                                                             </div>
-                                                            {isFullyCovered && iss === 0 && (
-                                                                <div className="text-[10px] font-bold text-emerald-600 mt-1.5">Забезпечено (резерв)</div>
-                                                            )}
-                                                        </td>
-                                                    </tr>
+                                                        </div>
+                                                    </div>
                                                 );
                                             })}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* --- ВИДАНО ПОЗА СПЕЦИФІКАЦІЄЮ --- */}
+                                {offSpecIssued.length > 0 && (
+                                    <div className="bg-white rounded-2xl shadow-sm border border-amber-200 overflow-hidden">
+                                        <div className="px-5 py-3 bg-amber-50 border-b border-amber-100 flex items-center gap-2 flex-wrap">
+                                            <FaExclamationTriangle className="text-amber-500" />
+                                            <span className="text-sm font-bold text-amber-900">Видано поза специфікацією</span>
+                                            <span className="text-[10px] font-bold text-amber-600 bg-white border border-amber-200 px-2 py-0.5 rounded-full">{offSpecIssued.length} поз.</span>
+                                            <span className="text-[11px] text-amber-700/70 font-medium hidden md:inline ml-auto">Ці матеріали пішли на об'єкт, але їх немає в плані — додайте в комплектацію або поверніть</span>
+                                        </div>
+                                        <div className="divide-y divide-slate-100">
+                                            {offSpecIssued.map(row => {
+                                                const nom = nomenclatures.find(n => n.id === row.nomenclature_id);
+                                                const unitName = nom?.unit?.name || 'шт';
+                                                return (
+                                                    <div key={row.nomenclature_id} className="p-4 sm:px-5 flex flex-wrap items-center gap-3 hover:bg-amber-50/20 transition-colors">
+                                                        <div className="flex-1 min-w-[240px]">
+                                                            <div className="font-bold text-slate-800 text-sm leading-tight">{nom?.fullName || `Номенклатура #${row.nomenclature_id}`}</div>
+                                                            {nom?.sku && <div className="text-[10px] text-slate-400 font-mono mt-1 tracking-widest uppercase">SKU: {nom.sku}</div>}
+                                                        </div>
+                                                        <div className="text-center px-2.5 py-1 rounded-lg border border-blue-100 bg-blue-50 min-w-[70px]">
+                                                            <div className="text-[9px] font-black uppercase text-blue-500">Видано</div>
+                                                            <div className="font-black text-sm text-blue-700">{row.quantity} <span className="text-[9px] font-bold text-blue-400 uppercase">{unitName}</span></div>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => openOp('return', { nomenclature_id: row.nomenclature_id, required_quantity: 0, reserved_quantity: 0, issued_quantity: row.quantity, outstanding_need: 0, specification_item_id: null, nomenclature_name: nom?.fullName })}
+                                                            className="px-3 py-2 bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 border border-amber-200"
+                                                        >
+                                                            <FaUndo size={11}/> Повернути
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </motion.div>

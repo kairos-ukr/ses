@@ -45,8 +45,9 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
     const [suppliers, setSuppliers] = useState([]);
     const [installations, setInstallations] = useState([]);
     const [nomenclatures, setNomenclatures] = useState([]);
+    const [categories, setCategories] = useState([]);
     const [warehouses, setWarehouses] = useState([]);
-    const [systemMemory, setSystemMemory] = useState([]); 
+    const [systemMemory, setSystemMemory] = useState([]);
     const [employeesDict, setEmployeesDict] = useState({});
     
     const [loading, setLoading] = useState(true);
@@ -122,6 +123,7 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
             setEmployeesDict(empDict);
 
             const cats = catRes.data || [];
+            setCategories(cats);
             const processedNom = (nomRes.data || []).map(item => {
                 let path = [];
                 let currentId = item.category_id;
@@ -547,7 +549,7 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
                 initialMode={purchaseModalMode}
                 editOrder={purchaseModalEditData}
                 importFile={purchaseModalImportFile}
-                dictionaries={{ suppliers, installations, nomenclatures, systemMemory }}
+                dictionaries={{ suppliers, installations, nomenclatures, categories, systemMemory }}
                 employee={employee}
                 showToast={showToast}
                 onAddSupplier={handleQuickAddSupplier}

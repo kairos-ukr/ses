@@ -7,9 +7,10 @@ import {
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
+import { NomenclatureModal } from './NomenclatureModal';
 
 // --- Пошуковий пікер для ДОДАВАННЯ позиції (показує лише ще не додані) ---
-const AddPicker = ({ options, onPick }) => {
+const AddPicker = ({ options, onPick, onCreateNew }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
     const wrapperRef = useRef(null);
@@ -51,6 +52,17 @@ const AddPicker = ({ options, onPick }) => {
                                 </div>
                             )) : <div className="px-4 py-6 text-sm text-slate-400 text-center">Нічого не знайдено (або все вже додано)</div>}
                         </div>
+                        {onCreateNew && (
+                            <div className="p-2 border-t border-slate-100 bg-slate-50 flex-shrink-0">
+                                <button
+                                    type="button"
+                                    onClick={() => { onCreateNew(search.trim()); setIsOpen(false); setSearch(''); }}
+                                    className="w-full py-2.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-lg text-sm font-bold transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <FaPlus size={11} /> {search.trim() ? `Створити нову позицію «${search.trim()}»` : 'Створити нову позицію'}
+                                </button>
+                            </div>
+                        )}
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -67,13 +79,17 @@ const AddPicker = ({ options, onPick }) => {
  */
 export default function ManualSpecBuilder({ isOpen, onClose, onSuccess, installationId, taskId = null, title, showToast }) {
     const { employee } = useAuth();
-    const notify = typeof showToast === 'function' ? showToast : (m) => console.warn('[ManualSpecBuilder]', m);
+    const notify = typeof showToast === 'function' ? showToast : (m, t) => { if (t === 'error') alert(m); else console.warn('[ManualSpecBuilder]', m); };
 
     const [nomenclatures, setNomenclatures] = useState([]);
+    const [cats, setCats] = useState([]);
     const [rows, setRows] = useState([]);          // { key, nomenclature_id, quantity }
     const [factByNom, setFactByNom] = useState({}); // nomId -> { reserved, issued }
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+
+    // Швидке створення номенклатури прямо з пікера
+    const [quickAdd, setQuickAdd] = useState({ open: false, name: '' });
 
     const newKey = () => Math.random().toString(36).slice(2, 10);
 
@@ -86,6 +102,7 @@ export default function ManualSpecBuilder({ isOpen, onClose, onSuccess, installa
                 supabase.from('v_object_material_needs').select('nomenclature_id, reserved_quantity, issued_quantity').eq('installation_custom_id', installationId)
             ]);
             const cats = catRes.data || [];
+            setCats(cats);
             const processedNom = (nomRes.data || []).map(item => {
                 let path = [];
                 let rootName = '';
@@ -150,6 +167,21 @@ export default function ManualSpecBuilder({ isOpen, onClose, onSuccess, installa
 
     const addedIds = new Set(rows.map(r => r.nomenclature_id));
     const availableToAdd = nomenclatures.filter(n => !addedIds.has(n.id));
+
+    // Нову позицію, створену через NomenclatureModal, одразу додаємо в список і в специфікацію
+    const handleQuickAddSuccess = (savedItem) => {
+        if (!savedItem) return;
+        let path = [];
+        let rootName = '';
+        let currentId = savedItem.category_id;
+        while (currentId) {
+            const cat = cats.find(c => c.id === currentId);
+            if (cat) { path.unshift(cat.name); rootName = cat.name; currentId = cat.parent_id; } else break;
+        }
+        const processed = { ...savedItem, fullName: `${path.join(' ')} ${savedItem.name}`.trim(), rootCategoryName: rootName };
+        setNomenclatures(prev => [...prev.filter(n => n.id !== processed.id), processed]);
+        addRow(processed.id);
+    };
 
     // Групування за кореневою категорією
     const grouped = (() => {
@@ -232,7 +264,7 @@ export default function ManualSpecBuilder({ isOpen, onClose, onSuccess, installa
 
                     {/* ADD BAR (sticky) */}
                     <div className="p-4 sm:p-5 pb-3 border-b border-slate-100 flex-shrink-0 bg-white">
-                        <AddPicker options={availableToAdd} onPick={addRow} />
+                        <AddPicker options={availableToAdd} onPick={addRow} onCreateNew={(name) => setQuickAdd({ open: true, name })} />
                         <div className="flex items-center gap-3 mt-2.5 text-[10px] text-slate-400 font-bold uppercase tracking-wider flex-wrap">
                             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-indigo-500 inline-block"></span> План (редагується)</span>
                             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span> Резерв</span>
@@ -319,6 +351,15 @@ export default function ManualSpecBuilder({ isOpen, onClose, onSuccess, installa
                     </div>
                 </motion.div>
             </motion.div>
+
+            {/* Швидке створення позиції номенклатури, якої немає в базі */}
+            <NomenclatureModal
+                isOpen={quickAdd.open}
+                onClose={() => setQuickAdd({ open: false, name: '' })}
+                onSuccess={handleQuickAddSuccess}
+                showToast={notify}
+                initialName={quickAdd.name}
+            />
         </AnimatePresence>
     );
 }

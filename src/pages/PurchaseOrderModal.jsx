@@ -5,6 +5,7 @@ import {
     FaFileExcel, FaUniversity, FaMoneyBillAlt, FaBoxOpen, FaTrash, FaBox, FaChevronDown 
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient'; // Перевірте шлях до вашого клієнта
+import { NomenclatureModal } from './NomenclatureModal';
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 // Оновлено URL на ваш Cloudflare Worker (якщо парсер знаходиться на головному маршруті, замініть на "https://quiet-water-a1ad.kairosost38500.workers.dev/")
@@ -121,7 +122,7 @@ const SearchableSelectWithAdd = ({ options, value, onChange, onAddNew, placehold
     );
 };
 
-const NomenclatureSelect = ({ options, value, onChange, placeholder = "Оберіть товар..." }) => {
+const NomenclatureSelect = ({ options, value, onChange, placeholder = "Оберіть товар...", onCreateNew }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
     const wrapperRef = useRef(null);
@@ -158,6 +159,17 @@ const NomenclatureSelect = ({ options, value, onChange, placeholder = "Обер�
                                 </div>
                             )) : <div className="px-4 py-4 text-sm text-slate-400 text-center">Нічого не знайдено</div>}
                         </div>
+                        {onCreateNew && (
+                            <div className="p-1.5 border-t border-slate-100 bg-slate-50 flex-shrink-0">
+                                <button
+                                    type="button"
+                                    onClick={() => { onCreateNew(search.trim()); setIsOpen(false); setSearch(''); }}
+                                    className="w-full py-2 bg-emerald-100 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+                                >
+                                    <FaPlus size={10} /> {search.trim() ? `Створити «${search.trim()}»` : 'Створити нову позицію'}
+                                </button>
+                            </div>
+                        )}
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -166,9 +178,45 @@ const NomenclatureSelect = ({ options, value, onChange, placeholder = "Обер�
 };
 
 export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initialMode = 'manual', editOrder = null, importFile = null, dictionaries, employee, showToast, onAddSupplier }) {
-    const { suppliers, installations, nomenclatures, systemMemory } = dictionaries;
+    const { suppliers, installations, nomenclatures: baseNoms, categories = [], systemMemory } = dictionaries;
     const [mode, setMode] = useState(initialMode);
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Позиції, створені "на льоту" через NomenclatureModal (ще відсутні у батьківському словнику)
+    const [extraNoms, setExtraNoms] = useState([]);
+    const nomenclatures = [...baseNoms.filter(b => !extraNoms.some(e => e.id === b.id)), ...extraNoms];
+
+    // Швидке створення номенклатури: target вказує, який рядок заповнити після збереження
+    const [quickAdd, setQuickAdd] = useState({ open: false, name: '', target: null }); // target: { mode: 'manual'|'import', index }
+
+    // Після створення позиції: додаємо її в список і підставляємо в рядок, з якого викликали
+    const handleQuickAddSuccess = (savedItem) => {
+        if (!savedItem) return;
+        let path = [];
+        let currentId = savedItem.category_id;
+        while (currentId) {
+            const cat = categories.find(c => c.id === currentId);
+            if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break;
+        }
+        const processed = { ...savedItem, fullName: `${path.join(' ')} ${savedItem.name}`.trim() };
+        setExtraNoms(prev => [...prev.filter(n => n.id !== processed.id), processed]);
+
+        const target = quickAdd.target;
+        if (target?.mode === 'manual') {
+            setOrderForm(prev => {
+                const newItems = [...prev.items];
+                if (newItems[target.index]) { newItems[target.index] = { ...newItems[target.index], nomenclature_id: processed.id, is_package: false }; }
+                return { ...prev, items: newItems };
+            });
+        } else if (target?.mode === 'import') {
+            setImportData(prev => {
+                const newArr = [...prev];
+                if (newArr[target.index]) { newArr[target.index] = { ...newArr[target.index], nomenclature_id: processed.id, is_package: false, auto: null }; }
+                return newArr;
+            });
+        }
+        setQuickAdd({ open: false, name: '', target: null });
+    };
 
     // Manual Form State
     const [orderForm, setOrderForm] = useState({
@@ -243,14 +291,21 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
             const data = await response.json();
             
             if (data.items && data.items.length > 0) {
-                const parsedItems = data.items.map(item => ({
-                    id: Math.random().toString(),
-                    supplier_item_name: item.name,
-                    quantity: parseInt(item.quantity, 10) || 1,
-                    unit_price: parseFloat(item.price) || 0,
-                    nomenclature_id: findBestMatch(item.name, systemMemory, nomenclatures),
-                    is_package: false
-                }));
+                const parsedItems = data.items.map(item => {
+                    const cleanName = String(item.name).toLowerCase().trim();
+                    const memMatch = systemMemory.find(m => String(m.supplier_item_name).toLowerCase().trim() === cleanName);
+                    const matchedId = memMatch ? memMatch.nomenclature_id : findBestMatch(item.name, systemMemory, nomenclatures);
+                    return {
+                        id: Math.random().toString(),
+                        supplier_item_name: item.name,
+                        quantity: parseInt(item.quantity, 10) || 1,
+                        unit_price: parseFloat(item.price) || 0,
+                        nomenclature_id: matchedId,
+                        // auto: звідки взялася прив'язка — 'memory' (словник співставлень) чи 'fuzzy' (схожість назв)
+                        auto: memMatch ? 'memory' : (matchedId ? 'fuzzy' : null),
+                        is_package: false
+                    };
+                });
                 setImportData(parsedItems);
                 setImportMeta({ payment_form: 'cashless', invoice_number: '', invoice_date: '', installation_custom_id: '', status: 'sent' });
                 showToast(`Знайдено позицій: ${parsedItems.length}. Перевірте відповідність.`, 'success');
@@ -304,17 +359,22 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
         });
         await supabase.from('purchase_order_items').insert(itemsPayload);
 
-        const newMappings = [];
+        // Оновлюємо словник співставлень: нові назви додаються, а виправлені прив'язки — перезаписуються
+        const changedMappings = [];
+        const seenNames = new Set();
         for (const item of orderData.items) {
-            if (item.supplier_item_name && item.nomenclature_id) {
-                if (!systemMemory.some(m => String(m.supplier_item_name).toLowerCase().trim() === String(item.supplier_item_name).toLowerCase().trim())) {
-                    newMappings.push({ supplier_item_name: item.supplier_item_name.trim(), nomenclature_id: item.nomenclature_id });
-                }
+            if (!item.supplier_item_name || !item.nomenclature_id) continue;
+            const cleanName = String(item.supplier_item_name).toLowerCase().trim();
+            if (seenNames.has(cleanName)) continue;
+            seenNames.add(cleanName);
+            const existing = systemMemory.find(m => String(m.supplier_item_name).toLowerCase().trim() === cleanName);
+            if (!existing || existing.nomenclature_id !== item.nomenclature_id) {
+                changedMappings.push({ supplier_item_name: item.supplier_item_name.trim(), nomenclature_id: item.nomenclature_id });
             }
         }
-        if (newMappings.length > 0) {
-            await supabase.from('supplier_mappings').upsert(newMappings, { onConflict: 'supplier_item_name' });
-            showToast(`Система запам'ятала ${newMappings.length} нових назв від постачальників! 🧠`, 'success');
+        if (changedMappings.length > 0) {
+            await supabase.from('supplier_mappings').upsert(changedMappings, { onConflict: 'supplier_item_name' });
+            showToast(`Система запам'ятала ${changedMappings.length} назв(и) від постачальників! 🧠`, 'success');
         }
     };
 
@@ -429,7 +489,7 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
                                                 <div key={index} className="flex flex-col gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
                                                     <div className="flex flex-wrap lg:flex-nowrap items-center gap-3">
                                                         <div className="flex-1 min-w-[250px] z-50">
-                                                            <NomenclatureSelect options={nomenclatures} value={item.nomenclature_id} onChange={val => { const newItems = [...orderForm.items]; newItems[index].nomenclature_id = val; newItems[index].is_package = false; setOrderForm({...orderForm, items: newItems}); }} />
+                                                            <NomenclatureSelect options={nomenclatures} value={item.nomenclature_id} onChange={val => { const newItems = [...orderForm.items]; newItems[index].nomenclature_id = val; newItems[index].is_package = false; setOrderForm({...orderForm, items: newItems}); }} onCreateNew={(name) => setQuickAdd({ open: true, name, target: { mode: 'manual', index } })} />
                                                         </div>
                                                         <div className="flex items-center gap-2 bg-white px-3 h-[38px] border border-slate-300 rounded-lg">
                                                             <input type="number" min="1" step="1" value={item.quantity} onChange={e => { const newItems = [...orderForm.items]; newItems[index].quantity = parseInt(e.target.value, 10) || ''; setOrderForm({...orderForm, items: newItems}); }} placeholder="К-сть" className="w-16 h-full text-sm text-center font-bold outline-none text-indigo-700"/>
@@ -542,7 +602,11 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
                                                     const hasPackage = selectedNom?.package_name && selectedNom?.package_multiplier;
                                                     return (
                                                         <tr key={item.id} className={`transition-colors ${hasError ? 'bg-red-50/20 hover:bg-red-50/40' : 'bg-white hover:bg-slate-50'}`}>
-                                                            <td className="px-4 py-3 align-middle border-r border-slate-100"><div className="text-sm font-bold text-slate-700">{item.supplier_item_name}</div></td>
+                                                            <td className="px-4 py-3 align-middle border-r border-slate-100">
+                                                                <div className="text-sm font-bold text-slate-700">{item.supplier_item_name}</div>
+                                                                {item.auto === 'memory' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">🧠 З пам'яті</span>}
+                                                                {item.auto === 'fuzzy' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">≈ Схоже — перевірте</span>}
+                                                            </td>
                                                             <td className="px-2 py-3 align-middle border-r border-slate-100 text-center">
                                                                 <div className="flex flex-col items-center justify-center h-full gap-1.5">
                                                                     <input type="number" min="1" step="1" value={item.quantity} onChange={e => { const newArr = [...importData]; newArr[index].quantity = parseInt(e.target.value, 10) || ''; setImportData(newArr); }} className="w-16 h-[38px] text-center text-sm font-black text-indigo-700 bg-slate-100 px-2 rounded-lg outline-none border border-slate-200" />
@@ -557,7 +621,7 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
                                                                 <input type="number" min="0" step="0.01" value={item.unit_price} onChange={e => { const newArr = [...importData]; newArr[index].unit_price = e.target.value; setImportData(newArr); }} className="w-24 h-[38px] text-right text-sm font-black text-emerald-700 bg-slate-100 px-2 rounded-lg outline-none border border-slate-200" />
                                                             </td>
                                                             <td className="px-4 py-3 align-middle">
-                                                                <NomenclatureSelect options={nomenclatures} value={item.nomenclature_id} placeholder="Оберіть наш товар..." onChange={val => { const newArr = [...importData]; newArr[index].nomenclature_id = val; newArr[index].is_package = false; setImportData(newArr); }} />
+                                                                <NomenclatureSelect options={nomenclatures} value={item.nomenclature_id} placeholder="Оберіть наш товар..." onChange={val => { const newArr = [...importData]; newArr[index].nomenclature_id = val; newArr[index].is_package = false; newArr[index].auto = null; setImportData(newArr); }} onCreateNew={(name) => setQuickAdd({ open: true, name: name || item.supplier_item_name, target: { mode: 'import', index } })} />
                                                                 {hasError && <div className="text-[10px] text-red-500 font-bold mt-1">Обов'язково зв'яжіть товар!</div>}
                                                             </td>
                                                             <td className="px-2 py-3 align-middle text-center">
@@ -586,6 +650,15 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
                     </motion.div>
                 )}
             </motion.div>
+
+            {/* Швидке створення позиції номенклатури, якої ще немає в базі */}
+            <NomenclatureModal
+                isOpen={quickAdd.open}
+                onClose={() => setQuickAdd({ open: false, name: '', target: null })}
+                onSuccess={handleQuickAddSuccess}
+                showToast={showToast}
+                initialName={quickAdd.name}
+            />
         </AnimatePresence>
     );
 }

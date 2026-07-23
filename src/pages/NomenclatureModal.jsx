@@ -78,10 +78,11 @@ const SearchableSelect = ({ options, value, onChange, placeholder, disabled = fa
 // Props:
 //   isOpen       — boolean, чи відкрита модалка
 //   onClose      — fn, закрити без дій
-//   onSuccess    — fn, викликається після успішного збереження (наприклад, loadData)
+//   onSuccess    — fn(savedItem), викликається після успішного збереження; отримує збережений запис (з unit)
 //   showToast    — fn(message, type), показати повідомлення батьківського компонента
 //   editingItem  — object | null, якщо передано — режим редагування
-export function NomenclatureModal({ isOpen, onClose, onSuccess, showToast, editingItem = null }) {
+//   initialName  — string, предзаповнена назва при створенні (для швидкого додавання з інших модалок)
+export function NomenclatureModal({ isOpen, onClose, onSuccess, showToast, editingItem = null, initialName = '' }) {
     const { employee } = useAuth();
 
     const [categories, setCategories] = useState([]);
@@ -138,11 +139,11 @@ export function NomenclatureModal({ isOpen, onClose, onSuccess, showToast, editi
                 description: editingItem.description || ''
             });
         } else {
-            setFormData(initialForm);
+            setFormData({ ...initialForm, name: initialName || '' });
         }
         setShowUnitForm(false);
         setNewUnit({ name: '', code: '' });
-    }, [isOpen, editingItem]);
+    }, [isOpen, editingItem, initialName]);
 
     const getCategoryFullName = useCallback((categoryId) => {
         let path = [];
@@ -220,19 +221,22 @@ export function NomenclatureModal({ isOpen, onClose, onSuccess, showToast, editi
                 updated_by: employee?.id
             };
 
+            let savedItem = null;
             if (editingItem) {
-                const { error } = await supabase.from('nomenclature').update(payload).eq('id', editingItem.id);
+                const { data, error } = await supabase.from('nomenclature').update(payload).eq('id', editingItem.id).select('*, unit:units(name)').single();
                 if (error) throw error;
+                savedItem = data;
                 showToast('Позицію оновлено', 'success');
             } else {
                 payload.created_by = employee?.id;
-                const { error } = await supabase.from('nomenclature').insert([payload]);
+                const { data, error } = await supabase.from('nomenclature').insert([payload]).select('*, unit:units(name)').single();
                 if (error) throw error;
+                savedItem = data;
                 showToast('Позицію створено', 'success');
             }
 
             onClose();
-            onSuccess();
+            onSuccess(savedItem);
         } catch (error) {
             if (error.code === '23505') showToast('Позиція з таким артикулом (SKU) вже існує', 'error');
             else showToast(error.message, 'error');
@@ -246,7 +250,7 @@ export function NomenclatureModal({ isOpen, onClose, onSuccess, showToast, editi
             {isOpen && (
                 <motion.div
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                    className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-[75]"
+                    className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-[120]"
                     onClick={onClose}
                 >
                     <motion.div

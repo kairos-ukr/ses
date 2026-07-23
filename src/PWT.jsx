@@ -14,6 +14,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
 import ManualSpecBuilder from "./pages/ManualSpecBuilder";
+import { NomenclatureModal } from "./pages/NomenclatureModal";
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 const OCR_API_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev/parse-pdf';
@@ -197,7 +198,7 @@ const getEmployeeNameStr = (customId, employees) => {
 // 3. UI КОМПОНЕНТИ ТА ВІДЖЕТИ
 // ==================================================================================
 
-const NomenclatureSelect = ({ options, value, onChange, placeholder, hasError }) => {
+const NomenclatureSelect = ({ options, value, onChange, placeholder, hasError, onCreateNew }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
     const wrapperRef = useRef(null);
@@ -255,6 +256,17 @@ const NomenclatureSelect = ({ options, value, onChange, placeholder, hasError })
                                 </div>
                             )) : <div className="px-4 py-4 text-sm text-slate-400 text-center">Нічого не знайдено</div>}
                         </div>
+                        {onCreateNew && (
+                            <div className="p-1.5 border-t border-slate-100 bg-slate-50 flex-shrink-0">
+                                <button
+                                    type="button"
+                                    onClick={() => { onCreateNew(search.trim()); setIsOpen(false); setSearch(''); }}
+                                    className="w-full py-2 bg-emerald-100 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+                                >
+                                    <FaPlus size={10} /> {search.trim() ? `Створити «${search.trim()}»` : 'Створити нову позицію'}
+                                </button>
+                            </div>
+                        )}
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -262,10 +274,41 @@ const NomenclatureSelect = ({ options, value, onChange, placeholder, hasError })
     );
 };
 
-function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess, nomenclatures, employee }) {
+function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess, nomenclatures, categories = [], employee }) {
     const [isParsing, setIsParsing] = useState(true);
     const [mappedItems, setMappedItems] = useState([]);
     const [error, setError] = useState(null);
+
+    // Пам'ять співставлень (supplier_mappings): "назва з документа" -> номенклатура
+    const [memory, setMemory] = useState([]);
+    // Позиції, створені "на льоту" (їх ще немає у списку nomenclatures з пропсів)
+    const [extraNoms, setExtraNoms] = useState([]);
+    const [quickAdd, setQuickAdd] = useState({ open: false, name: '', rowIndex: null });
+
+    const allNoms = [...nomenclatures.filter(n => !extraNoms.some(e => e.id === n.id)), ...extraNoms];
+
+    const notify = (m, t) => { if (t === 'error') alert(m); };
+
+    const handleQuickAddSuccess = (savedItem) => {
+        if (!savedItem) return;
+        let path = [];
+        let currentId = savedItem.category_id;
+        while (currentId) {
+            const cat = categories.find(c => c.id === currentId);
+            if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break;
+        }
+        const categoryPath = path.join(' › ');
+        const processed = { ...savedItem, categoryPath, fullName: categoryPath ? `${categoryPath} › ${savedItem.name}` : savedItem.name };
+        setExtraNoms(prev => [...prev.filter(n => n.id !== processed.id), processed]);
+        setMappedItems(prev => {
+            const idx = quickAdd.rowIndex;
+            if (idx === null || !prev[idx]) return prev;
+            const newArr = [...prev];
+            newArr[idx] = { ...newArr[idx], nomenclature_id: processed.id, auto: null };
+            return newArr;
+        });
+        setQuickAdd({ open: false, name: '', rowIndex: null });
+    };
 
     const autoMatchItem = useCallback((originalName) => {
         if (!originalName || !nomenclatures.length) return '';
@@ -324,6 +367,14 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
 
     useEffect(() => {
         const parseFile = async () => {
+            // Спершу підтягуємо словник співставлень — точні збіги мають пріоритет над скорингом
+            let memRows = [];
+            try {
+                const { data: memData } = await supabase.from('supplier_mappings').select('*');
+                memRows = memData || [];
+            } catch { /* без словника працюємо лише на скорингу */ }
+            setMemory(memRows);
+
             const formData = new FormData();
             formData.append('file', file);
             try {
@@ -334,13 +385,26 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
                 }
                 const data = await response.json();
                 if (data.items && data.items.length > 0) {
-                    const initialMapping = data.items.map(item => ({
-                        id: Math.random().toString(36).substr(2, 9),
-                        original_name: item.original_name + (item.technical_chars ? ` (${item.technical_chars})` : ''),
-                        quantity: parseFloat(item.quantity) || 1,
-                        unit: item.unit || 'шт',
-                        nomenclature_id: autoMatchItem(item.original_name + (item.technical_chars ? ` ${item.technical_chars}` : ''))
-                    }));
+                    const initialMapping = data.items.map(item => {
+                        const rawName = item.original_name + (item.technical_chars ? ` ${item.technical_chars}` : '');
+                        const displayName = item.original_name + (item.technical_chars ? ` (${item.technical_chars})` : '');
+                        const cleanRaw = rawName.toLowerCase().trim();
+                        const cleanDisplay = displayName.toLowerCase().trim();
+                        const memMatch = memRows.find(m => {
+                            const mName = String(m.supplier_item_name).toLowerCase().trim();
+                            return mName === cleanRaw || mName === cleanDisplay;
+                        });
+                        const matchedId = memMatch ? memMatch.nomenclature_id : autoMatchItem(rawName);
+                        return {
+                            id: Math.random().toString(36).substr(2, 9),
+                            original_name: displayName,
+                            quantity: parseFloat(item.quantity) || 1,
+                            unit: item.unit || 'шт',
+                            nomenclature_id: matchedId,
+                            // auto: джерело прив'язки — 'memory' (словник) чи 'fuzzy' (скоринг за схожістю)
+                            auto: memMatch ? 'memory' : (matchedId ? 'fuzzy' : null)
+                        };
+                    });
                     setMappedItems(initialMapping);
                 } else {
                     setError('Не вдалося знайти таблицю специфікації у PDF файлі.');
@@ -388,6 +452,24 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
             }));
             const { error: iErr } = await supabase.from('specification_items').insert(itemsPayload);
             if (iErr) throw iErr;
+
+            // Запам'ятовуємо співставлення "назва з документа -> наш товар":
+            // нові назви додаються, виправлені прив'язки — перезаписуються
+            const changedMappings = [];
+            const seenNames = new Set();
+            for (const item of mappedItems) {
+                if (!item.original_name || !item.nomenclature_id) continue;
+                const cleanName = String(item.original_name).toLowerCase().trim();
+                if (seenNames.has(cleanName)) continue;
+                seenNames.add(cleanName);
+                const existing = memory.find(m => String(m.supplier_item_name).toLowerCase().trim() === cleanName);
+                if (!existing || existing.nomenclature_id !== item.nomenclature_id) {
+                    changedMappings.push({ supplier_item_name: item.original_name.trim(), nomenclature_id: item.nomenclature_id });
+                }
+            }
+            if (changedMappings.length > 0) {
+                await supabase.from('supplier_mappings').upsert(changedMappings, { onConflict: 'supplier_item_name' });
+            }
 
             onSuccess();
         } catch (err) {
@@ -447,6 +529,8 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
                                                             onChange={e => { const newArr = [...mappedItems]; newArr[index].original_name = e.target.value; setMappedItems(newArr); }}
                                                             className="w-full text-sm font-medium text-slate-700 bg-transparent border-0 border-b border-dashed border-slate-200 focus:border-indigo-400 outline-none py-1 leading-tight"
                                                         />
+                                                        {item.auto === 'memory' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">🧠 З пам'яті</span>}
+                                                        {item.auto === 'fuzzy' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">≈ Схоже — перевірте</span>}
                                                     </td>
                                                     <td className="px-2 py-4 align-middle border-r border-slate-200 text-center">
                                                         <div className="inline-flex items-center gap-1 bg-slate-100 px-2 py-1 rounded border border-slate-200">
@@ -455,7 +539,7 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
                                                         </div>
                                                     </td>
                                                     <td className="px-4 py-4 align-middle border-l-2 border-indigo-100">
-                                                        <NomenclatureSelect options={nomenclatures} value={item.nomenclature_id} hasError={hasError} placeholder="Натисніть та оберіть товар" onChange={val => { const newArr = [...mappedItems]; newArr[index].nomenclature_id = val; setMappedItems(newArr); }}/>
+                                                        <NomenclatureSelect options={allNoms} value={item.nomenclature_id} hasError={hasError} placeholder="Натисніть та оберіть товар" onChange={val => { const newArr = [...mappedItems]; newArr[index].nomenclature_id = val; newArr[index].auto = null; setMappedItems(newArr); }} onCreateNew={(name) => setQuickAdd({ open: true, name: name || item.original_name, rowIndex: index })}/>
                                                     </td>
                                                     <td className="px-4 py-4 align-middle text-center">
                                                         <button onClick={() => { const newArr = mappedItems.filter((_, i) => i !== index); setMappedItems(newArr); }} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><FaTrash size={16}/></button>
@@ -477,6 +561,15 @@ function SpecOcrMappingModal({ file, installationId, taskId, onClose, onSuccess,
                     )}
                 </motion.div>
             </motion.div>
+
+            {/* Швидке створення позиції номенклатури, якої немає в базі */}
+            <NomenclatureModal
+                isOpen={quickAdd.open}
+                onClose={() => setQuickAdd({ open: false, name: '', rowIndex: null })}
+                onSuccess={handleQuickAddSuccess}
+                showToast={notify}
+                initialName={quickAdd.name}
+            />
         </AnimatePresence>
     );
 }
@@ -652,7 +745,7 @@ function DesignVariantInline({ installationId }) {
   );
 }
 
-function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId, nomenclatures }) {
+function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId, nomenclatures, categories }) {
   const [newComment, setNewComment] = useState("");
   
   let statusOptions = STATUS_CONFIG.default;
@@ -833,6 +926,7 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
               installationId={installationId}
               taskId={task.id}
               nomenclatures={nomenclatures}
+              categories={categories}
               onClose={() => setOcrFile(null)}
               onSuccess={() => {
                   setOcrFile(null);
@@ -856,7 +950,7 @@ function TaskInlineEditor({ task, stageGroupKey, onAddUpdate, isLoading, employe
   );
 }
 
-function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId, nomenclatures }) {
+function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpdate, isLoading, employees, installationId, currentUserEmpId, nomenclatures, categories }) {
   const isDone = ["done", "launched", "approved", "selected", "completed", "done_on_site", "arrived", "created"].includes(task.status);
   let statusMeta;
   if (task.id === "project_approval") statusMeta = STATUS_CONFIG.project_selector.find(s => s.key === task.status) || STATUS_CONFIG.project_selector[0];
@@ -899,7 +993,7 @@ function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpd
           {task.id === "project_approval" ? (
              <DesignVariantInline installationId={installationId} />
           ) : (
-             <TaskInlineEditor task={task} stageGroupKey={stageGroupKey} onAddUpdate={onAddUpdate} isLoading={isLoading} employees={employees} installationId={installationId} currentUserEmpId={currentUserEmpId} nomenclatures={nomenclatures} />
+             <TaskInlineEditor task={task} stageGroupKey={stageGroupKey} onAddUpdate={onAddUpdate} isLoading={isLoading} employees={employees} installationId={installationId} currentUserEmpId={currentUserEmpId} nomenclatures={nomenclatures} categories={categories} />
           )}
         </div>
       </div>
@@ -1137,6 +1231,7 @@ export default function FieldWorkflow({ project }) {
   const [tasks, setTasks] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [nomenclatures, setNomenclatures] = useState([]);
+  const [categoriesDict, setCategoriesDict] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   
@@ -1156,6 +1251,7 @@ export default function FieldWorkflow({ project }) {
       setEmployees(Array.isArray(empRes.data) ? empRes.data : []);
 
       const cats = catRes.data || [];
+      setCategoriesDict(cats);
       const processedNom = (nomRes.data || []).map(item => {
           let path = [];
           let currentId = item.category_id;
@@ -1313,6 +1409,7 @@ export default function FieldWorkflow({ project }) {
                   isLoading={saveLoading}
                   employees={employees}
                   nomenclatures={nomenclatures}
+                  categories={categoriesDict}
                   installationId={installationId}
                   currentUserEmpId={currentUserEmpId}
                 />

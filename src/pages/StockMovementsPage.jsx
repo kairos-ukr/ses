@@ -51,7 +51,10 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
     const { employee, loading: authLoading } = useAuth();
 
     const [movements, setMovements] = useState([]);
+    const [totalCount, setTotalCount] = useState(0);
+    const [returnedBySource, setReturnedBySource] = useState({});
     const [loading, setLoading] = useState(true);
+    const [dictsReady, setDictsReady] = useState(false);
 
     // Редагування інфо-полів руху
     const [editModal, setEditModal] = useState({ isOpen: false, mov: null });
@@ -75,10 +78,19 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
     const [typeFilter, setTypeFilter] = useState('all');
     const [dateFrom, setDateFrom] = useState('');
     const [dateTo, setDateTo] = useState('');
-    
-    // Пагінація
+    const [clientFilter, setClientFilter] = useState('');   // контрагент (клієнт/партнер)
+    const [instFilter, setInstFilter] = useState('');       // об'єкт
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+
+    // Пагінація (серверна)
     const [currentPage, setCurrentPage] = useState(1);
     const ITEMS_PER_PAGE = 10;
+
+    // Дебаунс пошуку, щоб не смикати базу на кожне натискання клавіші
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(externalSearch), 400);
+        return () => clearTimeout(t);
+    }, [externalSearch]);
 
     // --- ВІДСТЕЖЕННЯ СИГНАЛУ НА ВІДКРИТТЯ МОДАЛКИ ПРОДАЖУ ---
     const prevActionTrigger = useRef(externalActionTrigger);
@@ -90,17 +102,9 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
         prevActionTrigger.current = externalActionTrigger;
     }, [externalActionTrigger]);
 
-    // --- ЗАВАНТАЖЕННЯ ДАНИХ ---
-    const loadData = useCallback(async () => {
-        setLoading(true);
+    // --- ЗАВАНТАЖЕННЯ ДОВІДНИКІВ (один раз) ---
+    const loadDicts = useCallback(async () => {
         try {
-            const { data: movData, error: movErr } = await supabase
-                .from('stock_movements')
-                .select('*')
-                .order('operation_date', { ascending: false })
-                .limit(1500); 
-            if (movErr) throw movErr;
-
             const [nomRes, catRes, empRes, whRes, instRes, supRes, poRes, poItemsRes, resRes, clientsRes] = await Promise.all([
                 supabase.from('nomenclature').select('id, name, sku, category_id, unit:units(code, name)'),
                 supabase.from('categories').select('id, name, parent_id'),
@@ -142,15 +146,76 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             });
 
             setDicts(d);
-            setMovements(movData || []);
+            setDictsReady(true);
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    }, [showToast]);
+
+    useEffect(() => { if (!authLoading) loadDicts(); }, [authLoading, loadDicts]);
+
+    // --- СЕРВЕРНІ ФІЛЬТРИ (спільні для сторінки та експорту) ---
+    const applyFilters = useCallback((query) => {
+        if (typeFilter !== 'all') query = query.eq('operation_type', typeFilter);
+        if (dateFrom) query = query.gte('operation_date', dateFrom);
+        if (dateTo) query = query.lte('operation_date', dateTo + 'T23:59:59.999');
+        if (clientFilter) query = query.eq('client_id', parseInt(clientFilter));
+        if (instFilter) query = query.eq('installation_custom_id', parseInt(instFilter));
+
+        const term = debouncedSearch.trim().toLowerCase();
+        if (term) {
+            // Пошук по товару робимо через довідник номенклатури (він у пам'яті), по документу/коментарю — через ilike
+            const nomIds = Object.entries(dicts.nom)
+                .filter(([, n]) => n.fullName.toLowerCase().includes(term) || (n.sku && String(n.sku).toLowerCase().includes(term)))
+                .map(([id]) => id)
+                .slice(0, 300);
+            const safe = term.replace(/[,()"'\\%]/g, ' ').trim();
+            const orParts = [];
+            if (safe) {
+                orParts.push(`reference_document.ilike.%${safe}%`);
+                orParts.push(`notes.ilike.%${safe}%`);
+            }
+            if (nomIds.length) orParts.push(`nomenclature_id.in.(${nomIds.join(',')})`);
+            if (orParts.length) query = query.or(orParts.join(','));
+            else query = query.eq('id', -1); // нічого не знайдено
+        }
+        return query;
+    }, [typeFilter, dateFrom, dateTo, clientFilter, instFilter, debouncedSearch, dicts.nom]);
+
+    // --- ЗАВАНТАЖЕННЯ СТОРІНКИ РУХІВ (по 10 записів з бази) ---
+    const loadMovements = useCallback(async () => {
+        if (!dictsReady) return;
+        setLoading(true);
+        try {
+            let query = supabase.from('stock_movements').select('*', { count: 'exact' });
+            query = applyFilters(query);
+            query = query.order('operation_date', { ascending: false })
+                .range((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE - 1);
+            const { data, count, error } = await query;
+            if (error) throw error;
+            setMovements(data || []);
+            setTotalCount(count || 0);
+
+            // Скільки вже повернено по операціях цієї сторінки
+            const ids = (data || []).map(m => m.id);
+            if (ids.length > 0) {
+                const { data: rets } = await supabase.from('stock_movements')
+                    .select('source_movement_id, quantity')
+                    .in('source_movement_id', ids);
+                const map = {};
+                (rets || []).forEach(r => { map[r.source_movement_id] = (map[r.source_movement_id] || 0) + parseFloat(r.quantity); });
+                setReturnedBySource(map);
+            } else {
+                setReturnedBySource({});
+            }
         } catch (error) {
             showToast(error.message, 'error');
         } finally {
             setLoading(false);
         }
-    }, [showToast]);
+    }, [dictsReady, currentPage, applyFilters, showToast]);
 
-    useEffect(() => { if (!authLoading) loadData(); }, [authLoading, loadData]);
+    useEffect(() => { loadMovements(); }, [loadMovements]);
 
     // --- ФОРМАТУВАННЯ МІТОК ОБ'ЄКТА / КЛІЄНТА (назва + ID, без службових слів) ---
     const getInstallationLabel = (customId) => {
@@ -227,65 +292,57 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
         return { conf, nom, empName, routeStr, docStr };
     };
 
-    // --- ФІЛЬТРАЦІЯ ТА ПАГІНАЦІЯ ---
-    const processedMovements = movements.map(m => ({ ...m, ...buildRowData(m) }));
-
-    // Скільки вже повернено по кожній вихідній операції
-    const returnedBySource = {};
-    movements.forEach(m => {
-        if (m.operation_type === 'return' && m.source_movement_id) {
-            returnedBySource[m.source_movement_id] = (returnedBySource[m.source_movement_id] || 0) + parseFloat(m.quantity);
-        }
-    });
+    // --- ДАНІ ПОТОЧНОЇ СТОРІНКИ (фільтрація і пагінація — на сервері) ---
+    const paginatedItems = movements.map(m => ({ ...m, ...buildRowData(m) }));
     const DISPATCH_TYPES = ['issue', 'sale', 'partner_transfer'];
+    const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
 
-    const filteredMovements = processedMovements.filter(m => {
-        const term = externalSearch.toLowerCase();
-        const matchesSearch = 
-            m.nom.fullName.toLowerCase().includes(term) || 
-            (m.nom.sku && m.nom.sku.toLowerCase().includes(term)) ||
-            m.docStr.toLowerCase().includes(term) ||
-            m.routeStr.toLowerCase().includes(term) ||
-            m.empName.toLowerCase().includes(term);
-            
-        const matchesType = typeFilter === 'all' || m.operation_type === typeFilter;
+    // Скидання сторінки при зміні будь-якого фільтра
+    useEffect(() => { setCurrentPage(1); }, [debouncedSearch, typeFilter, dateFrom, dateTo, clientFilter, instFilter]);
 
-        const opDate = new Date(m.operation_date || m.created_at);
-        const matchesDateFrom = !dateFrom || opDate >= new Date(dateFrom);
-        const matchesDateTo = !dateTo || opDate <= new Date(dateTo + 'T23:59:59.999Z');
+    // Опції для фільтрів контрагента та об'єкта
+    const clientOptions = Object.entries(dicts.clients)
+        .map(([id, c]) => ({ id, name: c.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    const instOptions = Object.entries(dicts.inst)
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
-        return matchesSearch && matchesType && matchesDateFrom && matchesDateTo;
-    });
+    // --- ЕКСПОРТ В EXCEL (тягне з бази всі записи за поточними фільтрами) ---
+    const handleExportExcel = async () => {
+        try {
+            let query = supabase.from('stock_movements').select('*');
+            query = applyFilters(query);
+            query = query.order('operation_date', { ascending: false }).limit(3000);
+            const { data, error } = await query;
+            if (error) throw error;
 
-    const totalPages = Math.ceil(filteredMovements.length / ITEMS_PER_PAGE);
-    const paginatedItems = filteredMovements.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+            const dataToExport = (data || []).map(raw => {
+                const m = { ...raw, ...buildRowData(raw) };
+                const d = new Date(m.operation_date || m.created_at);
+                return {
+                    'Дата': d.toLocaleDateString('uk-UA'),
+                    'Час': d.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' }),
+                    'Операція': m.conf.label,
+                    'Назва товару': m.nom.fullName,
+                    'SKU': m.nom.sku || '',
+                    'Кількість': `${m.conf.sign !== '0' ? m.conf.sign : ''}${parseFloat(m.quantity)}`,
+                    'Од. вим.': m.nom.unitCode,
+                    'Ціна (якщо продаж)': m.sale_price ? `${parseFloat(m.sale_price)} ${m.currency}` : '',
+                    'Документ': m.docStr,
+                    'Маршрут (Звідки -> Куди)': m.routeStr,
+                    'Відповідальний': m.empName,
+                    'Коментар': m.notes || ''
+                };
+            });
 
-    useEffect(() => { setCurrentPage(1); }, [externalSearch, typeFilter, dateFrom, dateTo]);
-
-    // --- ЕКСПОРТ В EXCEL ---
-    const handleExportExcel = () => {
-        const dataToExport = filteredMovements.map(m => {
-            const d = new Date(m.operation_date || m.created_at);
-            return {
-                'Дата': d.toLocaleDateString('uk-UA'),
-                'Час': d.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' }),
-                'Операція': m.conf.label,
-                'Назва товару': m.nom.fullName,
-                'SKU': m.nom.sku || '',
-                'Кількість': `${m.conf.sign !== '0' ? m.conf.sign : ''}${parseFloat(m.quantity)}`,
-                'Од. вим.': m.nom.unitCode,
-                'Ціна (якщо продаж)': m.sale_price ? `${parseFloat(m.sale_price)} ${m.currency}` : '',
-                'Документ': m.docStr,
-                'Маршрут (Звідки -> Куди)': m.routeStr,
-                'Відповідальний': m.empName,
-                'Коментар': m.notes || ''
-            };
-        });
-
-        const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Рух_Товарів");
-        XLSX.writeFile(workbook, `Рух_Товарів_${new Date().toISOString().slice(0,10)}.xlsx`);
+            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Рух_Товарів");
+            XLSX.writeFile(workbook, `Рух_Товарів_${new Date().toISOString().slice(0,10)}.xlsx`);
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
     };
 
     // --- РЕДАГУВАННЯ ІНФО-ПОЛІВ РУХУ ---
@@ -331,7 +388,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             if (error) throw error;
             showToast('Запис оновлено', 'success');
             setEditModal({ isOpen: false, mov: null });
-            loadData();
+            loadMovements();
         } catch (error) {
             showToast(error.message, 'error');
         } finally {
@@ -364,7 +421,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             if (data && data.ok === false) return showToast(data.message || 'Повернення відхилено', 'error');
             showToast(`Повернення проведено (${qty} ${mov.nom?.unitCode || ''})`, 'success');
             setReturnModal({ isOpen: false, mov: null, maxQty: 0 });
-            loadData();
+            loadMovements();
         } catch (error) {
             showToast(error.message, 'error');
         } finally {
@@ -378,31 +435,75 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
         <div className="flex flex-col h-full w-full">
             <Toast {...toast} onClose={() => setToast(prev => ({ ...prev, isVisible: false }))} />
 
-            {/* --- ФІЛЬТРИ ТА ЕКСПОРТ --- */}
-            <div className="flex flex-col xl:flex-row gap-4 mb-4 bg-white p-4 rounded-[16px] border border-slate-200 shadow-sm flex-none">
-                
-                <div className="flex-1 flex flex-col sm:flex-row gap-4 items-center">
-                    <div className="flex items-center gap-3 bg-slate-50 px-4 py-2.5 rounded-xl border border-transparent focus-within:bg-white focus-within:border-indigo-300 transition-colors w-full sm:w-auto">
-                        <FaCalendarAlt className="text-slate-400 flex-shrink-0" />
-                        <div className="flex items-center gap-2">
-                            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="bg-transparent text-sm font-bold text-slate-700 outline-none cursor-pointer" title="Початкова дата" />
-                            <span className="text-slate-400 font-bold">-</span>
-                            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="bg-transparent text-sm font-bold text-slate-700 outline-none cursor-pointer" title="Кінцева дата" />
-                        </div>
-                    </div>
-                    
-                    <div className="flex bg-slate-50 rounded-xl p-1.5 overflow-x-auto hide-scrollbar w-full sm:w-auto">
-                        <button onClick={() => setTypeFilter('all')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'all' ? 'bg-[#0F172A] text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Всі</button>
-                        <button onClick={() => setTypeFilter('purchase')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'purchase' ? 'bg-emerald-100 text-emerald-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Приходи</button>
-                        <button onClick={() => setTypeFilter('issue')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'issue' ? 'bg-amber-100 text-amber-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Видачі</button>
-                        <button onClick={() => setTypeFilter('sale')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'sale' ? 'bg-blue-100 text-blue-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Продажі</button>
-                        <button onClick={() => setTypeFilter('return')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'return' ? 'bg-teal-100 text-teal-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Повернення</button>
-                        <button onClick={() => setTypeFilter('transfer')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${typeFilter === 'transfer' ? 'bg-indigo-100 text-indigo-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Переміщення</button>
-                    </div>
+            {/* --- ФІЛЬТРИ ТА ЕКСПОРТ (компактний тулбар, переноситься на вузьких екранах) --- */}
+            <div className="flex flex-wrap items-center gap-2 mb-4 bg-white p-3 rounded-[16px] border border-slate-200 shadow-sm flex-none">
+                {/* Тип операції */}
+                <select
+                    value={typeFilter}
+                    onChange={e => setTypeFilter(e.target.value)}
+                    className={`h-10 px-3 rounded-xl border text-[13px] font-bold outline-none cursor-pointer transition-colors flex-1 sm:flex-none sm:w-auto min-w-[130px] ${typeFilter !== 'all' ? 'bg-indigo-50 border-indigo-300 text-indigo-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
+                    title="Тип операції"
+                >
+                    <option value="all">Всі операції</option>
+                    <option value="purchase">Приходи</option>
+                    <option value="issue">Видачі</option>
+                    <option value="sale">Продажі</option>
+                    <option value="partner_transfer">Передачі</option>
+                    <option value="return">Повернення</option>
+                    <option value="transfer">Переміщення</option>
+                    <option value="writeoff">Списання</option>
+                    <option value="reserve">Резерви</option>
+                    <option value="unreserve">Зняття резерву</option>
+                </select>
+
+                {/* Період */}
+                <div className={`h-10 flex items-center gap-1.5 px-3 rounded-xl border transition-colors flex-1 sm:flex-none ${(dateFrom || dateTo) ? 'bg-indigo-50 border-indigo-300' : 'bg-slate-50 border-slate-200'}`}>
+                    <FaCalendarAlt className="text-slate-400 text-xs flex-shrink-0" />
+                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 outline-none cursor-pointer w-[105px]" title="Початкова дата" />
+                    <span className="text-slate-300 font-bold">–</span>
+                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 outline-none cursor-pointer w-[105px]" title="Кінцева дата" />
                 </div>
 
-                <button onClick={handleExportExcel} className="flex items-center justify-center gap-2 px-6 py-2.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl font-bold hover:bg-emerald-100 transition-colors flex-shrink-0 shadow-sm w-full xl:w-auto">
-                    <FaFileExcel size={16} /> Експортувати в Excel
+                {/* Контрагент (кому продали / передали) */}
+                <select
+                    value={clientFilter}
+                    onChange={e => setClientFilter(e.target.value)}
+                    className={`h-10 px-3 rounded-xl border text-[13px] font-bold outline-none cursor-pointer transition-colors flex-1 min-w-[140px] sm:max-w-[190px] ${clientFilter ? 'bg-violet-50 border-violet-300 text-violet-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
+                    title="Фільтр за контрагентом (продажі та передачі)"
+                >
+                    <option value="">Контрагент: всі</option>
+                    {clientOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+
+                {/* Об'єкт */}
+                <select
+                    value={instFilter}
+                    onChange={e => setInstFilter(e.target.value)}
+                    className={`h-10 px-3 rounded-xl border text-[13px] font-bold outline-none cursor-pointer transition-colors flex-1 min-w-[140px] sm:max-w-[190px] ${instFilter ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
+                    title="Фільтр за об'єктом"
+                >
+                    <option value="">Об'єкт: всі</option>
+                    {instOptions.map(i => <option key={i.id} value={i.id}>#{i.id} {i.name}</option>)}
+                </select>
+
+                {/* Скинути фільтри */}
+                {(typeFilter !== 'all' || dateFrom || dateTo || clientFilter || instFilter) && (
+                    <button
+                        onClick={() => { setTypeFilter('all'); setDateFrom(''); setDateTo(''); setClientFilter(''); setInstFilter(''); }}
+                        className="h-10 px-3 rounded-xl text-xs font-bold text-red-600 bg-red-50 border border-red-100 hover:bg-red-100 transition-colors flex items-center gap-1.5"
+                        title="Скинути всі фільтри"
+                    >
+                        <FaTimes size={11} /> Скинути
+                    </button>
+                )}
+
+                {/* Експорт */}
+                <button
+                    onClick={handleExportExcel}
+                    className="h-10 w-10 ml-auto flex items-center justify-center bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl hover:bg-emerald-100 transition-colors flex-shrink-0 shadow-sm"
+                    title="Експортувати в Excel (за поточними фільтрами)"
+                >
+                    <FaFileExcel size={16} />
                 </button>
             </div>
 
@@ -521,10 +622,10 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             </div>
 
             {/* --- ПАГІНАЦІЯ --- */}
-            {filteredMovements.length > 0 && (
+            {totalCount > 0 && (
                 <div className="flex justify-between items-center bg-white px-5 py-3.5 rounded-[16px] border border-slate-200 shadow-sm flex-none">
                     <span className="text-sm text-slate-500 font-medium">
-                        Показано <span className="font-bold text-slate-800">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-bold text-slate-800">{Math.min(currentPage * ITEMS_PER_PAGE, filteredMovements.length)}</span> із <span className="font-bold text-slate-800">{filteredMovements.length}</span>
+                        Показано <span className="font-bold text-slate-800">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-bold text-slate-800">{Math.min(currentPage * ITEMS_PER_PAGE, totalCount)}</span> із <span className="font-bold text-slate-800">{totalCount}</span>
                     </span>
                     <div className="flex items-center gap-2">
                         <button 
@@ -552,7 +653,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             <DirectSaleModal
                 isOpen={isSaleModalOpen}
                 onClose={() => setIsSaleModalOpen(false)}
-                onSuccess={loadData}
+                onSuccess={loadMovements}
                 showToast={showToast}
             />
             }
