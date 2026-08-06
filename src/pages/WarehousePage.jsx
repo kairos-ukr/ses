@@ -3,12 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
     FaSearch, FaChevronDown, FaPlus, FaMinus, FaExchangeAlt, 
     FaWarehouse, FaCheck, FaExclamationTriangle, FaTimes, FaFileExcel,
-    FaMapMarkerAlt, FaHardHat, FaInfoCircle, FaEdit, FaBox
+    FaMapMarkerAlt, FaHardHat, FaInfoCircle, FaEdit, FaBox, FaHistory
 } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
 import { NomenclatureModal } from './NomenclatureModal';
+import ItemMovementHistoryModal from './ItemMovementHistoryModal';
 
 // --- Toast ---
 const Toast = memo(({ message, type = 'success', isVisible, onClose }) => {
@@ -59,6 +60,9 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
     // Модалка — номенклатура
     const [isNomenclatureModalOpen, setIsNomenclatureModalOpen] = useState(false);
     const [editingNomenclatureItem, setEditingNomenclatureItem] = useState(null);
+
+    // Модалка — історія руху товару (по кліку на товар / на склад у розгорнутому рядку)
+    const [historyTarget, setHistoryTarget] = useState(null); // { item, warehouseId }
 
     // Форми
     const [whForm, setWhForm] = useState({ id: null, name: '', address: '', is_active: true });
@@ -369,8 +373,18 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                                         <React.Fragment key={item.id}>
                                             <tr className={`hover:bg-slate-50/50 transition-colors group ${isExpanded ? 'bg-indigo-50/20' : ''}`}>
                                                 <td className="px-6 py-5 align-middle">
-                                                    <div className="font-bold text-slate-900 text-sm leading-tight max-w-2xl group-hover:text-indigo-700 transition-colors">{item.fullName}</div>
-                                                    {item.sku && <div className="text-[10px] text-slate-500 mt-1.5 uppercase font-mono tracking-widest bg-slate-100 px-1.5 py-0.5 rounded w-fit">SKU: {item.sku}</div>}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setHistoryTarget({ item, warehouseId: null })}
+                                                        title="Переглянути рух товару: куди і коли відвантажувався"
+                                                        className="text-left w-full"
+                                                    >
+                                                        <div className="font-bold text-slate-900 text-sm leading-tight max-w-2xl group-hover:text-indigo-700 hover:underline decoration-indigo-300 underline-offset-4 transition-colors flex items-start gap-2">
+                                                            <FaHistory className="text-slate-300 group-hover:text-indigo-400 mt-0.5 flex-shrink-0" size={12} />
+                                                            <span>{item.fullName}</span>
+                                                        </div>
+                                                        {item.sku && <div className="text-[10px] text-slate-500 mt-1.5 uppercase font-mono tracking-widest bg-slate-100 px-1.5 py-0.5 rounded w-fit ml-5">SKU: {item.sku}</div>}
+                                                    </button>
                                                 </td>
                                                 
                                                 <td className="px-6 py-5 align-middle text-center">
@@ -441,6 +455,13 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                                                                                         </div>
                                                                                     </div>
                                                                                     <div className="flex gap-2 justify-end">
+                                                                                        <button
+                                                                                            className="w-10 h-10 rounded-xl bg-white text-slate-500 flex items-center justify-center hover:bg-slate-100 hover:text-indigo-600 transition-colors border border-slate-200 shadow-sm"
+                                                                                            onClick={() => setHistoryTarget({ item, warehouseId: wh.id })}
+                                                                                            title={`Рух товару по складу «${wh.name}»`}
+                                                                                        >
+                                                                                            <FaHistory />
+                                                                                        </button>
                                                                                         <button
                                                                                             className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center hover:bg-emerald-100 transition-colors border border-emerald-100 shadow-sm"
                                                                                             onClick={() => openAdjustModal(item, wh.id, wh.name, 'purchase')}
@@ -674,6 +695,14 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                 onSuccess={loadData}
                 showToast={showToast}
                 editingItem={editingNomenclatureItem}
+            />
+
+            {/* --- МОДАЛКА: РУХ ТОВАРУ (куди і коли пішов) --- */}
+            <ItemMovementHistoryModal
+                isOpen={!!historyTarget}
+                onClose={() => setHistoryTarget(null)}
+                item={historyTarget ? { ...historyTarget.item, unitName: historyTarget.item.unit?.name || 'шт' } : null}
+                warehouseId={historyTarget?.warehouseId || null}
             />
 
         </div>

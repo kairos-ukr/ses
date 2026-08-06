@@ -4,10 +4,12 @@ import {
     FaTimes, FaShoppingCart, FaUserTie, FaBox,
     FaMoneyBillWave, FaFileAlt, FaInfoCircle,
     FaPlus, FaSearch, FaCheck, FaChevronDown, FaArrowUp, FaExclamationTriangle,
-    FaHandshake, FaTrash, FaWarehouse
+    FaHandshake, FaTrash, FaWarehouse, FaSync
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
+import DeliveryNoteModal from './DeliveryNoteModal';
+import { generateDeliveryNoteNumber } from '../utils/deliveryNote';
 
 // --- Кастомний Select з пошуком ---
 const SearchableSelect = ({ options, value, onChange, placeholder, disabled, icon: Icon }) => {
@@ -108,6 +110,9 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
     const [form, setForm] = useState(initialForm);
     const [lines, setLines] = useState([{ key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' }]);
 
+    // Видаткова накладна, сформована після успішного проведення
+    const [noteDoc, setNoteDoc] = useState(null);
+
     useEffect(() => {
         if (isOpen) {
             setForm(initialForm);
@@ -115,9 +120,16 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
             setIsAddingClient(false);
             setNewClient({ name: '', phone: '', notes: '' });
             setObjNeeds([]);
+            setNoteDoc(null);
             loadDict();
+            refreshDocNumber();
         }
     }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const refreshDocNumber = async () => {
+        const number = await generateDeliveryNoteNumber();
+        setForm(prev => ({ ...prev, reference_document: number }));
+    };
 
     const loadDict = async () => {
         setIsLoading(true);
@@ -126,7 +138,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                 supabase.from('nomenclature').select('id, name, sku, category_id, package_name, package_multiplier, unit:units(name)').eq('is_active', true),
                 supabase.from('categories').select('id, name, parent_id'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
-                supabase.from('clients').select('id, custom_id, name, is_subcontract').order('name'),
+                supabase.from('clients').select('id, custom_id, name, phone, is_subcontract').order('name'),
                 supabase.from('installations').select('custom_id, name').in('status', ['planning', 'in_progress', 'pending']),
                 supabase.from('v_warehouse_stock_available').select('warehouse_id, nomenclature_id, quantity_on_hand, quantity_available')
             ]);
@@ -226,6 +238,38 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
         return lineQtyBase(l) > parseFloat(need.outstanding_need);
     });
 
+    // Дані для видаткової накладної за фактично проведеними позиціями
+    const buildNoteDoc = (okLines, docNumber) => {
+        const client = dict.clients.find(c => String(c.id) === String(form.client_id));
+        const inst = dict.installations.find(i => String(i.custom_id) === String(form.installation_custom_id));
+        const wh = dict.warehouses.find(w => String(w.id) === String(form.warehouse_from_id));
+
+        return {
+            number: docNumber,
+            date: new Date().toISOString(),
+            kind: form.kind,
+            buyerName: client ? client.name : (inst ? `Об’єкт «${inst.name}»` : '—'),
+            buyerPhone: client?.phone || null,
+            buyerId: client ? (client.custom_id || client.id) : null,
+            objectLabel: inst ? `«${inst.name}» #${inst.custom_id}` : null,
+            warehouseName: wh?.name || null,
+            responsibleName: employee?.name || null,
+            currency: isMoney ? form.currency : null,
+            exchangeRate: isMoney ? (parseFloat(form.exchange_rate) || null) : null,
+            notes: form.notes.trim() || null,
+            items: okLines.map(l => {
+                const nom = nomById(l.nomenclature_id);
+                return {
+                    name: nom?.fullName || 'Товар',
+                    sku: nom?.sku || '',
+                    unit: nom?.unitName || 'шт',
+                    qty: lineQtyBase(l),
+                    price: isMoney ? linePriceBase(l) : null,
+                };
+            }),
+        };
+    };
+
     const validRecipient = () => {
         if (form.kind === 'issue') return !!form.installation_custom_id;
         if (form.kind === 'partner') return !!form.client_id;
@@ -246,9 +290,17 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
         if (anyOverageOrOffSpec && !form.notes.trim()) return safeShowToast('Перевищення/позапланові позиції — вкажіть причину в коментарі', 'warning');
 
         setIsSubmitting(true);
-        let okCount = 0;
+        const okLines = [];
+        const okMovementIds = [];
         const failed = [];
         const updatedLines = [...lines];
+
+        // Номер накладної — спільний для всіх позицій цього проведення
+        let docNumber = form.reference_document.trim();
+        if (!docNumber) {
+            docNumber = await generateDeliveryNoteNumber();
+            setForm(prev => ({ ...prev, reference_document: docNumber }));
+        }
 
         try {
             for (const line of valid) {
@@ -274,7 +326,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                         p_sale_price: isMoney ? linePriceBase(line) : null,
                         p_currency: isMoney ? form.currency : null,
                         p_exchange_rate: isMoney ? (parseFloat(form.exchange_rate) || 1) : 1,
-                        p_reference: form.reference_document || null,
+                        p_reference: docNumber || null,
                         p_reason: form.notes.trim() || null,
                         p_emp: employee?.id ?? null,
                     }));
@@ -282,14 +334,29 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                 const idx = updatedLines.findIndex(l => l.key === line.key);
                 if (error) { failed.push(line); if (idx >= 0) updatedLines[idx] = { ...updatedLines[idx], error: error.message }; }
                 else if (data && data.ok === false) { failed.push(line); if (idx >= 0) updatedLines[idx] = { ...updatedLines[idx], error: data.message || 'Відхилено' }; }
-                else { okCount++; }
+                else {
+                    okLines.push(line);
+                    if (data?.movement_id) okMovementIds.push(data.movement_id);
+                }
+            }
+
+            const okCount = okLines.length;
+
+            // Проставляємо номер накладної всім проведеним рухам
+            // (issue_to_object не приймає документ, тож дописуємо його тут)
+            if (docNumber && okMovementIds.length > 0) {
+                const { error: stampError } = await supabase
+                    .from('stock_movements')
+                    .update({ reference_document: docNumber })
+                    .in('id', okMovementIds);
+                if (stampError) safeShowToast(`Номер накладної не збережено: ${stampError.message}`, 'error');
             }
 
             if (okCount > 0) onSuccess();
 
             if (failed.length === 0) {
                 safeShowToast(`Проведено позицій: ${okCount}`, 'success');
-                onClose();
+                setNoteDoc(buildNoteDoc(okLines, docNumber));
             } else {
                 setLines(updatedLines);
                 safeShowToast(`Проведено ${okCount}, з помилкою ${failed.length}. Перевірте позиції.`, 'error');
@@ -481,13 +548,15 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                             <section className="border-t border-slate-100 pt-5">
                                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><FaFileAlt /> Документ і коментар</h3>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {isMoney && (
-                                        <div>
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Документ (Акт / Накладна)</label>
-                                            <input type="text" value={form.reference_document} onChange={e => setForm({ ...form, reference_document: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm text-slate-800" placeholder="№..." />
+                                    <div>
+                                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Номер накладної</label>
+                                        <div className="flex gap-2">
+                                            <input type="text" value={form.reference_document} onChange={e => setForm({ ...form, reference_document: e.target.value })} className="flex-1 min-w-0 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm font-bold text-slate-800" placeholder="ВН-..." />
+                                            <button type="button" onClick={refreshDocNumber} title="Згенерувати новий номер" className="px-3 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-xl transition-colors flex-shrink-0"><FaSync size={13} /></button>
                                         </div>
-                                    )}
-                                    <div className={isMoney ? '' : 'md:col-span-2'}>
+                                        <p className="text-[10px] text-slate-400 mt-1.5 font-medium">Один номер на всі позиції — за ним формується видаткова накладна.</p>
+                                    </div>
+                                    <div>
                                         <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Коментар {anyOverageOrOffSpec && <span className="text-red-500">* причина</span>}</label>
                                         <input type="text" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className={`w-full px-4 py-3 bg-slate-50 border rounded-xl outline-none text-sm text-slate-800 ${anyOverageOrOffSpec ? 'border-amber-300' : 'border-slate-200'}`} placeholder={anyOverageOrOffSpec ? 'Обов’язково: причина перевищення/поза планом...' : 'Опційно...'} />
                                     </div>
@@ -515,6 +584,13 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                             </div>
                         </div>
                     </motion.div>
+
+                    {/* Видаткова накладна за щойно проведеним продажем */}
+                    <DeliveryNoteModal
+                        isOpen={!!noteDoc}
+                        doc={noteDoc}
+                        onClose={() => { setNoteDoc(null); onClose(); }}
+                    />
                 </motion.div>
             )}
         </AnimatePresence>

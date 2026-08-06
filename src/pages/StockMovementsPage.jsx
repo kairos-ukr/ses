@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     FaFileExcel, FaArrowDown, FaArrowUp, FaExchangeAlt,
     FaTrash, FaLock, FaUnlock, FaFileAlt, FaCheck, FaExclamationTriangle,
-    FaTimes, FaInfoCircle, FaHistory, FaCalendarAlt, FaShoppingCart, FaHandshake, FaEdit
+    FaTimes, FaInfoCircle, FaHistory, FaCalendarAlt, FaShoppingCart, FaHandshake, FaEdit,
+    FaFileInvoice
 } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
@@ -11,6 +12,8 @@ import { useAuth } from '../AuthProvider';
 
 // Імпорт модалки (створимо в наступному кроці)
 import DirectSaleModal from './DirectSaleModal';
+import DeliveryNoteModal from './DeliveryNoteModal';
+import ItemMovementHistoryModal from './ItemMovementHistoryModal';
 
 // --- ДОПОМІЖНІ КОМПОНЕНТИ ---
 const Toast = memo(({ message, type = 'success', isVisible, onClose }) => {
@@ -46,6 +49,9 @@ const OP_CONFIG = {
     'partner_transfer': { label: 'Передача', icon: FaHandshake, color: 'text-violet-700 bg-violet-100 border-violet-200', sign: '-', signColor: 'text-violet-700 bg-violet-50 border-violet-200' },
 };
 
+// Операції відвантаження — для них можливе повернення та видаткова накладна
+const DISPATCH_TYPES = ['issue', 'sale', 'partner_transfer'];
+
 // Приймаємо externalSearch та externalActionTrigger від батьківського компонента (InventoryWorkspace)
 export default function StockMovementsPage({ externalSearch = '', externalActionTrigger = 0 }) {
     const { employee, loading: authLoading } = useAuth();
@@ -73,6 +79,13 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
 
     // Стейт для модалки продажів
     const [isSaleModalOpen, setIsSaleModalOpen] = useState(false);
+
+    // Видаткова накладна (повторний друк)
+    const [noteDoc, setNoteDoc] = useState(null);
+    const [noteLoadingId, setNoteLoadingId] = useState(null);
+
+    // Історія руху конкретного товару
+    const [historyItem, setHistoryItem] = useState(null);
 
     // Фільтри
     const [typeFilter, setTypeFilter] = useState('all');
@@ -115,7 +128,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                 supabase.from('purchase_orders').select('id, order_number, supplier_id'),
                 supabase.from('purchase_order_items').select('id, purchase_order_id'),
                 supabase.from('reservations').select('id, installation_custom_id'),
-                supabase.from('clients').select('id, custom_id, name')
+                supabase.from('clients').select('id, custom_id, name, phone')
             ]);
 
             const d = { nom: {}, emp: {}, wh: {}, inst: {}, sup: {}, po: {}, poItem: {}, res: {}, clients: {} };
@@ -127,7 +140,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             (poRes.data || []).forEach(p => d.po[p.id] = p);
             (poItemsRes.data || []).forEach(pi => d.poItem[pi.id] = pi);
             (resRes.data || []).forEach(r => d.res[r.id] = r);
-            (clientsRes.data || []).forEach(c => d.clients[c.id] = { name: c.name, customId: c.custom_id ?? c.id });
+            (clientsRes.data || []).forEach(c => d.clients[c.id] = { name: c.name, customId: c.custom_id ?? c.id, phone: c.phone || null });
 
             const cats = catRes.data || [];
             (nomRes.data || []).forEach(item => {
@@ -294,7 +307,6 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
 
     // --- ДАНІ ПОТОЧНОЇ СТОРІНКИ (фільтрація і пагінація — на сервері) ---
     const paginatedItems = movements.map(m => ({ ...m, ...buildRowData(m) }));
-    const DISPATCH_TYPES = ['issue', 'sale', 'partner_transfer'];
     const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
 
     // Скидання сторінки при зміні будь-якого фільтра
@@ -342,6 +354,62 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             XLSX.writeFile(workbook, `Рух_Товарів_${new Date().toISOString().slice(0,10)}.xlsx`);
         } catch (error) {
             showToast(error.message, 'error');
+        }
+    };
+
+    // --- ВИДАТКОВА НАКЛАДНА (збирає всі позиції з тим самим номером документа) ---
+    const openDeliveryNote = async (mov) => {
+        const ref = (mov.reference_document || '').trim();
+        if (!ref) return showToast('У цієї операції немає номера документа', 'error');
+
+        setNoteLoadingId(mov.id);
+        try {
+            const { data, error } = await supabase
+                .from('stock_movements')
+                .select('*')
+                .eq('reference_document', ref)
+                .in('operation_type', DISPATCH_TYPES)
+                .order('id', { ascending: true });
+            if (error) throw error;
+
+            const rows = (data && data.length) ? data : [mov];
+            const first = rows[0];
+            const client = dicts.clients[first.client_id];
+            const instName = dicts.inst[first.installation_custom_id];
+            const priced = rows.find(r => r.sale_price !== null && r.sale_price !== undefined);
+            const earliest = rows.reduce((min, r) => {
+                const d = r.operation_date || r.created_at;
+                return (!min || d < min) ? d : min;
+            }, null);
+
+            setNoteDoc({
+                number: ref,
+                date: earliest,
+                kind: first.operation_type,
+                buyerName: client ? client.name : (instName ? `Об’єкт «${instName}»` : '—'),
+                buyerPhone: client?.phone || null,
+                buyerId: client ? client.customId : null,
+                objectLabel: getInstallationLabel(first.installation_custom_id),
+                warehouseName: dicts.wh[first.warehouse_from_id] || null,
+                responsibleName: dicts.emp[first.performed_by || first.created_by] || null,
+                currency: priced?.currency || null,
+                exchangeRate: priced?.exchange_rate ? parseFloat(priced.exchange_rate) : null,
+                notes: first.notes || null,
+                items: rows.map(r => {
+                    const nom = dicts.nom[r.nomenclature_id] || {};
+                    return {
+                        name: nom.fullName || 'Товар',
+                        sku: nom.sku || '',
+                        unit: nom.unitCode || 'шт',
+                        qty: parseFloat(r.quantity),
+                        price: (r.sale_price !== null && r.sale_price !== undefined) ? parseFloat(r.sale_price) : null,
+                    };
+                }),
+            });
+        } catch (error) {
+            showToast(error.message, 'error');
+        } finally {
+            setNoteLoadingId(null);
         }
     };
 
@@ -551,8 +619,15 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                                                         <OpIcon size={10} /> {m.conf.label}
                                                     </div>
                                                     <div>
-                                                        <div className="font-bold text-slate-900 text-sm leading-tight group-hover:text-indigo-600 transition-colors line-clamp-2 pr-4">{m.nom.fullName}</div>
-                                                        {m.nom.sku && <div className="text-[10px] text-slate-400 font-mono mt-1.5 tracking-widest uppercase bg-slate-100 px-1.5 py-0.5 rounded w-fit">SKU: {m.nom.sku}</div>}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setHistoryItem({ id: m.nomenclature_id, fullName: m.nom.fullName, sku: m.nom.sku, unitName: m.nom.unitCode })}
+                                                            title="Переглянути весь рух цього товару: куди і коли"
+                                                            className="text-left"
+                                                        >
+                                                            <div className="font-bold text-slate-900 text-sm leading-tight group-hover:text-indigo-600 hover:underline decoration-indigo-300 underline-offset-4 transition-colors line-clamp-2 pr-4">{m.nom.fullName}</div>
+                                                            {m.nom.sku && <div className="text-[10px] text-slate-400 font-mono mt-1.5 tracking-widest uppercase bg-slate-100 px-1.5 py-0.5 rounded w-fit">SKU: {m.nom.sku}</div>}
+                                                        </button>
                                                     </div>
                                                 </div>
                                             </td>
@@ -600,10 +675,15 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                                                         </div>
                                                         <span className="font-bold text-slate-600 text-xs truncate" title={m.empName}>{m.empName}</span>
                                                     </div>
-                                                    <div className="flex items-center gap-1">
+                                                    <div className="flex items-center gap-1 flex-wrap justify-end">
                                                         <button onClick={() => openEdit(m)} className="text-[10px] font-bold text-slate-400 hover:text-indigo-600 flex items-center gap-1 px-2 py-1 rounded hover:bg-indigo-50 transition-colors" title="Редагувати інфо запису">
                                                             <FaEdit size={10}/> Ред.
                                                         </button>
+                                                        {DISPATCH_TYPES.includes(m.operation_type) && m.reference_document && (
+                                                            <button onClick={() => openDeliveryNote(m)} disabled={noteLoadingId === m.id} className="text-[10px] font-bold text-indigo-600 hover:text-white hover:bg-indigo-600 flex items-center gap-1 px-2 py-1 rounded bg-indigo-50 border border-indigo-100 transition-colors disabled:opacity-50" title={`Видаткова накладна ${m.reference_document}`}>
+                                                                <FaFileInvoice size={10}/> {noteLoadingId === m.id ? '...' : 'Накладна'}
+                                                            </button>
+                                                        )}
                                                         {DISPATCH_TYPES.includes(m.operation_type) && (parseFloat(m.quantity) - (returnedBySource[m.id] || 0)) > 0 && (
                                                             <button onClick={() => openReturn(m, parseFloat(m.quantity) - (returnedBySource[m.id] || 0))} className="text-[10px] font-bold text-teal-600 hover:text-white hover:bg-teal-600 flex items-center gap-1 px-2 py-1 rounded bg-teal-50 border border-teal-100 transition-colors" title="Повернути цю операцію">
                                                                 <FaArrowDown size={10}/> Повернути
@@ -657,6 +737,20 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                 showToast={showToast}
             />
             }
+
+            {/* --- ВИДАТКОВА НАКЛАДНА (перегляд + друк) --- */}
+            <DeliveryNoteModal
+                isOpen={!!noteDoc}
+                doc={noteDoc}
+                onClose={() => setNoteDoc(null)}
+            />
+
+            {/* --- РУХ КОНКРЕТНОГО ТОВАРУ --- */}
+            <ItemMovementHistoryModal
+                isOpen={!!historyItem}
+                onClose={() => setHistoryItem(null)}
+                item={historyItem}
+            />
 
             {/* --- МОДАЛКА: РЕДАГУВАННЯ ІНФО ЗАПИСУ --- */}
             <AnimatePresence>
