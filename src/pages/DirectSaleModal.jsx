@@ -1,253 +1,236 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+// =====================================================================
+//  Видача · Передача · Продаж — одна форма на три операції.
+//
+//  Різниця між ними лише в тому, кому віддаємо і чи є гроші:
+//    видача   → під об'єкт, без грошей     (issue_to_object)
+//    передача → партнеру, без грошей       (sell_to_object, partner_transfer)
+//    продаж   → клієнту, з ціною           (sell_to_object, sale)
+//
+//  Тому це один екран із перемикачем, а не три схожі модалки.
+//  Позиції проводяться по одній: якщо одна не пройшла, решта лишається
+//  проведеною, а на проблемній видно причину.
+// =====================================================================
+
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-    FaTimes, FaShoppingCart, FaUserTie, FaBox,
-    FaMoneyBillWave, FaFileAlt, FaInfoCircle,
-    FaPlus, FaSearch, FaCheck, FaChevronDown, FaArrowUp, FaExclamationTriangle,
-    FaHandshake, FaTrash, FaWarehouse, FaSync
+    FaArrowUp, FaHandshake, FaShoppingCart, FaPlus, FaTrash, FaBox,
+    FaWarehouse, FaHardHat, FaUserTie, FaExclamationTriangle, FaCheckCircle,
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
 import DeliveryNoteModal from './DeliveryNoteModal';
 import { generateDeliveryNoteNumber } from '../utils/deliveryNote';
+import {
+    T, TONE, Btn, IconBtn, Chip, Field, Picker, Modal, Skeleton,
+    useToast, humanError, num,
+} from '../ui';
 
-// --- Кастомний Select з пошуком ---
-const SearchableSelect = ({ options, value, onChange, placeholder, disabled, icon: Icon }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [searchTerm, setSearchTerm] = useState('');
-    const wrapperRef = useRef(null);
-
-    useEffect(() => {
-        function handleClickOutside(event) {
-            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) setIsOpen(false);
-        }
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    const filteredOptions = options.filter(opt =>
-        opt.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (opt.subLabel && opt.subLabel.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
-    const selectedOption = options.find(opt => opt.value === value);
-
-    return (
-        <div ref={wrapperRef} className="relative w-full">
-            <div
-                onClick={() => !disabled && setIsOpen(!isOpen)}
-                className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between transition-colors ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-white focus-within:ring-2 focus-within:ring-blue-200 focus-within:bg-white'}`}
-            >
-                <div className="flex items-center gap-2 overflow-hidden">
-                    {Icon && <Icon className="text-slate-400 flex-shrink-0" />}
-                    <span className={`truncate text-sm font-bold ${selectedOption ? 'text-slate-800' : 'text-slate-400'}`}>
-                        {selectedOption ? selectedOption.label : placeholder}
-                    </span>
-                </div>
-                <FaChevronDown className={`text-slate-400 text-xs transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-            </div>
-            <AnimatePresence>
-                {isOpen && (
-                    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
-                        <div className="p-2 border-b border-slate-100 flex items-center gap-2 bg-slate-50">
-                            <FaSearch className="text-slate-400 ml-2" />
-                            <input type="text" autoFocus value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Пошук..." className="w-full bg-transparent border-none outline-none text-sm font-medium py-1" />
-                        </div>
-                        <div className="max-h-60 overflow-y-auto custom-scrollbar">
-                            {filteredOptions.length === 0 ? (
-                                <div className="p-4 text-center text-sm text-slate-400">Нічого не знайдено</div>
-                            ) : (
-                                filteredOptions.map(opt => (
-                                    <div key={opt.value} onClick={() => { onChange(opt.value); setIsOpen(false); setSearchTerm(''); }}
-                                        className={`p-3 hover:bg-blue-50 cursor-pointer border-l-2 transition-colors ${value === opt.value ? 'border-blue-500 bg-blue-50/50' : 'border-transparent'}`}>
-                                        <div className="text-sm font-bold text-slate-800">{opt.label}</div>
-                                        {opt.subLabel && <div className="text-[10px] text-slate-500 mt-0.5">{opt.subLabel}</div>}
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
-    );
-};
-
-// Конфіг типів операції
 const KINDS = {
-    issue:   { label: "Видача під об'єкт", icon: FaArrowUp, op: 'issue',            money: false },
-    partner: { label: 'Передача партнеру', icon: FaHandshake, op: 'partner_transfer', money: false },
-    sale:    { label: 'Продаж',            icon: FaShoppingCart, op: 'sale',        money: true  },
-};
-const ACCENT = {
-    issue:   { head: 'bg-emerald-50', text: 'text-emerald-900', sub: 'text-emerald-700/70', chip: 'bg-emerald-100 text-emerald-600', btn: 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20', tabOn: 'text-emerald-700' },
-    partner: { head: 'bg-violet-50',  text: 'text-violet-900',  sub: 'text-violet-700/70',  chip: 'bg-violet-100 text-violet-600',  btn: 'bg-violet-600 hover:bg-violet-700 shadow-violet-600/20',  tabOn: 'text-violet-700' },
-    sale:    { head: 'bg-blue-50',    text: 'text-blue-900',    sub: 'text-blue-700/70',    chip: 'bg-blue-100 text-blue-600',      btn: 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20',       tabOn: 'text-blue-700' },
+    issue: { label: "Видача під об'єкт", short: 'Видача', icon: FaArrowUp, op: 'issue', money: false, tone: 'ok' },
+    partner: { label: 'Передача партнеру', short: 'Передача', icon: FaHandshake, op: 'partner_transfer', money: false, tone: 'accent' },
+    sale: { label: 'Продаж клієнту', short: 'Продаж', icon: FaShoppingCart, op: 'sale', money: true, tone: 'info' },
 };
 
-export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast }) {
+const CURRENCIES = ['USD', 'UAH', 'EUR'];
+const newKey = () => Math.random().toString(36).slice(2, 10);
+const emptyLine = () => ({ key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' });
+
+export default function DirectSaleModal({ isOpen, onClose, onSuccess }) {
     const { employee } = useAuth();
-    const safeShowToast = typeof showToast === 'function' ? showToast : (m) => console.warn('[DirectSaleModal]', m);
+    const toast = useToast();
 
     const [dict, setDict] = useState({ nomenclatures: [], warehouses: [], clients: [], installations: [], stock: [] });
     const [objNeeds, setObjNeeds] = useState([]);
-    const [isLoading, setIsLoading] = useState(false);
-    const [isSubmitting, setIsSubmitting] = useState(false);
-
-    const [isAddingClient, setIsAddingClient] = useState(false);
-    const [newClient, setNewClient] = useState({ name: '', phone: '', notes: '' });
-
-    const newKey = () => Math.random().toString(36).slice(2, 10);
-    const initialForm = {
-        kind: 'issue',
-        client_id: '',
-        installation_custom_id: '',
-        warehouse_from_id: '',
-        currency: 'USD',
-        exchange_rate: '41.5',
-        reference_document: '',
-        notes: ''
-    };
-    const [form, setForm] = useState(initialForm);
-    const [lines, setLines] = useState([{ key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' }]);
-
-    // Видаткова накладна, сформована після успішного проведення
+    const [loading, setLoading] = useState(false);
+    const [busy, setBusy] = useState(false);
     const [noteDoc, setNoteDoc] = useState(null);
 
-    useEffect(() => {
-        if (isOpen) {
-            setForm(initialForm);
-            setLines([{ key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' }]);
-            setIsAddingClient(false);
-            setNewClient({ name: '', phone: '', notes: '' });
-            setObjNeeds([]);
-            setNoteDoc(null);
-            loadDict();
-            refreshDocNumber();
-        }
-    }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+    const [form, setForm] = useState({
+        kind: 'issue', client_id: '', installation_custom_id: '', warehouse_from_id: '',
+        currency: 'USD', exchange_rate: '41.5', reference_document: '', notes: '',
+    });
+    const [lines, setLines] = useState([emptyLine()]);
 
-    const refreshDocNumber = async () => {
-        const number = await generateDeliveryNoteNumber();
-        setForm(prev => ({ ...prev, reference_document: number }));
-    };
+    const cfg = KINDS[form.kind];
+    const isMoney = cfg.money;
 
-    const loadDict = async () => {
-        setIsLoading(true);
+    /* ---------------- ЗАВАНТАЖЕННЯ ---------------- */
+
+    const loadDict = useCallback(async () => {
+        setLoading(true);
         try {
-            const [nomRes, catRes, whRes, clientsRes, instRes, stockRes] = await Promise.all([
+            const [nomRes, catRes, whRes, clRes, instRes, stockRes] = await Promise.all([
                 supabase.from('nomenclature').select('id, name, sku, category_id, package_name, package_multiplier, unit:units(name)').eq('is_active', true),
                 supabase.from('categories').select('id, name, parent_id'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
                 supabase.from('clients').select('id, custom_id, name, phone, is_subcontract').order('name'),
                 supabase.from('installations').select('custom_id, name').in('status', ['planning', 'in_progress', 'pending']),
-                supabase.from('v_warehouse_stock_available').select('warehouse_id, nomenclature_id, quantity_on_hand, quantity_available')
+                supabase.from('v_warehouse_stock_available').select('warehouse_id, nomenclature_id, quantity_on_hand, quantity_available'),
             ]);
-            const cats = catRes.data || [];
-            const processedNom = (nomRes.data || []).map(item => {
-                let path = []; let currentId = item.category_id;
-                while (currentId) { const cat = cats.find(c => c.id === currentId); if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break; }
+
+            const catById = new Map((catRes.data || []).map(c => [c.id, c]));
+            const noms = (nomRes.data || []).map(item => {
+                const path = [];
+                let id = item.category_id, guard = 0;
+                while (id && guard++ < 20) {
+                    const c = catById.get(id);
+                    if (!c) break;
+                    path.unshift(c.name);
+                    id = c.parent_id;
+                }
                 return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim(), unitName: item.unit?.name || 'шт' };
             });
-            setDict({ nomenclatures: processedNom, warehouses: whRes.data || [], clients: clientsRes.data || [], installations: instRes.data || [], stock: stockRes.data || [] });
-        } catch (error) {
-            safeShowToast(`Помилка: ${error.message}`, 'error');
-        } finally {
-            setIsLoading(false);
-        }
-    };
+
+            setDict({
+                nomenclatures: noms, warehouses: whRes.data || [],
+                clients: clRes.data || [], installations: instRes.data || [],
+                stock: stockRes.data || [],
+            });
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setLoading(false); }
+    }, [toast]);
 
     useEffect(() => {
-        const load = async () => {
-            if (!form.installation_custom_id) { setObjNeeds([]); return; }
-            const { data } = await supabase.from('v_object_material_needs').select('*').eq('installation_custom_id', form.installation_custom_id);
-            setObjNeeds(data || []);
-        };
-        load();
+        if (!isOpen) return;
+        setForm(f => ({
+            ...f, kind: 'issue', client_id: '', installation_custom_id: '',
+            warehouse_from_id: '', notes: '', reference_document: '',
+        }));
+        setLines([emptyLine()]);
+        setObjNeeds([]);
+        setNoteDoc(null);
+        loadDict();
+        generateDeliveryNoteNumber().then(n => setForm(p => ({ ...p, reference_document: n })));
+    }, [isOpen, loadDict]);
+
+    // Потреба об'єкта — щоб бачити, чи видаємо в межах плану
+    useEffect(() => {
+        if (!form.installation_custom_id) { setObjNeeds([]); return; }
+        let alive = true;
+        supabase.from('v_object_material_needs').select('*')
+            .eq('installation_custom_id', form.installation_custom_id)
+            .then(({ data }) => { if (alive) setObjNeeds(data || []); });
+        return () => { alive = false; };
     }, [form.installation_custom_id]);
 
-    const handleQuickAddClient = async () => {
-        if (!newClient.name.trim()) return safeShowToast("Ім'я/Назва клієнта є обов'язковим", 'error');
-        setIsSubmitting(true);
+    /* ---------------- ДОВІДКОВЕ ---------------- */
+
+    const nomById = useCallback(
+        (id) => dict.nomenclatures.find(n => String(n.id) === String(id)),
+        [dict.nomenclatures]
+    );
+
+    const balOf = useCallback((nomId) => {
+        if (!nomId || !form.warehouse_from_id) return { onHand: 0, available: 0 };
+        const b = dict.stock.find(x =>
+            String(x.nomenclature_id) === String(nomId) &&
+            String(x.warehouse_id) === String(form.warehouse_from_id));
+        return { onHand: parseFloat(b?.quantity_on_hand || 0), available: parseFloat(b?.quantity_available || 0) };
+    }, [dict.stock, form.warehouse_from_id]);
+
+    const needOf = useCallback(
+        (nomId) => objNeeds.find(n => String(n.nomenclature_id) === String(nomId)),
+        [objNeeds]
+    );
+
+    /* Видача бере фізичний залишок (свій резерв теж свій),
+       продаж і передача — тільки вільний */
+    const usableOf = useCallback(
+        (nomId) => (form.kind === 'issue' ? balOf(nomId).onHand : balOf(nomId).available),
+        [form.kind, balOf]
+    );
+
+    const nomOptions = useMemo(() => {
+        if (!form.warehouse_from_id) return [];
+        return dict.nomenclatures
+            .filter(n => usableOf(n.id) > 0)
+            .map(n => ({
+                id: n.id,
+                label: `${n.fullName}${n.sku ? ` · ${n.sku}` : ''} — ${num(usableOf(n.id))} ${n.unitName}`,
+            }));
+    }, [dict.nomenclatures, form.warehouse_from_id, usableOf]);
+
+    const whOptions = useMemo(
+        () => dict.warehouses.map(w => ({ id: w.id, label: w.name })), [dict.warehouses]
+    );
+    const clientOptions = useMemo(
+        () => dict.clients.map(c => ({
+            id: c.id, label: `${c.name}${c.is_subcontract ? ' · партнер' : ''} · #${c.custom_id || c.id}`,
+        })), [dict.clients]
+    );
+    const instOptions = useMemo(
+        () => dict.installations.map(i => ({ id: i.custom_id, label: `#${i.custom_id} ${i.name}` })),
+        [dict.installations]
+    );
+
+    /* ---------------- РЯДКИ ---------------- */
+
+    const addLine = () => setLines(ls => [...ls, emptyLine()]);
+    const removeLine = (key) => setLines(ls => ls.length > 1 ? ls.filter(l => l.key !== key) : [emptyLine()]);
+    const patchLine = (key, patch) => setLines(ls => ls.map(l => l.key === key ? { ...l, ...patch, error: '' } : l));
+
+    /** Кількість у базових одиницях: у пачках — ділимо на кратність */
+    const qtyBase = useCallback((line) => {
+        const q = parseFloat(line.quantity);
+        if (isNaN(q)) return 0;
+        const nom = nomById(line.nomenclature_id);
+        return (line.sellMode === 'piece' && nom?.package_multiplier > 1) ? q / nom.package_multiplier : q;
+    }, [nomById]);
+
+    const priceBase = useCallback((line) => {
+        const p = parseFloat(line.unit_price);
+        if (isNaN(p)) return null;
+        const nom = nomById(line.nomenclature_id);
+        return (line.sellMode === 'piece' && nom?.package_multiplier > 1) ? p * nom.package_multiplier : p;
+    }, [nomById]);
+
+    const grandTotal = useMemo(() => !isMoney ? 0 : lines.reduce((s, l) => {
+        const q = parseFloat(l.quantity) || 0, p = parseFloat(l.unit_price) || 0;
+        return s + q * p;
+    }, 0), [lines, isMoney]);
+
+    /* Перевищення плану або позиція поза специфікацією — просимо причину */
+    const needsReason = useMemo(() => {
+        if (!form.installation_custom_id) return false;
+        return lines.some(l => {
+            if (!l.nomenclature_id || !(parseFloat(l.quantity) > 0)) return false;
+            const need = needOf(l.nomenclature_id);
+            if (!need) return true;
+            return qtyBase(l) > parseFloat(need.outstanding_need);
+        });
+    }, [form.installation_custom_id, lines, needOf, qtyBase]);
+
+    const filledLines = lines.filter(l => l.nomenclature_id && parseFloat(l.quantity) > 0);
+
+    /* ---------------- ШВИДКЕ ДОДАВАННЯ КЛІЄНТА ---------------- */
+
+    const quickAddClient = async (name) => {
         try {
-            const { data, error } = await supabase.from('clients').insert([{ name: newClient.name, phone: newClient.phone, notes: newClient.notes }]).select().single();
+            const { data, error } = await supabase.from('clients').insert([{ name }]).select().single();
             if (error) throw error;
-            setDict(prev => ({ ...prev, clients: [...prev.clients, data].sort((a, b) => a.name.localeCompare(b.name)) }));
-            setForm(prev => ({ ...prev, client_id: data.id }));
-            setIsAddingClient(false);
-            safeShowToast('Клієнта додано!', 'success');
-        } catch (error) {
-            safeShowToast(error.message, 'error');
-        } finally {
-            setIsSubmitting(false);
+            setDict(p => ({ ...p, clients: [...p.clients, data].sort((a, b) => a.name.localeCompare(b.name, 'uk')) }));
+            setForm(p => ({ ...p, client_id: data.id }));
+            toast(`Клієнта «${name}» додано`);
+        } catch (e) {
+            toast(humanError(e), 'error');
         }
     };
 
-    const kindCfg = KINDS[form.kind];
-    const accent = ACCENT[form.kind];
-    const isMoney = kindCfg.money;
+    /* ---------------- ПРОВЕДЕННЯ ---------------- */
 
-    const nomById = (id) => dict.nomenclatures.find(n => n.id === parseInt(id));
-    const getBal = (nomId) => {
-        if (!nomId || !form.warehouse_from_id) return { onHand: 0, available: 0 };
-        const b = dict.stock.find(x => x.nomenclature_id === parseInt(nomId) && x.warehouse_id === parseInt(form.warehouse_from_id));
-        return { onHand: parseFloat(b?.quantity_on_hand || 0), available: parseFloat(b?.quantity_available || 0) };
-    };
-    const needByNom = (nomId) => objNeeds.find(n => String(n.nomenclature_id) === String(nomId));
-
-    // Опції номенклатури для обраного складу (issue враховує фізичну наявність)
-    const nomOptions = dict.nomenclatures
-        .filter(nom => {
-            if (!form.warehouse_from_id) return false;
-            const bal = getBal(nom.id);
-            return (form.kind === 'issue' ? bal.onHand : bal.available) > 0;
-        })
-        .map(nom => {
-            const bal = getBal(nom.id);
-            return { value: nom.id, label: nom.fullName, subLabel: `SKU: ${nom.sku || '---'} | ${form.kind === 'issue' ? 'На складі' : 'Вільно'}: ${form.kind === 'issue' ? bal.onHand : bal.available} ${nom.unitName}` };
-        });
-
-    // --- Рядки кошика ---
-    const addLine = () => setLines(ls => [...ls, { key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' }]);
-    const removeLine = (key) => setLines(ls => ls.length > 1 ? ls.filter(l => l.key !== key) : ls);
-    const updateLine = (key, patch) => setLines(ls => ls.map(l => l.key === key ? { ...l, ...patch, error: '' } : l));
-
-    const lineQtyBase = (line) => {
-        let q = parseFloat(line.quantity); if (isNaN(q)) return 0;
-        const nom = nomById(line.nomenclature_id);
-        if (line.sellMode === 'piece' && nom?.package_multiplier > 1) q = q / nom.package_multiplier;
-        return q;
-    };
-    const linePriceBase = (line) => {
-        let p = parseFloat(line.unit_price); if (isNaN(p)) return null;
-        const nom = nomById(line.nomenclature_id);
-        if (line.sellMode === 'piece' && nom?.package_multiplier > 1) p = p * nom.package_multiplier;
-        return p;
+    const recipientOk = () => {
+        if (form.kind === 'issue') return !!form.installation_custom_id;
+        if (form.kind === 'partner') return !!form.client_id;
+        return !!form.client_id || !!form.installation_custom_id;
     };
 
-    // Підсумок по грошах (тільки sale)
-    const grandTotal = isMoney ? lines.reduce((s, l) => {
-        const q = parseFloat(l.quantity) || 0; const p = parseFloat(l.unit_price) || 0; return s + q * p;
-    }, 0) : 0;
-    const rate = parseFloat(form.exchange_rate) || 0;
-
-    // Чи потрібна причина (перевищення плану / поза специфікацією) по будь-якому рядку
-    const anyOverageOrOffSpec = form.installation_custom_id && lines.some(l => {
-        if (!l.nomenclature_id || !(parseFloat(l.quantity) > 0)) return false;
-        const need = needByNom(l.nomenclature_id);
-        if (!need) return true; // поза специфікацією
-        return lineQtyBase(l) > parseFloat(need.outstanding_need);
-    });
-
-    // Дані для видаткової накладної за фактично проведеними позиціями
-    const buildNoteDoc = (okLines, docNumber) => {
+    const buildNote = (okLines, docNumber) => {
         const client = dict.clients.find(c => String(c.id) === String(form.client_id));
         const inst = dict.installations.find(i => String(i.custom_id) === String(form.installation_custom_id));
         const wh = dict.warehouses.find(w => String(w.id) === String(form.warehouse_from_id));
-
         return {
-            number: docNumber,
-            date: new Date().toISOString(),
-            kind: form.kind,
+            number: docNumber, date: new Date().toISOString(), kind: form.kind,
             buyerName: client ? client.name : (inst ? `Об’єкт «${inst.name}»` : '—'),
             buyerPhone: client?.phone || null,
             buyerId: client ? (client.custom_id || client.id) : null,
@@ -260,58 +243,44 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
             items: okLines.map(l => {
                 const nom = nomById(l.nomenclature_id);
                 return {
-                    name: nom?.fullName || 'Товар',
-                    sku: nom?.sku || '',
-                    unit: nom?.unitName || 'шт',
-                    qty: lineQtyBase(l),
-                    price: isMoney ? linePriceBase(l) : null,
+                    name: nom?.fullName || 'Товар', sku: nom?.sku || '',
+                    unit: nom?.unitName || 'шт', qty: qtyBase(l),
+                    price: isMoney ? priceBase(l) : null,
                 };
             }),
         };
     };
 
-    const validRecipient = () => {
-        if (form.kind === 'issue') return !!form.installation_custom_id;
-        if (form.kind === 'partner') return !!form.client_id;
-        return !!form.client_id || !!form.installation_custom_id; // sale
-    };
-
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        if (!validRecipient()) {
-            const msg = form.kind === 'issue' ? "Оберіть об'єкт для видачі" : form.kind === 'partner' ? 'Оберіть партнера' : "Оберіть клієнта або об'єкт";
-            return safeShowToast(msg, 'error');
+    const submit = async () => {
+        if (!recipientOk()) {
+            return toast(form.kind === 'issue' ? "Оберіть об'єкт" :
+                form.kind === 'partner' ? 'Оберіть партнера' : "Оберіть клієнта або об'єкт", 'error');
         }
-        if (!form.warehouse_from_id) return safeShowToast('Оберіть склад списання', 'error');
-
-        const valid = lines.filter(l => l.nomenclature_id && parseFloat(l.quantity) > 0);
-        if (valid.length === 0) return safeShowToast('Додайте хоча б одну позицію з кількістю', 'error');
-        if (isMoney && valid.some(l => !(parseFloat(l.unit_price) >= 0))) return safeShowToast('Вкажіть ціну для кожної позиції', 'error');
-        if (anyOverageOrOffSpec && !form.notes.trim()) return safeShowToast('Перевищення/позапланові позиції — вкажіть причину в коментарі', 'warning');
-
-        setIsSubmitting(true);
-        const okLines = [];
-        const okMovementIds = [];
-        const failed = [];
-        const updatedLines = [...lines];
-
-        // Номер накладної — спільний для всіх позицій цього проведення
-        let docNumber = form.reference_document.trim();
-        if (!docNumber) {
-            docNumber = await generateDeliveryNoteNumber();
-            setForm(prev => ({ ...prev, reference_document: docNumber }));
+        if (!form.warehouse_from_id) return toast('Оберіть склад списання', 'error');
+        if (!filledLines.length) return toast('Додайте хоча б одну позицію з кількістю', 'error');
+        if (isMoney && filledLines.some(l => !(parseFloat(l.unit_price) >= 0))) {
+            return toast('Вкажіть ціну для кожної позиції', 'error');
         }
+        if (needsReason && !form.notes.trim()) {
+            return toast('Є позиції поза планом — вкажіть причину в коментарі', 'warning');
+        }
+
+        setBusy(true);
+        let docNumber = form.reference_document.trim() || await generateDeliveryNoteNumber();
+        const ok = [], failed = [], movementIds = [];
+        const next = [...lines];
 
         try {
-            for (const line of valid) {
-                const qtyBase = lineQtyBase(line);
+            for (const line of filledLines) {
+                const q = qtyBase(line);
                 let data, error;
+
                 if (form.kind === 'issue') {
                     ({ data, error } = await supabase.rpc('issue_to_object', {
                         p_installation: parseInt(form.installation_custom_id),
                         p_warehouse: parseInt(form.warehouse_from_id),
                         p_nomenclature: parseInt(line.nomenclature_id),
-                        p_qty: qtyBase,
+                        p_qty: q,
                         p_reason: form.notes.trim() || null,
                         p_emp: employee?.id ?? null,
                     }));
@@ -320,10 +289,10 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                         p_installation: form.installation_custom_id ? parseInt(form.installation_custom_id) : null,
                         p_warehouse: parseInt(form.warehouse_from_id),
                         p_nomenclature: parseInt(line.nomenclature_id),
-                        p_qty: qtyBase,
-                        p_op: kindCfg.op,
+                        p_qty: q,
+                        p_op: cfg.op,
                         p_client: form.client_id ? parseInt(form.client_id) : null,
-                        p_sale_price: isMoney ? linePriceBase(line) : null,
+                        p_sale_price: isMoney ? priceBase(line) : null,
                         p_currency: isMoney ? form.currency : null,
                         p_exchange_rate: isMoney ? (parseFloat(form.exchange_rate) || 1) : 1,
                         p_reference: docNumber || null,
@@ -331,268 +300,343 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, showToast 
                         p_emp: employee?.id ?? null,
                     }));
                 }
-                const idx = updatedLines.findIndex(l => l.key === line.key);
-                if (error) { failed.push(line); if (idx >= 0) updatedLines[idx] = { ...updatedLines[idx], error: error.message }; }
-                else if (data && data.ok === false) { failed.push(line); if (idx >= 0) updatedLines[idx] = { ...updatedLines[idx], error: data.message || 'Відхилено' }; }
-                else {
-                    okLines.push(line);
-                    if (data?.movement_id) okMovementIds.push(data.movement_id);
+
+                const i = next.findIndex(l => l.key === line.key);
+                if (error) {
+                    failed.push(line);
+                    if (i >= 0) next[i] = { ...next[i], error: humanError(error) };
+                } else if (data?.ok === false) {
+                    failed.push(line);
+                    if (i >= 0) next[i] = { ...next[i], error: data.message || 'Відхилено' };
+                } else {
+                    ok.push(line);
+                    if (data?.movement_id) movementIds.push(data.movement_id);
                 }
             }
 
-            const okCount = okLines.length;
-
-            // Проставляємо номер накладної всім проведеним рухам
-            // (issue_to_object не приймає документ, тож дописуємо його тут)
-            if (docNumber && okMovementIds.length > 0) {
-                const { error: stampError } = await supabase
-                    .from('stock_movements')
-                    .update({ reference_document: docNumber })
-                    .in('id', okMovementIds);
-                if (stampError) safeShowToast(`Номер накладної не збережено: ${stampError.message}`, 'error');
+            // issue_to_object не приймає номер документа — дописуємо після проведення
+            if (docNumber && movementIds.length) {
+                const { error: stampErr } = await supabase.from('stock_movements')
+                    .update({ reference_document: docNumber }).in('id', movementIds);
+                if (stampErr) toast(`Номер накладної не збережено: ${humanError(stampErr)}`, 'error');
             }
 
-            if (okCount > 0) onSuccess();
+            if (ok.length) onSuccess?.();
 
-            if (failed.length === 0) {
-                safeShowToast(`Проведено позицій: ${okCount}`, 'success');
-                setNoteDoc(buildNoteDoc(okLines, docNumber));
+            if (!failed.length) {
+                toast(`Проведено позицій: ${ok.length}`);
+                setNoteDoc(buildNote(ok, docNumber));
             } else {
-                setLines(updatedLines);
-                safeShowToast(`Проведено ${okCount}, з помилкою ${failed.length}. Перевірте позиції.`, 'error');
+                setLines(next);
+                toast(`Проведено ${ok.length}, з помилкою ${failed.length}`, 'error');
             }
-        } catch (error) {
-            safeShowToast(error.message, 'error');
-        } finally {
-            setIsSubmitting(false);
-        }
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setBusy(false); }
     };
 
-    const clientOptions = dict.clients.map(c => ({ value: c.id, label: `${c.name} ${c.is_subcontract ? '(Партнер)' : ''}`, subLabel: `ID: #${c.custom_id || c.id}` }));
-    const instOptions = dict.installations.map(i => ({ value: i.custom_id, label: `Об'єкт #${i.custom_id}`, subLabel: i.name }));
+    /* ---------------- РЯДОК КОШИКА ---------------- */
+
+    const renderLine = (line) => {
+        const nom = nomById(line.nomenclature_id);
+        const usable = usableOf(line.nomenclature_id);
+        const need = needOf(line.nomenclature_id);
+        const q = qtyBase(line);
+        const over = q > usable + 0.0001;
+        const hasPackage = nom?.package_multiplier > 1;
+        const unit = line.sellMode === 'piece' ? (nom?.package_name || 'уп.') : (nom?.unitName || 'шт');
+
+        // На широкому екрані товар і числа стоять поруч — рядок займає
+        // одну смугу замість трьох, і в списку видно більше позицій
+        return (
+            <div key={line.key} className={`${T.cardFlat} px-2.5 py-2.5 space-y-2 ${line.error ? 'border-rose-300 bg-rose-50/40' : over ? 'border-amber-300' : ''}`}>
+                <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-3 lg:items-end space-y-2 lg:space-y-0">
+                    <div className="flex items-start gap-2">
+                        <Picker
+                            className="flex-1"
+                            options={nomOptions}
+                            value={line.nomenclature_id}
+                            onChange={v => patchLine(line.key, { nomenclature_id: v, sellMode: 'base' })}
+                            disabled={!form.warehouse_from_id}
+                            placeholder={form.warehouse_from_id ? 'Оберіть товар…' : 'Спершу склад'}
+                            icon={FaBox}
+                            searchPlaceholder="Назва або SKU…"
+                        />
+                        <IconBtn variant="softDanger" icon={FaTrash} label="Прибрати рядок"
+                            onClick={() => removeLine(line.key)} />
+                    </div>
+
+                    {line.nomenclature_id && (
+                        <div className="flex items-end gap-2 flex-wrap lg:flex-nowrap">
+                            <div className="flex-1 min-w-[110px] lg:flex-none lg:w-24">
+                                <span className={`${T.label} block mb-1`}>Кількість, {unit}</span>
+                                <input
+                                    type="number" min="0" step="any" inputMode="decimal"
+                                    className={`${T.input} font-black tabular-nums ${over ? 'border-amber-400 bg-amber-50' : ''}`}
+                                    placeholder="0" value={line.quantity}
+                                    onChange={e => patchLine(line.key, { quantity: e.target.value })}
+                                />
+                            </div>
+
+                            {hasPackage && (
+                                <div className="flex-shrink-0">
+                                    <span className={`${T.label} block mb-1`}>Одиниця</span>
+                                    <select
+                                        className={`${T.select} w-28`}
+                                        value={line.sellMode}
+                                        onChange={e => patchLine(line.key, { sellMode: e.target.value })}
+                                    >
+                                        <option value="base">{nom.unitName}</option>
+                                        <option value="piece">{nom.package_name || 'уп.'}</option>
+                                    </select>
+                                </div>
+                            )}
+
+                            {isMoney && (
+                                <div className="flex-1 min-w-[110px] lg:flex-none lg:w-28">
+                                    <span className={`${T.label} block mb-1`}>Ціна за {unit}</span>
+                                    <input
+                                        type="number" min="0" step="any" inputMode="decimal"
+                                        className={`${T.input} font-black tabular-nums`}
+                                        placeholder="0" value={line.unit_price}
+                                        onChange={e => patchLine(line.key, { unit_price: e.target.value })}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {line.nomenclature_id && (
+                    <>
+                        <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                            <Chip tone={usable > 0 ? 'ok' : 'danger'}>
+                                на складі {num(usable)} {nom?.unitName}
+                            </Chip>
+                            {hasPackage && line.sellMode === 'piece' && (
+                                <Chip tone="neutral">= {num(q)} {nom.unitName}</Chip>
+                            )}
+                            {need && (
+                                <Chip tone={q > parseFloat(need.outstanding_need) ? 'warn' : 'info'}>
+                                    потреба об'єкта {num(need.outstanding_need)}
+                                </Chip>
+                            )}
+                            {form.installation_custom_id && !need && (
+                                <Chip tone="warn" icon={FaExclamationTriangle}>поза специфікацією</Chip>
+                            )}
+                            {isMoney && parseFloat(line.quantity) > 0 && parseFloat(line.unit_price) > 0 && (
+                                <span className="ml-auto font-black tabular-nums text-slate-900">
+                                    {num(parseFloat(line.quantity) * parseFloat(line.unit_price))} {form.currency}
+                                </span>
+                            )}
+                        </div>
+
+                        {over && (
+                            <div className="text-[11.5px] font-bold text-amber-700">
+                                Більше, ніж є на складі — операцію буде відхилено.
+                            </div>
+                        )}
+                        {line.error && (
+                            <div className="text-[11.5px] font-bold text-rose-700">{line.error}</div>
+                        )}
+                    </>
+                )}
+            </div>
+        );
+    };
+
+    /* ---------------- РЕНДЕР ---------------- */
 
     return (
-        <AnimatePresence>
-            {isOpen && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[80]">
-                    <motion.div initial={{ scale: 0.98, opacity: 0, y: 30 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0, y: 30 }} className="bg-white rounded-t-[24px] sm:rounded-[24px] w-full sm:max-w-4xl shadow-2xl flex flex-col max-h-[95vh] sm:max-h-[92vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+        <>
+            <Modal
+                isOpen={isOpen}
+                onClose={onClose}
+                title={cfg.label}
+                subtitle={form.reference_document ? `Документ ${form.reference_document}` : 'Списання зі складу'}
+                tone={cfg.tone}
+                size="lg"
+                onSubmit={() => { if (!busy && filledLines.length) submit(); }}
+                submitHint={cfg.short.toLowerCase()}
+                footer={<>
+                    {isMoney && grandTotal > 0 && (
+                        <span className="mr-auto text-[13px] font-black tabular-nums text-slate-900">
+                            Разом {num(grandTotal)} {form.currency}
+                            {form.currency !== 'UAH' && parseFloat(form.exchange_rate) > 0 && (
+                                <span className="text-[11px] font-bold text-slate-400 ml-1.5">
+                                    ≈ {num(grandTotal * parseFloat(form.exchange_rate))} грн
+                                </span>
+                            )}
+                        </span>
+                    )}
+                    <Btn variant="outline" onClick={onClose}>Скасувати</Btn>
+                    <Btn
+                        variant={form.kind === 'sale' ? 'accent' : 'ok'}
+                        icon={cfg.icon}
+                        onClick={submit}
+                        disabled={busy || !filledLines.length}
+                    >
+                        {busy ? 'Проводимо…' : `${cfg.short} · ${filledLines.length}`}
+                    </Btn>
+                </>}
+            >
+                {loading ? <Skeleton rows={6} /> : (
+                    <div className="space-y-4">
 
-                        {/* HEADER + перемикач типу */}
-                        <div className={`p-4 sm:p-6 border-b border-slate-100 flex-shrink-0 ${accent.head}`}>
-                            <div className="flex justify-between items-start gap-3">
-                                <div className="min-w-0">
-                                    <h2 className={`text-lg sm:text-2xl font-black flex items-center gap-3 ${accent.text}`}>
-                                        <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${accent.chip}`}><kindCfg.icon /></div>
-                                        <span className="truncate">{kindCfg.label}</span>
-                                    </h2>
-                                </div>
-                                <button onClick={onClose} className="w-9 h-9 bg-white hover:bg-slate-100 text-slate-400 rounded-full flex items-center justify-center transition-colors shadow-sm flex-shrink-0"><FaTimes /></button>
-                            </div>
-                            <div className="flex gap-1.5 mt-4 bg-white/70 p-1.5 rounded-xl">
-                                {Object.entries(KINDS).map(([k, cfg]) => (
-                                    <button key={k} type="button" onClick={() => setForm(f => ({ ...f, kind: k }))} className={`flex-1 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${form.kind === k ? `bg-white shadow-sm ${ACCENT[k].tabOn}` : 'text-slate-500 hover:bg-white/50'}`}>
-                                        <cfg.icon size={12} /> <span className="hidden sm:inline">{cfg.label}</span><span className="sm:hidden">{k === 'issue' ? 'Видача' : k === 'partner' ? 'Партнер' : 'Продаж'}</span>
+                        {/* Тип операції */}
+                        <div className="grid grid-cols-3 gap-2">
+                            {Object.entries(KINDS).map(([k, c]) => {
+                                const on = form.kind === k;
+                                return (
+                                    <button
+                                        key={k} type="button"
+                                        onClick={() => setForm(f => ({ ...f, kind: k }))}
+                                        className={`px-2 py-2.5 rounded-lg border-2 transition-colors text-center
+                                            ${on ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 bg-white hover:border-slate-400'}`}
+                                    >
+                                        <c.icon className={`mx-auto mb-1 ${on ? 'text-indigo-600' : 'text-slate-400'}`} size={14} />
+                                        <span className={`block text-[12px] font-bold ${on ? 'text-indigo-700' : 'text-slate-600'}`}>
+                                            {c.short}
+                                        </span>
                                     </button>
-                                ))}
-                            </div>
+                                );
+                            })}
                         </div>
 
-                        {/* BODY */}
-                        <div className="p-4 sm:p-6 overflow-y-auto custom-scrollbar flex-1 relative space-y-6">
-                            {isLoading && (
-                                <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center backdrop-blur-sm">
-                                    <div className="animate-pulse flex gap-2"><div className="w-3 h-3 bg-blue-400 rounded-full"></div><div className="w-3 h-3 bg-blue-400 rounded-full"></div><div className="w-3 h-3 bg-blue-400 rounded-full"></div></div>
-                                </div>
+                        {/* На ПК «кому» і «звідки» стоять поруч: шапка документа
+                            займає одну смугу, а список позицій отримує решту висоти */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:items-start">
+
+                        {/* Кому */}
+                        <div className={`${T.inset} p-3 space-y-2.5`}>
+                            <div className={T.label}>
+                                {form.kind === 'issue' ? "На який об'єкт"
+                                    : form.kind === 'partner' ? 'Якому партнеру' : 'Кому продаємо'}
+                            </div>
+
+                            {form.kind !== 'partner' && (
+                                <Field label="Об'єкт" required={form.kind === 'issue'}>
+                                    <Picker
+                                        options={[{ id: '', label: '— не вказано —' }, ...instOptions]}
+                                        value={form.installation_custom_id}
+                                        onChange={v => setForm(f => ({ ...f, installation_custom_id: v }))}
+                                        placeholder="Оберіть об'єкт…" icon={FaHardHat}
+                                        searchPlaceholder="Назва або номер…"
+                                    />
+                                </Field>
                             )}
 
-                            {/* ОТРИМУВАЧ */}
-                            <section>
-                                <div className="flex justify-between items-end mb-3">
-                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><FaUserTie /> {form.kind === 'issue' ? "Об'єкт" : 'Отримувач'}</h3>
-                                    {form.kind !== 'issue' && !isAddingClient && (
-                                        <button type="button" onClick={() => setIsAddingClient(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-1 rounded-lg flex items-center gap-1"><FaPlus size={10} /> Новий</button>
+                            {form.kind !== 'issue' && (
+                                <Field
+                                    label={form.kind === 'partner' ? 'Партнер' : 'Клієнт'}
+                                    required={form.kind === 'partner'}
+                                    hint="Якщо клієнта ще немає — введіть назву й створіть прямо тут"
+                                >
+                                    <Picker
+                                        options={[{ id: '', label: '— не вказано —' }, ...clientOptions]}
+                                        value={form.client_id}
+                                        onChange={v => setForm(f => ({ ...f, client_id: v }))}
+                                        onAddNew={quickAddClient}
+                                        addLabel="Створити клієнта"
+                                        placeholder="Оберіть…" icon={FaUserTie}
+                                        searchPlaceholder="Почніть вводити назву…"
+                                    />
+                                </Field>
+                            )}
+                        </div>
+
+                        {/* Звідки і гроші */}
+                        <div className={`${T.inset} p-3 space-y-2.5`}>
+                            <div className={T.label}>Звідки списуємо</div>
+
+                            <Field label="Склад списання" required>
+                                <Picker
+                                    options={whOptions} value={form.warehouse_from_id}
+                                    onChange={v => setForm(f => ({ ...f, warehouse_from_id: v }))}
+                                    placeholder="Оберіть склад…" icon={FaWarehouse}
+                                />
+                            </Field>
+
+                            {isMoney && (
+                                <div className="grid grid-cols-2 gap-2.5">
+                                    <Field label="Валюта">
+                                        <select className={T.select} value={form.currency}
+                                            onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}>
+                                            {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </Field>
+                                    {form.currency !== 'UAH' && (
+                                        <Field label="Курс до гривні">
+                                            <input type="number" step="any" min="0" inputMode="decimal"
+                                                className={T.input} value={form.exchange_rate}
+                                                onChange={e => setForm(f => ({ ...f, exchange_rate: e.target.value }))} />
+                                        </Field>
                                     )}
                                 </div>
-
-                                {isAddingClient && form.kind !== 'issue' ? (
-                                    <div className="bg-blue-50/40 border border-blue-100 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                        <input autoFocus type="text" value={newClient.name} onChange={e => setNewClient({ ...newClient, name: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400" placeholder="ПІБ / Назва *" />
-                                        <input type="text" value={newClient.phone} onChange={e => setNewClient({ ...newClient, phone: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400" placeholder="Телефон" />
-                                        <input type="text" value={newClient.notes} onChange={e => setNewClient({ ...newClient, notes: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400" placeholder="Коментар" />
-                                        <div className="sm:col-span-3 flex justify-end gap-2">
-                                            <button type="button" onClick={() => setIsAddingClient(false)} className="px-4 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-600">Скасувати</button>
-                                            <button type="button" onClick={handleQuickAddClient} disabled={isSubmitting} className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold shadow hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"><FaCheck /> Зберегти</button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        {form.kind !== 'issue' && (
-                                            <div>
-                                                <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">{form.kind === 'partner' ? 'Партнер' : 'Клієнт / Партнер'} {form.kind === 'partner' && <span className="text-red-500">*</span>}</label>
-                                                <SearchableSelect options={clientOptions} value={form.client_id} onChange={(val) => setForm({ ...form, client_id: val })} placeholder="Пошук (Ім'я або ID)..." />
-                                            </div>
-                                        )}
-                                        <div className={form.kind === 'issue' ? 'md:col-span-2' : ''}>
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Об'єкт {form.kind === 'issue' ? <span className="text-red-500">*</span> : '(опц.)'}</label>
-                                            <SearchableSelect options={instOptions} value={form.installation_custom_id} onChange={(val) => setForm({ ...form, installation_custom_id: val })} placeholder="Пошук за номером об'єкта..." />
-                                        </div>
-                                    </div>
-                                )}
-                            </section>
-
-                            {/* СКЛАД */}
-                            <section>
-                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2 border-t border-slate-100 pt-5"><FaWarehouse /> Склад списання <span className="text-red-500">*</span></h3>
-                                <select required value={form.warehouse_from_id} onChange={e => setForm({ ...form, warehouse_from_id: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-200 outline-none text-sm font-bold text-slate-800 transition-colors">
-                                    <option value="">Оберіть склад...</option>
-                                    {dict.warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                                </select>
-                            </section>
-
-                            {/* КОШИК ПОЗИЦІЙ */}
-                            <section>
-                                <div className="flex justify-between items-center mb-3 border-t border-slate-100 pt-5">
-                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><FaBox /> Позиції ({lines.filter(l => l.nomenclature_id).length})</h3>
-                                    <button type="button" onClick={addLine} disabled={!form.warehouse_from_id} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-3 py-1.5 rounded-lg flex items-center gap-1.5 disabled:opacity-40"><FaPlus size={10} /> Додати рядок</button>
-                                </div>
-
-                                {!form.warehouse_from_id ? (
-                                    <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-sm text-slate-400 font-medium">Спершу оберіть склад</div>
-                                ) : (
-                                    <div className="space-y-3">
-                                        {lines.map((line) => {
-                                            const nom = nomById(line.nomenclature_id);
-                                            const hasPkg = nom?.package_multiplier > 1;
-                                            const bal = getBal(line.nomenclature_id);
-                                            const need = needByNom(line.nomenclature_id);
-                                            const qtyB = lineQtyBase(line);
-                                            const over = need && qtyB > parseFloat(need.outstanding_need);
-                                            const offSpec = form.installation_custom_id && line.nomenclature_id && !need;
-                                            return (
-                                                <div key={line.key} className={`bg-white border rounded-xl p-3 shadow-sm ${line.error ? 'border-red-300' : 'border-slate-200'}`}>
-                                                    <div className="flex gap-2 items-start">
-                                                        <div className="flex-1 min-w-0">
-                                                            <SearchableSelect options={nomOptions} value={line.nomenclature_id} onChange={(val) => updateLine(line.key, { nomenclature_id: val, sellMode: 'base' })} placeholder="Оберіть товар..." />
-                                                        </div>
-                                                        <button type="button" onClick={() => removeLine(line.key)} className="p-2.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0" title="Прибрати"><FaTrash size={14} /></button>
-                                                    </div>
-
-                                                    {line.nomenclature_id && (
-                                                        <div className="mt-2.5 flex flex-wrap items-end gap-2 sm:gap-3">
-                                                            {hasPkg && (
-                                                                <div className="flex bg-slate-100 p-0.5 rounded-lg">
-                                                                    <button type="button" onClick={() => updateLine(line.key, { sellMode: 'base' })} className={`px-2 py-1 rounded-md text-[10px] font-bold ${line.sellMode === 'base' ? 'bg-white shadow text-blue-700' : 'text-slate-500'}`}>{nom.unitName}</button>
-                                                                    <button type="button" onClick={() => updateLine(line.key, { sellMode: 'piece' })} className={`px-2 py-1 rounded-md text-[10px] font-bold ${line.sellMode === 'piece' ? 'bg-white shadow text-amber-700' : 'text-slate-500'}`}>{nom.package_name || 'шт'}</button>
-                                                                </div>
-                                                            )}
-                                                            <div>
-                                                                <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">К-сть</label>
-                                                                <input type="number" step="any" min="0" inputMode="decimal" value={line.quantity} onChange={e => updateLine(line.key, { quantity: e.target.value })} className="w-24 px-3 py-2 bg-white border-2 border-slate-200 focus:border-blue-400 rounded-lg text-base font-black text-slate-800 outline-none" placeholder="0" />
-                                                            </div>
-                                                            {isMoney && (
-                                                                <div>
-                                                                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Ціна/од ({form.currency})</label>
-                                                                    <input type="number" step="any" min="0" value={line.unit_price} onChange={e => updateLine(line.key, { unit_price: e.target.value })} className="w-28 px-3 py-2 bg-white border-2 border-slate-200 focus:border-blue-400 rounded-lg text-base font-black text-slate-800 outline-none" placeholder="0.00" />
-                                                                </div>
-                                                            )}
-                                                            {isMoney && (parseFloat(line.quantity) > 0 && parseFloat(line.unit_price) > 0) && (
-                                                                <div className="text-xs font-bold text-slate-500 pb-2">= {(parseFloat(line.quantity) * parseFloat(line.unit_price)).toLocaleString('uk-UA')} {form.currency}</div>
-                                                            )}
-                                                        </div>
-                                                    )}
-
-                                                    {/* хінти: залишок / звірка / помилка */}
-                                                    {line.nomenclature_id && (
-                                                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
-                                                            <span className="font-bold text-slate-500 bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded">{form.kind === 'issue' ? 'На складі' : 'Вільно'}: {form.kind === 'issue' ? bal.onHand : bal.available} {nom?.unitName}</span>
-                                                            {need && <span className="font-bold text-slate-500 bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded">дефіцит: {parseFloat(need.outstanding_need)}</span>}
-                                                            {over && <span className="font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded flex items-center gap-1"><FaExclamationTriangle size={9} /> понад план</span>}
-                                                            {offSpec && <span className="font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded flex items-center gap-1"><FaExclamationTriangle size={9} /> поза специфікацією</span>}
-                                                            {line.error && <span className="font-bold text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">{line.error}</span>}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </section>
-
-                            {/* ФІНАНСИ (тільки продаж) */}
-                            {isMoney && (
-                                <section className="border-t border-slate-100 pt-5">
-                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><FaMoneyBillWave /> Фінанси</h3>
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
-                                        <div>
-                                            <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Валюта</label>
-                                            <select value={form.currency} onChange={e => setForm({ ...form, currency: e.target.value, exchange_rate: e.target.value === 'UAH' ? '1' : form.exchange_rate })} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm font-bold text-slate-800">
-                                                <option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="UAH">UAH (₴)</option>
-                                            </select>
-                                        </div>
-                                        {form.currency !== 'UAH' && (
-                                            <div>
-                                                <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Курс</label>
-                                                <input type="number" step="any" value={form.exchange_rate} onChange={e => setForm({ ...form, exchange_rate: e.target.value })} className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm font-bold text-slate-800" />
-                                            </div>
-                                        )}
-                                        <div className="col-span-2 sm:col-span-1 sm:col-start-4 text-right">
-                                            <div className="text-[11px] font-bold text-slate-400 uppercase">Разом</div>
-                                            <div className="text-lg font-black text-slate-800">{grandTotal.toLocaleString('uk-UA')} {form.currency}</div>
-                                            {form.currency !== 'UAH' && rate > 0 && <div className="text-[11px] font-bold text-emerald-600">≈ {(grandTotal * rate).toLocaleString('uk-UA')} ₴</div>}
-                                        </div>
-                                    </div>
-                                </section>
                             )}
+                        </div>
 
-                            {/* ДОКУМЕНТ + КОМЕНТАР */}
-                            <section className="border-t border-slate-100 pt-5">
-                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><FaFileAlt /> Документ і коментар</h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Номер накладної</label>
-                                        <div className="flex gap-2">
-                                            <input type="text" value={form.reference_document} onChange={e => setForm({ ...form, reference_document: e.target.value })} className="flex-1 min-w-0 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm font-bold text-slate-800" placeholder="ВН-..." />
-                                            <button type="button" onClick={refreshDocNumber} title="Згенерувати новий номер" className="px-3 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-xl transition-colors flex-shrink-0"><FaSync size={13} /></button>
-                                        </div>
-                                        <p className="text-[10px] text-slate-400 mt-1.5 font-medium">Один номер на всі позиції — за ним формується видаткова накладна.</p>
-                                    </div>
-                                    <div>
-                                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Коментар {anyOverageOrOffSpec && <span className="text-red-500">* причина</span>}</label>
-                                        <input type="text" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className={`w-full px-4 py-3 bg-slate-50 border rounded-xl outline-none text-sm text-slate-800 ${anyOverageOrOffSpec ? 'border-amber-300' : 'border-slate-200'}`} placeholder={anyOverageOrOffSpec ? 'Обов’язково: причина перевищення/поза планом...' : 'Опційно...'} />
-                                    </div>
+                        </div>{/* /шапка документа */}
+
+                        {/* Позиції */}
+                        <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                                <span className={T.label}>Позиції · {filledLines.length}</span>
+                                <Btn size="sm" variant="soft" icon={FaPlus} className="ml-auto"
+                                    onClick={addLine} disabled={!form.warehouse_from_id}>
+                                    Додати
+                                </Btn>
+                            </div>
+
+                            {!form.warehouse_from_id ? (
+                                <div className={`${T.inset} px-3 py-4 text-center text-[12.5px] text-slate-500`}>
+                                    Спершу оберіть склад — далі буде видно, що на ньому є.
                                 </div>
-                                {anyOverageOrOffSpec && (
-                                    <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
-                                        <FaInfoCircle className="text-amber-500 mt-0.5 shrink-0" />
-                                        <p className="text-[11px] text-amber-800 font-medium">Є позиції понад план або поза специфікацією об'єкта. Операцію буде проведено, але вкажіть причину.</p>
-                                    </div>
-                                )}
-                            </section>
+                            ) : nomOptions.length === 0 ? (
+                                <div className={`${T.inset} px-3 py-4 text-center text-[12.5px] text-slate-500`}>
+                                    На цьому складі немає нічого доступного для цієї операції.
+                                </div>
+                            ) : (
+                                <div className="space-y-1.5">
+                                    {lines.map(l => renderLine(l))}
+                                </div>
+                            )}
                         </div>
 
-                        {/* FOOTER */}
-                        <div className="p-4 sm:p-5 border-t border-slate-100 flex flex-col-reverse sm:flex-row justify-between sm:items-center gap-3 flex-shrink-0 bg-slate-50 rounded-b-[24px] pb-safe">
-                            <div className="text-xs font-bold text-slate-500 text-center sm:text-left">
-                                Позицій: <span className="text-slate-800">{lines.filter(l => l.nomenclature_id && parseFloat(l.quantity) > 0).length}</span>
-                                {isMoney && grandTotal > 0 && <span className="ml-3">Разом: <span className="text-slate-800">{grandTotal.toLocaleString('uk-UA')} {form.currency}</span></span>}
-                            </div>
-                            <div className="flex gap-3">
-                                <button type="button" onClick={onClose} className="flex-1 sm:flex-none px-6 py-3 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
-                                <button type="button" onClick={handleSubmit} disabled={isSubmitting || isLoading} className={`flex-1 sm:flex-none px-6 sm:px-8 py-3 text-white rounded-xl font-bold shadow-lg transition-colors text-sm flex items-center justify-center gap-2 disabled:opacity-70 ${accent.btn}`}>
-                                    {isSubmitting ? 'Проведення...' : `Провести${form.kind === 'issue' ? ' видачу' : form.kind === 'partner' ? ' передачу' : ' продаж'}`}
-                                </button>
-                            </div>
-                        </div>
-                    </motion.div>
+                        {/* Коментар */}
+                        <Field
+                            label={needsReason ? 'Причина — обов’язково' : 'Коментар'}
+                            required={needsReason}
+                            hint={needsReason
+                                ? 'Є позиції поза специфікацією або понад потребу об’єкта'
+                                : undefined}
+                        >
+                            <input
+                                className={`${T.input} ${needsReason && !form.notes.trim() ? 'border-amber-400 bg-amber-50' : ''}`}
+                                placeholder={needsReason ? 'Напр. заміна пошкодженого' : 'Необов’язково'}
+                                value={form.notes}
+                                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                            />
+                        </Field>
 
-                    {/* Видаткова накладна за щойно проведеним продажем */}
-                    <DeliveryNoteModal
-                        isOpen={!!noteDoc}
-                        doc={noteDoc}
-                        onClose={() => { setNoteDoc(null); onClose(); }}
-                    />
-                </motion.div>
-            )}
-        </AnimatePresence>
+                        {filledLines.length > 0 && (
+                            <div className={`${TONE[cfg.tone].chip} border rounded-lg px-3 py-2 flex items-center gap-2`}>
+                                <FaCheckCircle size={12} />
+                                <span className="text-[12.5px] font-bold">
+                                    {cfg.short}: {filledLines.length} позицій
+                                    {isMoney && grandTotal > 0 && ` на ${num(grandTotal)} ${form.currency}`}
+                                </span>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </Modal>
+
+            <DeliveryNoteModal
+                isOpen={!!noteDoc}
+                doc={noteDoc}
+                onClose={() => { setNoteDoc(null); onClose(); }}
+            />
+        </>
     );
 }

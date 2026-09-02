@@ -1,1049 +1,1046 @@
-import React, { useState, useEffect, useCallback, memo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+// =====================================================================
+//  Забезпечення об'єктів.
+//
+//  Відповідає на одне питання: чи можна виїжджати на об'єкт.
+//  По кожній позиції специфікації видно смугу покриття — скільки вже
+//  видано, скільки в резерві, скільки в дорозі і чого бракує.
+//
+//  Замість шести однакових плиток із цифрами — одна смуга й одна
+//  головна дія. Решта дій живе в аркуші, який відкривається однаково
+//  і мишею, і пальцем.
+//
+//  Окремо розрізняємо «дефіцит» і «недовидачу»: якщо частину вже
+//  возили, це не брак матеріалу, а незавершена видача.
+// =====================================================================
+
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-    FaSearch, FaChevronLeft, FaCheck, FaExclamationTriangle,
-    FaTimes, FaHardHat, FaBoxOpen, FaLock, FaWarehouse,
-    FaArrowUp, FaUndo, FaClipboardList, FaUnlock, FaShoppingCart, FaTrash
+    FaSearch, FaChevronLeft, FaExclamationTriangle, FaHardHat, FaBoxOpen,
+    FaLock, FaUnlock, FaArrowUp, FaUndo, FaClipboardList, FaShoppingCart,
+    FaTrash, FaEllipsisH, FaTruck, FaLayerGroup,
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import Layout from '../Layout';
 import { useAuth } from '../AuthProvider';
 import ManualSpecBuilder from './ManualSpecBuilder';
+import {
+    T, TONE, Btn, IconBtn, Chip, Card, Field, Bar, EmptyState,
+    Skeleton, Modal, useToast, useConfirm, humanError, num, useAutoFocus,
+} from '../ui';
 
-// --- ДОПОМІЖНІ КОМПОНЕНТИ ---
-const Toast = memo(({ message, type = 'success', isVisible, onClose }) => {
-    useEffect(() => {
-        if (isVisible) { const timer = setTimeout(onClose, 4000); return () => clearTimeout(timer); }
-    }, [isVisible, onClose]);
-    const styles = { success: 'bg-emerald-600', error: 'bg-red-600', warning: 'bg-amber-500' };
-    return (
-        <AnimatePresence>
-            {isVisible && (
-                <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="fixed top-20 right-4 z-[100]">
-                    <div className={`${styles[type] || 'bg-blue-600'} text-white rounded-xl shadow-2xl p-4 flex items-center space-x-3`}>
-                        {type === 'success' ? <FaCheck /> : <FaExclamationTriangle />}
-                        <span className="font-bold text-sm">{message}</span>
-                        <button onClick={onClose} className="ml-4 text-white/80 hover:text-white"><FaTimes /></button>
-                    </div>
-                </motion.div>
-            )}
-        </AnimatePresence>
-    );
-});
-
-// Конфіг режимів операції
-const OP_MODES = {
-    reserve: { label: 'Резервування', verb: 'Зарезервувати', icon: FaLock, accent: 'indigo', headBg: 'bg-indigo-50', headText: 'text-indigo-900', headIcon: 'text-indigo-500', btn: 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200', ring: 'focus:ring-indigo-500', border: 'border-indigo-200 focus:border-indigo-500', text: 'text-indigo-700' },
-    issue:   { label: 'Видача під об\'єкт', verb: 'Видати', icon: FaArrowUp, accent: 'emerald', headBg: 'bg-emerald-50', headText: 'text-emerald-900', headIcon: 'text-emerald-500', btn: 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200', ring: 'focus:ring-emerald-500', border: 'border-emerald-200 focus:border-emerald-500', text: 'text-emerald-700' },
-    return:  { label: 'Повернення на склад', verb: 'Повернути', icon: FaUndo, accent: 'amber', headBg: 'bg-amber-50', headText: 'text-amber-900', headIcon: 'text-amber-500', btn: 'bg-amber-600 hover:bg-amber-700 shadow-amber-200', ring: 'focus:ring-amber-500', border: 'border-amber-200 focus:border-amber-500', text: 'text-amber-700' },
-    unreserve: { label: 'Зняття резерву', verb: 'Зняти резерв', icon: FaUnlock, accent: 'slate', headBg: 'bg-slate-100', headText: 'text-slate-800', headIcon: 'text-slate-500', btn: 'bg-slate-700 hover:bg-slate-800 shadow-slate-300', ring: 'focus:ring-slate-500', border: 'border-slate-300 focus:border-slate-500', text: 'text-slate-700' },
+const OPS = {
+    reserve: { label: 'Зарезервувати', short: 'Резерв', icon: FaLock, tone: 'accent', variant: 'accent' },
+    issue: { label: 'Видати на об’єкт', short: 'Видати', icon: FaArrowUp, tone: 'ok', variant: 'ok' },
+    unreserve: { label: 'Зняти резерв', short: 'Зняти резерв', icon: FaUnlock, tone: 'neutral', variant: 'soft' },
+    return: { label: 'Повернути на склад', short: 'Повернути', icon: FaUndo, tone: 'warn', variant: 'softWarn' },
 };
 
-// Статуси заявок на закупівлю (procurement_requests) — гнучкі, без жорстких переходів
-const REQ_STATUSES = {
-    requested: { label: 'Потрібно замовити', cls: 'bg-orange-50 text-orange-700 border-orange-200' },
-    ordered: { label: 'Замовлено', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
-    stock_confirmed: { label: 'Є на складі', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-    done: { label: 'Закрито', cls: 'bg-slate-100 text-slate-500 border-slate-200' },
-    rejected: { label: 'Відхилено', cls: 'bg-red-50 text-red-600 border-red-200' },
+const REQ_STATUS = {
+    requested: { label: 'Потрібно замовити', tone: 'warn' },
+    ordered: { label: 'Замовлено', tone: 'info' },
+    stock_confirmed: { label: 'Є на складі', tone: 'ok' },
+    done: { label: 'Закрито', tone: 'neutral' },
+    rejected: { label: 'Відхилено', tone: 'danger' },
 };
+
+/* Позиція без жодного руху — це не помилка, а нулі */
+const EMPTY = Object.freeze({ onHand: 0, reserved: 0, available: 0 });
+
+const FILTERS = [
+    { value: 'all', label: 'Всі' },
+    { value: 'deficit', label: 'Дефіцит' },
+    { value: 'waiting', label: 'В дорозі' },
+    { value: 'ready', label: 'Готові' },
+    { value: 'nospec', label: 'Без специфікації' },
+];
 
 export default function ProvisioningPage() {
     const { employee, loading: authLoading } = useAuth();
+    const toast = useToast();
+    const confirm = useConfirm();
+    const autoFocus = useAutoFocus();
 
     const [installations, setInstallations] = useState([]);
     const [warehouses, setWarehouses] = useState([]);
-    const [nomenclatures, setNomenclatures] = useState([]);
+    const [nomIndex, setNomIndex] = useState(new Map());
     const [loading, setLoading] = useState(true);
-    const [searchTerm, setSearchTerm] = useState('');
-    const [statusFilter, setStatusFilter] = useState('all'); // all | ready | waiting | deficit | nospec
+    const [search, setSearch] = useState('');
+    const [statusFilter, setStatusFilter] = useState('all');
 
-    // Очікуване постачання: { [installation_custom_id]: { [nomenclature_id]: кількість, що ще не отримана } }
-    const [incomingMap, setIncomingMap] = useState({});
-
-    // Стан для детального перегляду об'єкта
-    const [selectedInst, setSelectedInst] = useState(null);
-    const [specNeeds, setSpecNeeds] = useState([]);
-    const [stockRows, setStockRows] = useState([]);        // повний v_warehouse_stock_available
-    const [objReservations, setObjReservations] = useState([]); // активні резерви цього об'єкта
-    const [offSpecIssued, setOffSpecIssued] = useState([]); // видано на об'єкт поза специфікацією
-    const [objRequests, setObjRequests] = useState([]);     // заявки на закупівлю цього об'єкта
+    const [selected, setSelected] = useState(null);
+    const [needs, setNeeds] = useState([]);
+    const [stockRows, setStockRows] = useState([]);
+    const [reservations, setReservations] = useState([]);
+    const [incoming, setIncoming] = useState({});
+    const [offSpec, setOffSpec] = useState([]);
+    const [requests, setRequests] = useState([]);
     const [detailLoading, setDetailLoading] = useState(false);
 
-    // Модалка нової заявки на закупівлю
-    const [reqModal, setReqModal] = useState({ isOpen: false, item: null });
-    const [reqForm, setReqForm] = useState({ quantity: '', note: '' });
-    const [isReqSubmitting, setIsReqSubmitting] = useState(false);
+    const [sheet, setSheet] = useState(null);
+    const [op, setOp] = useState(null);
+    const [reqModal, setReqModal] = useState(null);
+    const [manualOpen, setManualOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
 
-    // Єдина модалка операцій (reserve / issue / return)
-    const [opModal, setOpModal] = useState({ isOpen: false, mode: null, item: null });
-    const [opForm, setOpForm] = useState({ warehouse_id: '', quantity: '', reason: '' });
-    const [isSubmitting, setIsSubmitting] = useState(false);
+    /* ---------------- ДАШБОРД ---------------- */
 
-    // Ручне внесення/редагування комплектації
-    const [isManualOpen, setIsManualOpen] = useState(false);
-
-    const [toast, setToast] = useState({ isVisible: false, message: '', type: 'success' });
-    const showToast = useCallback((message, type = 'success') => setToast({ isVisible: true, message, type }), []);
-
-    // --- ЗАВАНТАЖЕННЯ ДАШБОРДУ ТА ДОВІДНИКІВ ---
     const loadDashboard = useCallback(async () => {
         setLoading(true);
         try {
-            const [instRes, needsRes, whRes, nomRes, catRes, poRes, reqRes] = await Promise.all([
-                supabase.from('installations').select(`custom_id, name, status, gps_link, client:clients(name, company_name)`).in('status', ['planning', 'in_progress', 'pending']).order('created_at', { ascending: false }),
+            const [instRes, needsRes, whRes, incRes, reqRes] = await Promise.all([
+                supabase.from('installations')
+                    .select('custom_id, name, status, client:clients(name, company_name)')
+                    // on_hold теж показуємо: об'єкт на паузі не має зникати зі складу
+                    .in('status', ['planning', 'in_progress', 'pending', 'on_hold'])
+                    .order('created_at', { ascending: false }),
                 supabase.from('v_object_material_needs').select('*'),
                 supabase.from('warehouses').select('id, name, is_active').order('name'),
-                supabase.from('nomenclature').select('id, name, sku, category_id, unit:units(name)'),
-                supabase.from('categories').select('*'),
-                // Незакриті замовлення, прив'язані до об'єктів — щоб бачити "замовлено / в дорозі"
-                supabase.from('purchase_order_items')
-                    .select('nomenclature_id, quantity, po:purchase_orders!inner(installation_custom_id, status), movements:stock_movements(quantity, operation_type)')
-                    .in('po.status', ['draft', 'sent', 'partially_received'])
-                    .not('po.installation_custom_id', 'is', null),
-                // Необроблені заявки на закупівлю — для лічильника на картках
-                supabase.from('procurement_requests').select('installation_custom_id, status').eq('status', 'requested')
+                supabase.from('v_object_incoming').select('*'),
+                supabase.from('procurement_requests').select('installation_custom_id').eq('status', 'requested'),
             ]);
-
             if (instRes.error) throw instRes.error;
             if (needsRes.error) throw needsRes.error;
 
             setWarehouses(whRes.data || []);
 
-            const cats = catRes.data || [];
-            const processedNom = (nomRes.data || []).map(item => {
-                let path = [];
-                let currentId = item.category_id;
-                while (currentId) {
-                    const cat = cats.find(c => c.id === currentId);
-                    if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break;
-                }
-                return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim() };
+            // «В дорозі» рахує база. Якщо в'юхи ще немає — просто нулі.
+            const inc = {};
+            (incRes.data || []).forEach(r => {
+                if (!inc[r.installation_custom_id]) inc[r.installation_custom_id] = {};
+                inc[r.installation_custom_id][r.nomenclature_id] = parseFloat(r.incoming_quantity);
             });
-            setNomenclatures(processedNom);
 
-            const needsData = needsRes.data || [];
-
-            // Будуємо мапу очікуваного постачання: об'єкт -> номенклатура -> ще не отримано
-            const incoming = {};
-            (poRes.data || []).forEach(poi => {
-                const instId = poi.po?.installation_custom_id;
-                if (!instId) return;
-                const received = (poi.movements || [])
-                    .filter(m => m.operation_type === 'purchase')
-                    .reduce((sum, m) => sum + parseFloat(m.quantity || 0), 0);
-                const remaining = Math.max(0, parseFloat(poi.quantity || 0) - received);
-                if (remaining <= 0) return;
-                if (!incoming[instId]) incoming[instId] = {};
-                incoming[instId][poi.nomenclature_id] = (incoming[instId][poi.nomenclature_id] || 0) + remaining;
-            });
-            setIncomingMap(incoming);
-
-            // Лічильник необроблених заявок по об'єктах
-            const reqCounts = {};
+            const reqCount = {};
             (reqRes.data || []).forEach(r => {
-                reqCounts[r.installation_custom_id] = (reqCounts[r.installation_custom_id] || 0) + 1;
+                reqCount[r.installation_custom_id] = (reqCount[r.installation_custom_id] || 0) + 1;
             });
 
-            const processedInst = (instRes.data || []).map(inst => {
-                const objectNeeds = needsData.filter(n => String(n.installation_custom_id) === String(inst.custom_id));
-                const objIncoming = incoming[inst.custom_id] || {};
-
-                let readiness = 0;
-                let statusBadge = "Без специфікації";
-                let badgeColor = "bg-slate-100 text-slate-500";
-                let provStatus = 'nospec';
-                let okCount = 0, waitingCount = 0, hardDeficitCount = 0;
-
-                if (objectNeeds.length > 0) {
-                    let totalPercent = 0;
-                    objectNeeds.forEach(need => {
-                        const required = parseFloat(need.required_quantity) || 1;
-                        const covered = (parseFloat(need.reserved_quantity) || 0) + (parseFloat(need.issued_quantity) || 0);
-                        totalPercent += Math.min(100, (covered / required) * 100);
-
-                        const outstanding = parseFloat(need.outstanding_need) || 0;
-                        if (outstanding <= 0) {
-                            okCount++;
-                        } else if ((objIncoming[need.nomenclature_id] || 0) >= outstanding) {
-                            waitingCount++;
-                        } else {
-                            hardDeficitCount++;
-                        }
-                    });
-                    readiness = Math.round(totalPercent / objectNeeds.length);
-
-                    if (readiness === 100) {
-                        statusBadge = "Скомплектовано — можна починати";
-                        badgeColor = "bg-emerald-100 text-emerald-700 border-emerald-200";
-                        provStatus = 'ready';
-                    } else if (hardDeficitCount === 0) {
-                        statusBadge = "Очікує постачання";
-                        badgeColor = "bg-blue-100 text-blue-700 border-blue-200";
-                        provStatus = 'waiting';
-                    } else {
-                        statusBadge = `Дефіцит: ${hardDeficitCount} поз.`;
-                        badgeColor = "bg-red-100 text-red-700 border-red-200";
-                        provStatus = 'deficit';
-                    }
-                }
-
-                return { ...inst, readiness, statusBadge, badgeColor, provStatus, okCount, waitingCount, hardDeficitCount, needsCount: objectNeeds.length, requestsCount: reqCounts[inst.custom_id] || 0 };
+            const byObject = new Map();
+            (needsRes.data || []).forEach(n => {
+                const k = String(n.installation_custom_id);
+                if (!byObject.has(k)) byObject.set(k, []);
+                byObject.get(k).push(n);
             });
 
-            setInstallations(processedInst);
-        } catch (error) {
-            showToast(error.message, 'error');
-        } finally {
-            setLoading(false);
-        }
-    }, [showToast]);
+            setInstallations((instRes.data || []).map(inst => {
+                const list = byObject.get(String(inst.custom_id)) || [];
+                const objInc = inc[inst.custom_id] || {};
+
+                let covered = 0, waiting = 0, deficit = 0, sum = 0;
+                list.forEach(n => {
+                    const req = parseFloat(n.required_quantity) || 1;
+                    const got = (parseFloat(n.reserved_quantity) || 0) + (parseFloat(n.issued_quantity) || 0);
+                    sum += Math.min(100, (got / req) * 100);
+
+                    const left = parseFloat(n.outstanding_need) || 0;
+                    if (left <= 0) covered += 1;
+                    else if ((objInc[n.nomenclature_id] || 0) >= left) waiting += 1;
+                    else deficit += 1;
+                });
+
+                return {
+                    ...inst,
+                    positions: list.length,
+                    covered, waiting, deficit,
+                    readiness: list.length ? Math.round(sum / list.length) : 0,
+                    state: list.length === 0 ? 'nospec'
+                        : deficit > 0 ? 'deficit'
+                            : waiting > 0 ? 'waiting' : 'ready',
+                    requests: reqCount[inst.custom_id] || 0,
+                };
+            }));
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setLoading(false); }
+    }, [toast]);
 
     useEffect(() => { if (!authLoading) loadDashboard(); }, [authLoading, loadDashboard]);
 
-    // --- ЗАВАНТАЖЕННЯ ДЕТАЛЕЙ ОБ'ЄКТА ---
-    const openObjectDetails = async (inst) => {
-        setSelectedInst(inst);
+    /* ---------------- ДЕТАЛІ ОБ'ЄКТА ---------------- */
+
+    const openObject = useCallback(async (inst) => {
+        setSelected(inst);
         setDetailLoading(true);
         try {
-            const [needsRes, stockRes, resRes, movRes, reqRes] = await Promise.all([
-                supabase.from('v_object_material_needs').select('*').eq('installation_custom_id', inst.custom_id),
-                supabase.from('v_warehouse_stock_available').select('*'),
-                supabase.from('reservations').select('id, warehouse_id, nomenclature_id, reserved_quantity, released_quantity, status').eq('installation_custom_id', inst.custom_id).eq('status', 'active'),
-                // Фактичні видачі/повернення по об'єкту — щоб побачити й те, чого немає в специфікації
-                supabase.from('stock_movements').select('nomenclature_id, quantity, operation_type').eq('installation_custom_id', inst.custom_id).in('operation_type', ['issue', 'return']),
-                supabase.from('procurement_requests').select('*').eq('installation_custom_id', inst.custom_id).order('created_at', { ascending: false })
+            const { data: needsData, error: needsErr } = await supabase
+                .from('v_object_material_needs').select('*')
+                .eq('installation_custom_id', inst.custom_id);
+            if (needsErr) throw needsErr;
+
+            const specIds = (needsData || []).map(n => n.nomenclature_id);
+
+            const [stockRes, resRes, movRes, reqRes, incRes] = await Promise.all([
+                // Раніше тут тягнулась УСЯ таблиця залишків: усі склади × вся
+                // номенклатура. Тепер лише позиції цього об'єкта.
+                specIds.length
+                    ? supabase.from('v_warehouse_stock_available').select('*').in('nomenclature_id', specIds)
+                    : Promise.resolve({ data: [] }),
+                supabase.from('reservations')
+                    .select('id, warehouse_id, nomenclature_id, reserved_quantity, released_quantity')
+                    .eq('installation_custom_id', inst.custom_id).eq('status', 'active'),
+                supabase.from('stock_movements')
+                    .select('nomenclature_id, quantity, operation_type')
+                    .eq('installation_custom_id', inst.custom_id)
+                    .in('operation_type', ['issue', 'return']),
+                supabase.from('procurement_requests').select('*')
+                    .eq('installation_custom_id', inst.custom_id)
+                    .order('created_at', { ascending: false }),
+                supabase.from('v_object_incoming').select('*')
+                    .eq('installation_custom_id', inst.custom_id),
             ]);
 
-            if (needsRes.error) throw needsRes.error;
-            if (stockRes.error) throw stockRes.error;
+            setNeeds(needsData || []);
+            setReservations(resRes.data || []);
+            setRequests(reqRes.data || []);
 
-            const needs = needsRes.data || [];
-            setSpecNeeds(needs);
-            setStockRows(stockRes.data || []);
-            setObjReservations(resRes.data || []);
-            setObjRequests(reqRes.data || []);
+            const inc = {};
+            (incRes.data || []).forEach(r => { inc[r.nomenclature_id] = parseFloat(r.incoming_quantity); });
+            setIncoming(inc);
 
-            // Видано поза специфікацією: чисті видачі (видача − повернення) по номенклатурі, якої немає в плані
-            const specNomIds = new Set(needs.map(n => n.nomenclature_id));
-            const netIssued = {};
+            // Видане поза специфікацією видно лише з рухів об'єкта
+            const net = {};
             (movRes.data || []).forEach(m => {
                 const sign = m.operation_type === 'issue' ? 1 : -1;
-                netIssued[m.nomenclature_id] = (netIssued[m.nomenclature_id] || 0) + sign * parseFloat(m.quantity || 0);
+                net[m.nomenclature_id] = (net[m.nomenclature_id] || 0) + sign * parseFloat(m.quantity || 0);
             });
-            setOffSpecIssued(
-                Object.entries(netIssued)
-                    .filter(([nomId, qty]) => qty > 0.0001 && !specNomIds.has(parseInt(nomId)))
-                    .map(([nomId, qty]) => ({ nomenclature_id: parseInt(nomId), quantity: qty }))
-            );
-        } catch (error) {
-            showToast(error.message, 'error');
-        } finally {
-            setDetailLoading(false);
-        }
-    };
+            const specSet = new Set(specIds);
+            const extra = Object.entries(net)
+                .filter(([id, q]) => q > 0.0001 && !specSet.has(parseInt(id)))
+                .map(([id, q]) => ({ nomenclature_id: parseInt(id), quantity: q }));
+            setOffSpec(extra);
 
-    const refreshDetails = async () => {
-        if (selectedInst) await openObjectDetails(selectedInst);
+            // Довідник назв — тільки те, що потрібне цьому екрану
+            const allIds = [...new Set([...specIds, ...extra.map(e => e.nomenclature_id)])];
+            if (allIds.length) {
+                const [nomRes, catRes] = await Promise.all([
+                    supabase.from('nomenclature')
+                        .select('id, name, sku, category_id, tracking_mode, lot_unit_name, unit:units(name)')
+                        .in('id', allIds),
+                    supabase.from('categories').select('id, name, parent_id'),
+                ]);
+                const catById = new Map((catRes.data || []).map(c => [c.id, c]));
+                const map = new Map();
+                (nomRes.data || []).forEach(n => {
+                    const path = [];
+                    let id = n.category_id, guard = 0;
+                    while (id && guard++ < 20) {
+                        const c = catById.get(id);
+                        if (!c) break;
+                        path.unshift(c.name);
+                        id = c.parent_id;
+                    }
+                    map.set(n.id, { ...n, fullName: `${path.join(' ')} ${n.name}`.trim() });
+                });
+                setNomIndex(map);
+            } else {
+                setNomIndex(new Map());
+            }
+
+            setStockRows(stockRes.data || []);
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setDetailLoading(false); }
+    }, [toast]);
+
+    const refresh = useCallback(async () => {
+        if (selected) await openObject(selected);
         loadDashboard();
-    };
+    }, [selected, openObject, loadDashboard]);
 
-    // --- ХЕЛПЕРИ ЗАЛИШКІВ ---
-    const stockAt = (whId, nomId) => {
-        const r = stockRows.find(s => String(s.warehouse_id) === String(whId) && String(s.nomenclature_id) === String(nomId));
-        return {
-            onHand: parseFloat(r?.quantity_on_hand || 0),
-            reservedTotal: parseFloat(r?.quantity_reserved || 0),
-            available: parseFloat(r?.quantity_available || 0),
-        };
-    };
-    const reservedHereAt = (whId, nomId) => objReservations
-        .filter(r => String(r.warehouse_id) === String(whId) && String(r.nomenclature_id) === String(nomId))
-        .reduce((sum, r) => sum + (parseFloat(r.reserved_quantity) - parseFloat(r.released_quantity)), 0);
-    // Скільки фізично можна видати з цього складу під цей об'єкт (наявність − чужі резерви)
-    const issuableAt = (whId, nomId) => {
-        const s = stockAt(whId, nomId);
-        return s.onHand - (s.reservedTotal - reservedHereAt(whId, nomId));
-    };
-    const reservedHereTotal = (nomId) => objReservations
-        .filter(r => String(r.nomenclature_id) === String(nomId))
-        .reduce((sum, r) => sum + (parseFloat(r.reserved_quantity) - parseFloat(r.released_quantity)), 0);
+    /* ---------------- ЗАЛИШКИ ---------------- */
 
-    const unitOf = (nomId) => nomenclatures.find(n => n.id === nomId)?.unit?.name || 'шт';
-    const nameOf = (item) => nomenclatures.find(n => n.id === item.nomenclature_id)?.fullName || item.nomenclature_name;
+    const stockMap = useMemo(() => {
+        const m = new Map();
+        stockRows.forEach(s => m.set(`${s.nomenclature_id}:${s.warehouse_id}`, {
+            onHand: parseFloat(s.quantity_on_hand || 0),
+            reserved: parseFloat(s.quantity_reserved || 0),
+            available: parseFloat(s.quantity_available || 0),
+        }));
+        return m;
+    }, [stockRows]);
 
-    // --- ВІДКРИТТЯ МОДАЛКИ ОПЕРАЦІЇ ---
-    const openOp = (mode, needItem) => {
-        const nomId = needItem.nomenclature_id;
-        const outstanding = parseFloat(needItem.outstanding_need);
-        const activeWh = warehouses.filter(w => w.is_active);
+    const stockAt = useCallback((nomId, whId) =>
+        stockMap.get(`${nomId}:${whId}`) || EMPTY, [stockMap]);
 
-        let candidates = [];
+    const freeTotal = useCallback((nomId) => stockRows
+        .filter(s => String(s.nomenclature_id) === String(nomId))
+        .reduce((sum, s) => sum + parseFloat(s.quantity_available || 0), 0), [stockRows]);
+
+    /** Зарезервовано під цей об'єкт — усього або на конкретному складі */
+    const myReserved = useCallback((nomId, whId = null) => reservations
+        .filter(r => String(r.nomenclature_id) === String(nomId)
+            && (whId === null || String(r.warehouse_id) === String(whId)))
+        .reduce((s, r) => s + (parseFloat(r.reserved_quantity) - parseFloat(r.released_quantity)), 0),
+        [reservations]);
+
+    /** Скільки фізично можна видати звідси: наявність мінус ЧУЖІ резерви */
+    const issuableAt = useCallback((nomId, whId) => {
+        const s = stockAt(nomId, whId);
+        return s.onHand - (s.reserved - myReserved(nomId, whId));
+    }, [stockAt, myReserved]);
+
+    const activeWarehouses = useMemo(() => warehouses.filter(w => w.is_active), [warehouses]);
+    const nomOf = useCallback((id) => nomIndex.get(id) || null, [nomIndex]);
+    const unitOf = useCallback((id) => nomOf(id)?.unit?.name || 'шт', [nomOf]);
+
+    /* ---------------- СТАН ПОЗИЦІЇ ---------------- */
+
+    const stateOf = useCallback((n) => {
+        const required = parseFloat(n.required_quantity) || 0;
+        const issued = parseFloat(n.issued_quantity) || 0;
+        const reserved = parseFloat(n.reserved_quantity) || 0;
+        const left = parseFloat(n.outstanding_need) || 0;
+        const inc = incoming[n.nomenclature_id] || 0;
+        const free = freeTotal(n.nomenclature_id);
+        const mine = myReserved(n.nomenclature_id);
+
+        // Чотири стани замість шести формулювань. Кожен відповідає на
+        // «що мені з цим робити», а подробиці — цифрами під смугою.
+        let key, label, tone, hint;
+        if (left <= 0) {
+            key = 'ready'; label = 'Готово'; tone = 'ok';
+            hint = 'Потреба закрита повністю';
+        } else if (mine > 0 || free > 0) {
+            key = 'action'; label = 'Можна брати'; tone = 'accent';
+            hint = mine > 0
+                ? `Під об’єкт зарезервовано ${num(mine)} — лишилось видати`
+                : `На складах вільно ${num(free)}`;
+        } else if (inc >= left && inc > 0) {
+            key = 'waiting'; label = 'Чекаємо'; tone = 'info';
+            hint = `Замовлено ${num(inc)}, у дорозі — робити нічого не треба`;
+        } else {
+            key = 'missing'; label = 'Бракує'; tone = 'danger';
+            hint = inc > 0
+                ? `У дорозі лише ${num(inc)} з потрібних ${num(left)}`
+                : `Немає ні на складах, ні в замовленнях`;
+        }
+
+        return { key, label, tone, hint, required, issued, reserved, left, inc, free, mine };
+    }, [incoming, freeTotal, myReserved]);
+
+    /**
+     * Чому дію не можна виконати. Порожньо — можна.
+     * Показуємо саме причину, а не ховаємо кнопку: інакше незрозуміло,
+     * чому в одного рядка кнопка є, а в сусіднього немає.
+     */
+    const blockedReason = useCallback((mode, n) => {
+        const s = stateOf(n);
+        switch (mode) {
+            case 'reserve':
+                if (s.left <= 0) return 'Потреба вже закрита';
+                if (s.free <= 0) return 'На складах немає вільного залишку';
+                return null;
+            case 'issue':
+                if (s.mine <= 0 && s.left <= 0) return 'Потреба вже закрита';
+                if (s.mine <= 0 && s.free <= 0) return 'Немає що видавати';
+                return null;
+            case 'unreserve':
+                return s.mine > 0 ? null : 'Під цей об’єкт нічого не зарезервовано';
+            case 'return':
+                return s.issued > 0 ? null : 'На об’єкт ще нічого не видавали';
+            default: return 'Недоступно';
+        }
+    }, [stateOf]);
+
+    /* ---------------- ОПЕРАЦІЯ ---------------- */
+
+    const openOp = (mode, n) => {
+        const nomId = n.nomenclature_id;
+        const left = parseFloat(n.outstanding_need) || 0;
+        let candidates;
+
         if (mode === 'reserve') {
-            candidates = activeWh.filter(w => stockAt(w.id, nomId).available > 0);
-            if (candidates.length === 0) return showToast('Цього товару немає у вільному залишку на жодному складі', 'warning');
+            candidates = activeWarehouses.filter(w => stockAt(nomId, w.id).available > 0);
+            if (!candidates.length) return toast('Немає вільного залишку на жодному складі', 'warning');
         } else if (mode === 'issue') {
-            candidates = activeWh.filter(w => issuableAt(w.id, nomId) > 0);
-            if (candidates.length === 0) return showToast('Немає доступного залишку для видачі (все зайнято/відсутнє)', 'warning');
-            // пріоритет складу, де є власний резерв цього об'єкта
-            candidates.sort((a, b) => reservedHereAt(b.id, nomId) - reservedHereAt(a.id, nomId));
+            candidates = activeWarehouses.filter(w => issuableAt(nomId, w.id) > 0);
+            if (!candidates.length) return toast('Немає доступного залишку для видачі', 'warning');
+            candidates.sort((a, b) => myReserved(nomId, b.id) - myReserved(nomId, a.id));
         } else if (mode === 'unreserve') {
-            candidates = activeWh.filter(w => reservedHereAt(w.id, nomId) > 0);
-            if (candidates.length === 0) return showToast("Немає активних резервів цього об'єкта по цій позиції", 'warning');
-            candidates.sort((a, b) => reservedHereAt(b.id, nomId) - reservedHereAt(a.id, nomId));
-        } else { // return
-            candidates = activeWh.length ? activeWh : warehouses;
-            if (candidates.length === 0) return showToast('Немає активних складів для повернення', 'warning');
+            candidates = activeWarehouses.filter(w => myReserved(nomId, w.id) > 0);
+            if (!candidates.length) return toast('Активних резервів під цей об’єкт немає', 'warning');
+            candidates.sort((a, b) => myReserved(nomId, b.id) - myReserved(nomId, a.id));
+        } else {
+            candidates = activeWarehouses.length ? activeWarehouses : warehouses;
+            if (!candidates.length) return toast('Немає активних складів', 'warning');
         }
 
         const wh = candidates[0];
         let qty = 0;
-        if (mode === 'reserve') {
-            qty = Math.min(outstanding > 0 ? outstanding : 0, stockAt(wh.id, nomId).available);
-        } else if (mode === 'issue') {
-            const rHere = reservedHereAt(wh.id, nomId);
-            const target = rHere > 0 ? rHere : outstanding;
-            qty = Math.min(target > 0 ? target : 0, issuableAt(wh.id, nomId));
-        } else if (mode === 'unreserve') {
-            qty = reservedHereAt(wh.id, nomId);
-        } else {
-            qty = parseFloat(needItem.issued_quantity) || 0;
-        }
+        if (mode === 'reserve') qty = Math.min(Math.max(left, 0), stockAt(nomId, wh.id).available);
+        else if (mode === 'issue') {
+            const here = myReserved(nomId, wh.id);
+            qty = Math.min(here > 0 ? here : Math.max(left, 0), issuableAt(nomId, wh.id));
+        } else if (mode === 'unreserve') qty = myReserved(nomId, wh.id);
+        else qty = parseFloat(n.issued_quantity) || 0;
 
-        setOpModal({ isOpen: true, mode, item: needItem });
-        setOpForm({ warehouse_id: wh.id, quantity: qty > 0 ? qty : '', reason: '' });
+        setSheet(null);
+        setOp({ mode, item: n, warehouse_id: String(wh.id), quantity: qty > 0 ? String(num(qty)) : '', reason: '' });
     };
 
-    const closeOp = () => setOpModal({ isOpen: false, mode: null, item: null });
-
-    // Довідка по обраному складу в модалці
-    const modalStockInfo = () => {
-        if (!opModal.item || !opForm.warehouse_id) return null;
-        const nomId = opModal.item.nomenclature_id;
-        const whId = opForm.warehouse_id;
-        const s = stockAt(whId, nomId);
-        return { ...s, reservedHere: reservedHereAt(whId, nomId), issuable: issuableAt(whId, nomId) };
-    };
-
-    // Чи є перевищення плану (для звірки «попереджати, але дозволяти»)
-    const computeOverage = () => {
-        if (!opModal.item) return { over: false, ref: 0 };
-        const qty = parseFloat(opForm.quantity) || 0;
-        if (opModal.mode === 'reserve' || opModal.mode === 'issue') {
-            const ref = parseFloat(opModal.item.outstanding_need) || 0;
-            return { over: qty > ref, ref };
+    const overage = useMemo(() => {
+        if (!op) return { over: false, ref: 0 };
+        const q = parseFloat(op.quantity) || 0;
+        if (op.mode === 'reserve' || op.mode === 'issue') {
+            const ref = parseFloat(op.item.outstanding_need) || 0;
+            return { over: q > ref, ref };
         }
-        if (opModal.mode === 'return') {
-            const ref = parseFloat(opModal.item.issued_quantity) || 0;
-            return { over: qty > ref, ref };
+        if (op.mode === 'return') {
+            const ref = parseFloat(op.item.issued_quantity) || 0;
+            return { over: q > ref, ref };
         }
         return { over: false, ref: 0 };
-    };
+    }, [op]);
 
-    // --- ЗАЯВКИ НА ЗАКУПІВЛЮ ---
-    const openReqModal = (item, defaultQty) => {
-        setReqForm({ quantity: defaultQty > 0 ? defaultQty : '', note: '' });
-        setReqModal({ isOpen: true, item });
-    };
+    const opStock = useMemo(() => {
+        if (!op?.warehouse_id) return null;
+        const nomId = op.item.nomenclature_id, whId = op.warehouse_id;
+        return {
+            ...stockAt(nomId, whId),
+            mine: myReserved(nomId, whId),
+            issuable: issuableAt(nomId, whId),
+        };
+    }, [op, stockAt, myReserved, issuableAt]);
 
-    const handleSaveRequest = async (e) => {
-        e.preventDefault();
-        const qty = parseFloat(reqForm.quantity);
-        if (!qty || qty <= 0) return showToast('Вкажіть кількість більше 0', 'error');
-        setIsReqSubmitting(true);
-        try {
-            const { error } = await supabase.from('procurement_requests').insert([{
-                installation_custom_id: selectedInst.custom_id,
-                nomenclature_id: reqModal.item.nomenclature_id,
-                quantity: qty,
-                note: reqForm.note.trim() || null,
-                requested_by: employee?.id ?? null,
-                status: 'requested'
-            }]);
-            if (error) throw error;
-            showToast('Заявку на закупівлю створено', 'success');
-            setReqModal({ isOpen: false, item: null });
-            await refreshDetails();
-        } catch (error) {
-            showToast(error.message, 'error');
-        } finally {
-            setIsReqSubmitting(false);
-        }
-    };
-
-    const handleRequestStatus = async (reqId, newStatus) => {
-        try {
-            const { error } = await supabase.from('procurement_requests')
-                .update({ status: newStatus, resolved_by: employee?.id ?? null, updated_at: new Date().toISOString() })
-                .eq('id', reqId);
-            if (error) throw error;
-            showToast('Статус заявки оновлено', 'success');
-            await refreshDetails();
-        } catch (error) {
-            showToast(error.message, 'error');
-        }
-    };
-
-    const handleDeleteRequest = async (reqId) => {
-        try {
-            const { error } = await supabase.from('procurement_requests').delete().eq('id', reqId);
-            if (error) throw error;
-            showToast('Заявку видалено', 'success');
-            await refreshDetails();
-        } catch (error) {
-            showToast(error.message, 'error');
-        }
-    };
-
-    // --- ВИКОНАННЯ ОПЕРАЦІЇ ---
-    const executeOp = async (e) => {
-        e.preventDefault();
-        const qty = parseFloat(opForm.quantity);
-        if (!qty || qty <= 0) return showToast('Введіть кількість більше 0', 'error');
-        if (!opForm.warehouse_id && opModal.mode !== 'return') return showToast('Оберіть склад', 'error');
-        if (!opForm.warehouse_id) return showToast('Оберіть склад', 'error');
-
-        const { over } = computeOverage();
-        if (over && !opForm.reason.trim()) {
-            return showToast('Перевищення плану — вкажіть причину в коментарі', 'warning');
+    const runOp = async () => {
+        const qty = parseFloat(op.quantity);
+        if (!qty || qty <= 0) return toast('Введіть кількість більшу за 0', 'error');
+        if (!op.warehouse_id) return toast('Оберіть склад', 'error');
+        if (overage.over && !op.reason.trim()) {
+            return toast('Понад план — вкажіть причину', 'warning');
         }
 
-        const item = opModal.item;
-        setIsSubmitting(true);
+        const item = op.item;
+        const unit = unitOf(item.nomenclature_id);
+        const whName = warehouses.find(w => String(w.id) === String(op.warehouse_id))?.name;
+
+        const ok = await confirm({
+            title: `${OPS[op.mode].label}?`,
+            tone: op.mode === 'return' ? 'warn' : 'accent',
+            confirmLabel: OPS[op.mode].short,
+            message: nomOf(item.nomenclature_id)?.fullName || item.nomenclature_name,
+            details: [
+                `${num(qty)} ${unit}`,
+                op.mode === 'return' ? `на склад ${whName}` : `зі складу ${whName}`,
+                ...(overage.over ? [`Понад план на ${num(qty - overage.ref)} ${unit}`] : []),
+                ...(op.reason.trim() ? [`Причина: ${op.reason.trim()}`] : []),
+            ],
+        });
+        if (!ok) return;
+
+        setBusy(true);
         try {
-            // Зняття резерву: знімаємо активні резерви цього об'єкта на обраному складі послідовно
-            if (opModal.mode === 'unreserve') {
-                const whId = parseInt(opForm.warehouse_id);
-                const targets = objReservations
-                    .filter(r => String(r.warehouse_id) === String(whId) && String(r.nomenclature_id) === String(item.nomenclature_id))
+            if (op.mode === 'unreserve') {
+                const targets = reservations
+                    .filter(r => String(r.warehouse_id) === String(op.warehouse_id)
+                        && String(r.nomenclature_id) === String(item.nomenclature_id))
                     .map(r => ({ id: r.id, active: parseFloat(r.reserved_quantity) - parseFloat(r.released_quantity) }))
                     .filter(r => r.active > 0);
-                const totalActive = targets.reduce((sum, t) => sum + t.active, 0);
-                if (qty > totalActive) {
-                    setIsSubmitting(false);
-                    return showToast(`На цьому складі активний резерв лише ${totalActive}`, 'error');
-                }
-                let remaining = qty;
+
+                const total = targets.reduce((s, t) => s + t.active, 0);
+                if (qty > total) throw new Error(`На цьому складі активний резерв лише ${num(total)}`);
+
+                let left = qty;
                 for (const t of targets) {
-                    if (remaining <= 0) break;
-                    const rel = Math.min(t.active, remaining);
+                    if (left <= 0) break;
+                    const take = Math.min(t.active, left);
                     const { data, error } = await supabase.rpc('release_reservation', {
-                        p_reservation_id: t.id, p_qty: rel, p_emp: employee?.id ?? null
+                        p_reservation_id: t.id, p_qty: take, p_emp: employee?.id ?? null,
                     });
                     if (error) throw error;
-                    if (data && data.ok === false) throw new Error(data.message || 'Не вдалося зняти резерв');
-                    remaining -= rel;
+                    if (data?.ok === false) throw new Error(data.message);
+                    left -= take;
                 }
-                showToast(`Резерв знято (${qty} ${unitOf(item.nomenclature_id)})`, 'success');
-                closeOp();
-                await refreshDetails();
-                setIsSubmitting(false);
-                return;
-            }
-
-            let rpcName, args;
-            if (opModal.mode === 'reserve') {
-                rpcName = 'reserve_for_object';
-                args = {
-                    p_installation: selectedInst.custom_id,
-                    p_warehouse: parseInt(opForm.warehouse_id),
-                    p_nomenclature: item.nomenclature_id,
-                    p_spec_item: item.specification_item_id,
-                    p_qty: qty,
-                    p_emp: employee?.id ?? null,
-                };
-            } else if (opModal.mode === 'issue') {
-                rpcName = 'issue_to_object';
-                args = {
-                    p_installation: selectedInst.custom_id,
-                    p_warehouse: parseInt(opForm.warehouse_id),
-                    p_nomenclature: item.nomenclature_id,
-                    p_qty: qty,
-                    p_reason: opForm.reason.trim() || null,
-                    p_emp: employee?.id ?? null,
-                };
+                toast(`Резерв знято: ${num(qty)} ${unit}`);
             } else {
-                rpcName = 'return_from_object';
-                args = {
-                    p_installation: selectedInst.custom_id,
-                    p_warehouse: parseInt(opForm.warehouse_id),
-                    p_nomenclature: item.nomenclature_id,
-                    p_qty: qty,
-                    p_reason: opForm.reason.trim() || null,
-                    p_emp: employee?.id ?? null,
-                };
+                const rpc = op.mode === 'reserve' ? 'reserve_for_object'
+                    : op.mode === 'issue' ? 'issue_to_object' : 'return_from_object';
+
+                const args = op.mode === 'reserve'
+                    ? {
+                        p_installation: selected.custom_id,
+                        p_warehouse: parseInt(op.warehouse_id),
+                        p_nomenclature: item.nomenclature_id,
+                        p_spec_item: item.specification_item_id,
+                        p_qty: qty, p_emp: employee?.id ?? null,
+                    }
+                    : {
+                        p_installation: selected.custom_id,
+                        p_warehouse: parseInt(op.warehouse_id),
+                        p_nomenclature: item.nomenclature_id,
+                        p_qty: qty,
+                        p_reason: op.reason.trim() || null,
+                        p_emp: employee?.id ?? null,
+                    };
+
+                const { data, error } = await supabase.rpc(rpc, args);
+                if (error) throw error;
+                if (data?.ok === false) throw new Error(data.message);
+                toast(`${OPS[op.mode].short}: ${num(qty)} ${unit}`);
             }
 
-            const { data, error } = await supabase.rpc(rpcName, args);
+            setOp(null);
+            await refresh();
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setBusy(false); }
+    };
+
+    /* ---------------- ЗАЯВКИ ---------------- */
+
+    const saveRequest = async () => {
+        const qty = parseFloat(reqModal.quantity);
+        if (!qty || qty <= 0) return toast('Вкажіть кількість більшу за 0', 'error');
+        setBusy(true);
+        try {
+            const { error } = await supabase.from('procurement_requests').insert([{
+                installation_custom_id: selected.custom_id,
+                nomenclature_id: reqModal.item.nomenclature_id,
+                quantity: qty,
+                note: reqModal.note.trim() || null,
+                requested_by: employee?.id ?? null,
+                status: 'requested',
+            }]);
             if (error) throw error;
-            if (data && data.ok === false) {
-                return showToast(data.message || 'Операцію відхилено', 'error');
-            }
-
-            showToast(`${OP_MODES[opModal.mode].verb}: успішно (${qty} ${unitOf(item.nomenclature_id)})`, 'success');
-            closeOp();
-            await refreshDetails();
-        } catch (error) {
-            showToast(error.message, 'error');
-        } finally {
-            setIsSubmitting(false);
-        }
+            toast('Заявку на закупівлю створено');
+            setReqModal(null);
+            await refresh();
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setBusy(false); }
     };
 
-    // --- ФІЛЬТРАЦІЯ ДАШБОРДУ ---
-    const filteredInst = installations.filter(i => {
-        const term = searchTerm.toLowerCase();
-        const matchesSearch = i.name?.toLowerCase().includes(term) || String(i.custom_id).includes(term) || i.client?.name?.toLowerCase().includes(term);
-        const matchesStatus = statusFilter === 'all' || i.provStatus === statusFilter;
-        return matchesSearch && matchesStatus;
-    });
-
-    const statusCounts = {
-        all: installations.length,
-        ready: installations.filter(i => i.provStatus === 'ready').length,
-        waiting: installations.filter(i => i.provStatus === 'waiting').length,
-        deficit: installations.filter(i => i.provStatus === 'deficit').length,
-        nospec: installations.filter(i => i.provStatus === 'nospec').length,
+    const setRequestStatus = async (id, status) => {
+        try {
+            const { error } = await supabase.from('procurement_requests')
+                .update({ status, resolved_by: employee?.id ?? null, updated_at: new Date().toISOString() })
+                .eq('id', id);
+            if (error) throw error;
+            toast('Статус заявки оновлено');
+            await refresh();
+        } catch (e) { toast(humanError(e), 'error'); }
     };
-    const FILTER_TABS = [
-        { id: 'all', label: 'Всі', activeCls: 'bg-slate-800 text-white border-slate-800' },
-        { id: 'ready', label: 'Готові', activeCls: 'bg-emerald-600 text-white border-emerald-600' },
-        { id: 'waiting', label: 'Очікують постачання', activeCls: 'bg-blue-600 text-white border-blue-600' },
-        { id: 'deficit', label: 'Дефіцит', activeCls: 'bg-red-600 text-white border-red-600' },
-        { id: 'nospec', label: 'Без специфікації', activeCls: 'bg-slate-500 text-white border-slate-500' },
+
+    const deleteRequest = async (req) => {
+        const ok = await confirm({
+            title: 'Видалити заявку?', tone: 'danger', confirmLabel: 'Видалити',
+            message: nomOf(req.nomenclature_id)?.fullName || `Номенклатура #${req.nomenclature_id}`,
+            details: [
+                `${num(req.quantity)} ${unitOf(req.nomenclature_id)}`,
+                'Закупівельник більше не побачить цю потребу.',
+            ],
+        });
+        if (!ok) return;
+        try {
+            const { error } = await supabase.from('procurement_requests').delete().eq('id', req.id);
+            if (error) throw error;
+            toast('Заявку видалено');
+            await refresh();
+        } catch (e) { toast(humanError(e), 'error'); }
+    };
+
+    /* ---------------- ФІЛЬТРАЦІЯ ---------------- */
+
+    const filtered = useMemo(() => {
+        const term = search.trim().toLowerCase();
+        return installations.filter(i => {
+            if (statusFilter !== 'all' && i.state !== statusFilter) return false;
+            if (!term) return true;
+            return (i.name || '').toLowerCase().includes(term)
+                || String(i.custom_id).includes(term)
+                || (i.client?.name || '').toLowerCase().includes(term)
+                || (i.client?.company_name || '').toLowerCase().includes(term);
+        });
+    }, [installations, statusFilter, search]);
+
+    const counts = useMemo(() => {
+        const c = { all: installations.length };
+        FILTERS.slice(1).forEach(f => { c[f.value] = installations.filter(i => i.state === f.value).length; });
+        return c;
+    }, [installations]);
+
+    if (authLoading) {
+        return <Layout><div className="p-6 text-center text-slate-500 text-[13px]">Завантаження…</div></Layout>;
+    }
+
+    /* ---------------- ЧАСТИНИ ---------------- */
+
+    /** Смуга покриття: видано · резерв · в дорозі · бракує */
+    const coverSegments = (s) => {
+        const base = s.required || 1;
+        const pct = (v) => Math.max(0, Math.min(100, (v / base) * 100));
+        return [
+            { pct: pct(s.issued), tone: 'ok' },
+            { pct: pct(s.reserved), tone: 'accent' },
+            { pct: pct(Math.min(s.inc, s.left)), tone: 'info' },
+            { pct: pct(Math.max(0, s.left - s.inc)), tone: 'danger' },
+        ];
+    };
+
+    /** Підпис під смугою: колір + число + слово. Легенду не треба пам'ятати. */
+    const LEGEND = [
+        { key: 'issued', label: 'видано', dot: 'bg-emerald-500', text: 'text-emerald-700' },
+        { key: 'reserved', label: 'резерв', dot: 'bg-indigo-500', text: 'text-indigo-700' },
+        { key: 'inc', label: 'в дорозі', dot: 'bg-sky-500', text: 'text-sky-700' },
+        { key: 'missing', label: 'бракує', dot: 'bg-rose-500', text: 'text-rose-700' },
     ];
 
-    if (authLoading) return <div className="p-8 text-center text-slate-500">Завантаження...</div>;
+    const renderPosition = (n) => {
+        const s = stateOf(n);
+        const nom = nomOf(n.nomenclature_id);
+        const unit = unitOf(n.nomenclature_id);
+        const activeReq = requests.find(r => r.nomenclature_id === n.nomenclature_id
+            && ['requested', 'ordered'].includes(r.status));
+        const missing = Math.max(0, s.left - s.inc);
+        const canOrder = missing > 0 && !activeReq;
 
-    const overage = opModal.isOpen ? computeOverage() : { over: false, ref: 0 };
-    const mInfo = opModal.isOpen ? modalStockInfo() : null;
-    const modeCfg = opModal.mode ? OP_MODES[opModal.mode] : null;
+        const values = { issued: s.issued, reserved: s.reserved, inc: Math.min(s.inc, s.left), missing };
+
+        return (
+            <div key={n.specification_item_id || n.nomenclature_id}
+                className={`${T.cardFlat} px-3 py-2.5 ${s.key === 'ready' ? 'bg-emerald-50/40' : ''}`}>
+
+                <div className="flex items-start gap-2 mb-2">
+                    <div className="min-w-0 flex-1">
+                        <div className="text-[13px] font-bold text-slate-900 leading-snug">
+                            {nom?.fullName || n.nomenclature_name}
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            {nom?.sku && <span className={T.mono}>{nom.sku}</span>}
+                            {nom?.tracking_mode === 'lot' && (
+                                <Chip tone="info" icon={FaLayerGroup}>{nom.lot_unit_name || 'бухти'}</Chip>
+                            )}
+                            {activeReq && (
+                                <Chip tone={REQ_STATUS[activeReq.status]?.tone}>
+                                    {REQ_STATUS[activeReq.status]?.label}
+                                </Chip>
+                            )}
+                        </div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                        <Chip tone={s.tone}>{s.label}</Chip>
+                        <div className="text-[13px] font-black tabular-nums text-slate-900 mt-1">
+                            {num(s.required)} <span className="text-[9px] font-bold text-slate-400">{unit}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <Bar segments={coverSegments(s)} />
+
+                {/* Легенда просто під смугою: видно, який колір що означає */}
+                <div className="flex items-center gap-x-3 gap-y-1 mt-1.5 flex-wrap">
+                    {LEGEND.filter(l => values[l.key] > 0).map(l => (
+                        <span key={l.key} className="inline-flex items-center gap-1 text-[10.5px]">
+                            <span className={`w-2 h-2 rounded-sm ${l.dot}`} />
+                            <b className={`tabular-nums ${l.text}`}>{num(values[l.key])}</b>
+                            <span className="text-slate-500">{l.label}</span>
+                        </span>
+                    ))}
+                </div>
+
+                <div className="text-[11px] text-slate-500 mt-1.5 leading-snug">{s.hint}</div>
+
+                {/* Усі дії видно завжди. Недоступні — сірі, з причиною в підказці. */}
+                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                    {['reserve', 'issue'].map(mode => {
+                        const why = blockedReason(mode, n);
+                        return (
+                            <Btn key={mode} size="sm"
+                                variant={why ? 'outline' : OPS[mode].variant}
+                                icon={OPS[mode].icon}
+                                disabled={!!why}
+                                title={why || OPS[mode].label}
+                                onClick={() => openOp(mode, n)}>
+                                {OPS[mode].short}
+                            </Btn>
+                        );
+                    })}
+
+                    <Btn size="sm"
+                        variant={canOrder ? 'softWarn' : 'outline'}
+                        icon={FaShoppingCart}
+                        disabled={!canOrder}
+                        title={activeReq ? 'Заявка вже створена'
+                            : missing <= 0 ? 'Потреба закрита або товар у дорозі'
+                                : 'Створити заявку на закупівлю'}
+                        onClick={() => setReqModal({ item: n, quantity: String(num(missing)), note: '' })}>
+                        Замовити
+                    </Btn>
+
+                    <IconBtn variant="ghost" icon={FaEllipsisH} label="Зняти резерв · повернути · подробиці"
+                        className="ml-auto" onClick={() => setSheet({ item: n })} />
+                </div>
+            </div>
+        );
+    };
+
+    /* ---------------- РЕНДЕР ---------------- */
 
     return (
         <Layout>
-            <div className="p-4 sm:p-8 max-w-[1400px] mx-auto pb-safe min-h-[calc(100vh-80px)] flex flex-col text-slate-800 relative">
-                <Toast {...toast} onClose={() => setToast(prev => ({ ...prev, isVisible: false }))} />
+            <div className="p-3 sm:p-5 max-w-[1200px] mx-auto flex flex-col gap-2.5">
 
-                {/* --- ГОЛОВНИЙ ЕКРАН (ДАШБОРД) --- */}
-                {!selectedInst ? (
-                    <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="flex-1 flex flex-col">
-                        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-8 flex-none">
-                            <div>
-                                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-3">
-                                    <FaBoxOpen className="text-indigo-600" /> Забезпечення об'єктів
-                                </h1>
-                                <p className="text-slate-500 text-sm mt-1 ml-10">Комплектація, резерв, видача та повернення матеріалів</p>
-                            </div>
+                {!selected ? (
+                    <>
+                        <div>
+                            <h1 className="text-[19px] font-bold text-slate-900 flex items-center gap-2">
+                                <FaBoxOpen className="text-indigo-600" size={16} /> Забезпечення об'єктів
+                            </h1>
+                            <p className="text-[12.5px] text-slate-500 mt-0.5">
+                                Комплектація, резерв, видача та повернення матеріалів
+                            </p>
                         </div>
 
-                        <div className="relative mb-4">
-                            <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
-                            <input type="text" placeholder="Пошук за назвою або номером об'єкта..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm shadow-sm transition-colors" />
-                        </div>
-
-                        {/* Фільтри за станом забезпечення */}
-                        <div className="flex gap-2 mb-6 overflow-x-auto hide-scrollbar pb-1">
-                            {FILTER_TABS.map(tab => (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setStatusFilter(tab.id)}
-                                    className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap border transition-colors shadow-sm ${statusFilter === tab.id ? tab.activeCls : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
-                                >
-                                    {tab.label} <span className={`ml-1 ${statusFilter === tab.id ? 'opacity-80' : 'text-slate-400'}`}>({statusCounts[tab.id]})</span>
-                                </button>
-                            ))}
-                        </div>
-
-                        {loading ? (
-                            <div className="space-y-4">
-                                {[1,2,3].map(i => <div key={i} className="h-24 bg-white rounded-xl border border-slate-200 animate-pulse"></div>)}
+                        <Card pad="p-2.5" className="space-y-2.5">
+                            <div className="relative">
+                                <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
+                                <input className={`${T.input} pl-8`} value={search}
+                                    placeholder="Назва об'єкта, номер або клієнт…"
+                                    onChange={e => setSearch(e.target.value)} />
                             </div>
-                        ) : filteredInst.length === 0 ? (
-                            <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-slate-300">
-                                <FaHardHat className="mx-auto text-5xl text-slate-300 mb-4" />
-                                <h3 className="text-lg font-bold text-slate-600">Активних об'єктів не знайдено</h3>
+                            <div className="flex items-center gap-1.5 overflow-x-auto">
+                                {FILTERS.map(f => (
+                                    <button key={f.value} onClick={() => setStatusFilter(f.value)}
+                                        className={`px-2.5 h-8 rounded-lg text-[11.5px] font-bold whitespace-nowrap border transition-colors flex-shrink-0
+                                            ${statusFilter === f.value
+                                                ? 'bg-slate-900 text-white border-slate-900'
+                                                : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}>
+                                        {f.label}
+                                        <span className={`ml-1 tabular-nums ${statusFilter === f.value ? 'opacity-70' : 'text-slate-400'}`}>
+                                            {counts[f.value] || 0}
+                                        </span>
+                                    </button>
+                                ))}
                             </div>
-                        ) : (
-                            <div className="space-y-4">
-                                {filteredInst.map(inst => (
-                                    <div
-                                        key={inst.custom_id}
-                                        onClick={() => openObjectDetails(inst)}
-                                        className="bg-white rounded-xl border border-slate-200 p-5 flex flex-col md:flex-row md:justify-between md:items-center cursor-pointer hover:shadow-md hover:border-indigo-300 transition-all gap-4 group"
-                                    >
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-3 mb-2">
-                                                <span className="text-xs text-slate-400 font-mono font-bold tracking-wider">СЕС-{inst.custom_id}</span>
-                                                <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wide border shadow-sm ${inst.badgeColor}`}>
-                                                    {inst.statusBadge}
-                                                </span>
-                                            </div>
-                                            <h3 className="font-bold text-lg text-slate-800 group-hover:text-indigo-700 transition-colors leading-tight mb-1">{inst.name}</h3>
-                                            <p className="text-xs font-medium text-slate-500">{inst.client?.company_name || inst.client?.name || 'Невідомий клієнт'} • Позицій у специфікації: {inst.needsCount}</p>
-                                            {(inst.needsCount > 0 || inst.requestsCount > 0) && (
-                                                <div className="flex items-center gap-2 mt-2 flex-wrap">
-                                                    {inst.okCount > 0 && <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">✔ {inst.okCount} забезпечено</span>}
-                                                    {inst.waitingCount > 0 && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">🚚 {inst.waitingCount} в дорозі</span>}
-                                                    {inst.hardDeficitCount > 0 && <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-100 px-2 py-0.5 rounded-full">⚠ {inst.hardDeficitCount} не вистачає</span>}
-                                                    {inst.requestsCount > 0 && <span className="text-[10px] font-bold text-orange-700 bg-orange-50 border border-orange-100 px-2 py-0.5 rounded-full">📝 {inst.requestsCount} заявки на закупівлю</span>}
+                        </Card>
+
+                        <div className={`${T.card} overflow-hidden`}>
+                            {loading ? <Skeleton rows={6} /> : filtered.length === 0 ? (
+                                <EmptyState icon={FaHardHat} title="Об'єктів не знайдено"
+                                    hint="Змініть фільтр або пошуковий запит." />
+                            ) : (
+                                <div className="divide-y divide-slate-100">
+                                    {filtered.map(inst => (
+                                        <button key={inst.custom_id} onClick={() => openObject(inst)}
+                                            className="w-full text-left px-3 py-2.5 hover:bg-slate-50 active:bg-slate-100 transition-colors">
+                                            <div className="flex items-start gap-2">
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <span className={T.mono}>СЕС-{inst.custom_id}</span>
+                                                        <span className="text-[13px] font-bold text-slate-900">{inst.name}</span>
+                                                    </div>
+                                                    <div className="text-[11px] text-slate-500 mt-0.5">
+                                                        {inst.client?.company_name || inst.client?.name || 'Клієнт не вказаний'}
+                                                        {' · '}позицій {inst.positions}
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                                        {inst.positions === 0 && <Chip tone="neutral">без специфікації</Chip>}
+                                                        {inst.covered > 0 && <Chip tone="ok">{inst.covered} забезпечено</Chip>}
+                                                        {inst.waiting > 0 && <Chip tone="info" icon={FaTruck}>{inst.waiting} в дорозі</Chip>}
+                                                        {inst.deficit > 0 && <Chip tone="danger">{inst.deficit} бракує</Chip>}
+                                                        {inst.requests > 0 && <Chip tone="warn" icon={FaShoppingCart}>{inst.requests} заявки</Chip>}
+                                                    </div>
                                                 </div>
-                                            )}
-                                        </div>
-
-                                        <div className="w-full md:w-32 text-right">
-                                            <div className="text-xl font-black text-slate-800 mb-1.5">{inst.readiness}%</div>
-                                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden shadow-inner">
-                                                <div className={`h-full rounded-full transition-all duration-1000 ${inst.readiness === 100 ? 'bg-emerald-500' : inst.readiness > 0 ? 'bg-blue-500' : 'bg-slate-300'}`} style={{width: `${inst.readiness}%`}}></div>
+                                                <div className="text-right w-20 flex-shrink-0">
+                                                    <div className="text-[17px] font-black tabular-nums text-slate-900">{inst.readiness}%</div>
+                                                    <Bar className="mt-1" segments={[{
+                                                        pct: inst.readiness,
+                                                        tone: inst.readiness === 100 ? 'ok' : inst.deficit > 0 ? 'danger' : 'info',
+                                                    }]} />
+                                                </div>
                                             </div>
-                                            <div className="text-[10px] font-bold text-slate-400 mt-1.5 uppercase tracking-widest">Готовність</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <Card pad="p-2.5">
+                            <div className="flex items-start gap-2 flex-wrap">
+                                <div className="min-w-0 flex-1">
+                                    <button onClick={() => setSelected(null)}
+                                        className="text-[11.5px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 mb-1">
+                                        <FaChevronLeft size={9} /> Усі об'єкти
+                                    </button>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <span className={T.mono}>СЕС-{selected.custom_id}</span>
+                                        <h2 className="text-[15px] font-bold text-slate-900">{selected.name}</h2>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Btn variant="outline" icon={FaClipboardList} onClick={() => setManualOpen(true)}>
+                                        <span className="hidden sm:inline">Комплектація вручну</span>
+                                        <span className="sm:hidden">Вручну</span>
+                                    </Btn>
+                                    <div className="text-right">
+                                        <div className="text-[17px] font-black tabular-nums text-slate-900">{selected.readiness}%</div>
+                                        <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">готовність</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </Card>
+
+                        {detailLoading ? <Card><Skeleton rows={8} /></Card> : (
+                            <div className="space-y-2.5">
+                                {needs.length === 0 ? (
+                                    <Card>
+                                        <EmptyState
+                                            icon={FaBoxOpen}
+                                            title="Специфікація порожня або не затверджена"
+                                            hint="Оцифруйте PDF на етапі проекту або внесіть комплектацію вручну."
+                                        >
+                                            <Btn variant="accent" icon={FaClipboardList} onClick={() => setManualOpen(true)}>
+                                                Внести вручну
+                                            </Btn>
+                                        </EmptyState>
+                                    </Card>
+                                ) : (
+                                    <div className="space-y-1.5">{needs.map(renderPosition)}</div>
+                                )}
+
+                                {requests.length > 0 && (
+                                    <Card pad="p-0" className="border-amber-200 overflow-hidden">
+                                        <div className="px-3 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-2 flex-wrap">
+                                            <FaShoppingCart className="text-amber-500" size={12} />
+                                            <span className="text-[12.5px] font-bold text-amber-900">Заявки на закупівлю</span>
+                                            <Chip tone="warn">{requests.length}</Chip>
                                         </div>
+                                        <div className="divide-y divide-slate-100">
+                                            {requests.map(r => {
+                                                const closed = ['done', 'rejected'].includes(r.status);
+                                                return (
+                                                    <div key={r.id} className={`px-3 py-2 flex items-center gap-2 flex-wrap ${closed ? 'opacity-50' : ''}`}>
+                                                        <div className="min-w-0 flex-1">
+                                                            <div className="text-[12.5px] font-semibold text-slate-900 truncate">
+                                                                {nomOf(r.nomenclature_id)?.fullName || `Номенклатура #${r.nomenclature_id}`}
+                                                            </div>
+                                                            <div className="text-[10.5px] text-slate-400">
+                                                                {new Date(r.created_at).toLocaleDateString('uk-UA')}
+                                                                {r.note && <span className="italic"> · {r.note}</span>}
+                                                            </div>
+                                                        </div>
+                                                        <span className="text-[13px] font-black tabular-nums text-amber-700">
+                                                            {num(r.quantity)}
+                                                            <span className="text-[9px] text-amber-400 ml-0.5">{unitOf(r.nomenclature_id)}</span>
+                                                        </span>
+                                                        <select className={`${T.select} w-40`} value={r.status}
+                                                            onChange={e => setRequestStatus(r.id, e.target.value)}>
+                                                            {Object.entries(REQ_STATUS).map(([k, v]) =>
+                                                                <option key={k} value={k}>{v.label}</option>)}
+                                                        </select>
+                                                        <IconBtn variant="ghost" icon={FaTrash} label="Видалити заявку"
+                                                            onClick={() => deleteRequest(r)} />
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </Card>
+                                )}
+
+                                {offSpec.length > 0 && (
+                                    <Card pad="p-0" className="border-amber-200 overflow-hidden">
+                                        <div className="px-3 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
+                                            <FaExclamationTriangle className="text-amber-500" size={12} />
+                                            <span className="text-[12.5px] font-bold text-amber-900">Видано поза специфікацією</span>
+                                            <Chip tone="warn">{offSpec.length}</Chip>
+                                        </div>
+                                        <div className="divide-y divide-slate-100">
+                                            {offSpec.map(row => (
+                                                <div key={row.nomenclature_id} className="px-3 py-2 flex items-center gap-2">
+                                                    <span className="text-[12.5px] font-semibold text-slate-900 flex-1 truncate">
+                                                        {nomOf(row.nomenclature_id)?.fullName || `Номенклатура #${row.nomenclature_id}`}
+                                                    </span>
+                                                    <span className="text-[13px] font-black tabular-nums text-slate-900">
+                                                        {num(row.quantity)}
+                                                        <span className="text-[9px] text-slate-400 ml-0.5">{unitOf(row.nomenclature_id)}</span>
+                                                    </span>
+                                                    <Btn size="sm" variant="softWarn" icon={FaUndo}
+                                                        onClick={() => openOp('return', {
+                                                            nomenclature_id: row.nomenclature_id,
+                                                            required_quantity: 0, reserved_quantity: 0,
+                                                            issued_quantity: row.quantity, outstanding_need: 0,
+                                                            specification_item_id: null,
+                                                            nomenclature_name: nomOf(row.nomenclature_id)?.fullName,
+                                                        })}>
+                                                        Повернути
+                                                    </Btn>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </Card>
+                                )}
+                            </div>
+                        )}
+                    </>
+                )}
+            </div>
+
+            {/* ---------- АРКУШ ДІЙ ---------- */}
+            <Modal
+                isOpen={!!sheet} onClose={() => setSheet(null)}
+                title={sheet ? (nomOf(sheet.item.nomenclature_id)?.fullName || sheet.item.nomenclature_name) : ''}
+                subtitle="Що зробити з позицією" size="sm"
+            >
+                {sheet && (() => {
+                    const s = stateOf(sheet.item);
+                    const unit = unitOf(sheet.item.nomenclature_id);
+                    return (
+                        <div className="space-y-3">
+                            <div className={`${TONE[s.tone].chip} border rounded-lg px-3 py-2 text-[12.5px] font-semibold`}>
+                                {s.label} — {s.hint}
+                            </div>
+
+                            <div className={`${T.inset} px-3 py-2.5 space-y-1.5 text-[12.5px]`}>
+                                {[
+                                    ['Потрібно за планом', s.required], ['Уже видано', s.issued],
+                                    ['У резерві під об’єкт', s.mine], ['Лишилось покрити', s.left],
+                                    ['Замовлено, в дорозі', s.inc], ['Вільно на складах', s.free],
+                                ].map(([k, v]) => (
+                                    <div key={k} className="flex items-center justify-between">
+                                        <span className="text-slate-500">{k}</span>
+                                        <b className="tabular-nums text-slate-900">
+                                            {num(v)} <span className="text-[9px] text-slate-400">{unit}</span>
+                                        </b>
                                     </div>
                                 ))}
                             </div>
-                        )}
-                    </motion.div>
-                ) : (
-                    /* --- ДЕТАЛІ ОБ'ЄКТА (СПЕЦИФІКАЦІЯ VS СКЛАД) --- */
-                    <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="flex-1 flex flex-col h-full">
-                        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 sticky top-0 z-10">
-                            <div>
-                                <button onClick={() => setSelectedInst(null)} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 mb-2 flex items-center gap-1 transition-colors">
-                                    <FaChevronLeft/> Назад до списку
-                                </button>
-                                <h2 className="text-xl sm:text-2xl font-bold text-slate-800 leading-tight">Комплектація: {selectedInst.name}</h2>
-                                <p className="text-sm text-slate-500 mt-1 font-medium">СЕС-{selectedInst.custom_id} • Резерв · Видача · Повернення</p>
-                                {selectedInst.needsCount > 0 && (
-                                    <div className="flex items-center gap-2 mt-2 flex-wrap">
-                                        {selectedInst.okCount > 0 && <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">✔ {selectedInst.okCount} забезпечено</span>}
-                                        {selectedInst.waitingCount > 0 && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">🚚 {selectedInst.waitingCount} в дорозі</span>}
-                                        {selectedInst.hardDeficitCount > 0 && <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-100 px-2 py-0.5 rounded-full">⚠ {selectedInst.hardDeficitCount} не вистачає</span>}
-                                    </div>
-                                )}
+
+                            <div className="grid grid-cols-2 gap-2">
+                                {Object.keys(OPS).map(k => {
+                                    const why = blockedReason(k, sheet.item);
+                                    return (
+                                        <Btn key={k}
+                                            variant={why ? 'outline' : OPS[k].variant}
+                                            icon={OPS[k].icon}
+                                            disabled={!!why}
+                                            title={why || OPS[k].label}
+                                            onClick={() => openOp(k, sheet.item)}>
+                                            {OPS[k].short}
+                                        </Btn>
+                                    );
+                                })}
                             </div>
-                            <div className="flex items-center gap-3 w-full md:w-auto">
-                                <button
-                                    onClick={() => setIsManualOpen(true)}
-                                    className="flex-1 md:flex-none px-4 py-2.5 bg-indigo-600 text-white hover:bg-indigo-700 rounded-xl font-bold text-sm shadow-md transition-colors flex items-center justify-center gap-2"
-                                >
-                                    <FaClipboardList size={13}/> Комплектація вручну
-                                </button>
-                                <div className="text-right hidden sm:block">
-                                    <div className="text-3xl font-black text-slate-800">{selectedInst.readiness}%</div>
-                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Забезпечено</div>
-                                </div>
-                            </div>
+
+                            <p className="text-[11px] text-slate-400 leading-relaxed">
+                                Сірі кнопки зараз недоступні — наведіть, щоб побачити причину.
+                            </p>
+                            )}
                         </div>
+                    );
+                })()}
+            </Modal>
 
-                        {detailLoading ? (
-                            <div className="flex-1 flex items-center justify-center"><div className="animate-pulse text-indigo-500 font-bold text-lg">Завантаження специфікації...</div></div>
-                        ) : (
-                            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar flex flex-col gap-4 pb-4">
-                                {specNeeds.length === 0 ? (
-                                    <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-300">
-                                        <FaBoxOpen className="mx-auto text-5xl text-slate-300 mb-4" />
-                                        <h3 className="text-lg font-bold text-slate-600">Специфікація порожня або не затверджена</h3>
-                                        <p className="text-slate-400 text-sm mt-1 mb-5">Оцифруйте PDF або внесіть комплектацію вручну для цього об'єкта.</p>
-                                        <button onClick={() => setIsManualOpen(true)} className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm shadow-md hover:bg-indigo-700 transition-colors">
-                                            <FaClipboardList size={13}/> Внести комплектацію вручну
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                                        <div className="divide-y divide-slate-100">
-                                            {specNeeds.map(item => {
-                                                const req = parseFloat(item.required_quantity);
-                                                const iss = parseFloat(item.issued_quantity);
-                                                const res = parseFloat(item.reserved_quantity);
-                                                const defect = parseFloat(item.outstanding_need);
+            {/* ---------- ОПЕРАЦІЯ ---------- */}
+            <Modal
+                isOpen={!!op} onClose={() => setOp(null)}
+                title={op ? OPS[op.mode].label : ''}
+                subtitle={op ? (nomOf(op.item.nomenclature_id)?.fullName || op.item.nomenclature_name) : ''}
+                tone={op ? OPS[op.mode].tone : 'neutral'} size="sm"
+                footer={<>
+                    <Btn variant="outline" onClick={() => setOp(null)}>Скасувати</Btn>
+                    <Btn variant={op ? OPS[op.mode].variant : 'accent'} onClick={runOp} disabled={busy}>
+                        {busy ? 'Проводимо…' : op ? OPS[op.mode].short : ''}
+                    </Btn>
+                </>}
+            >
+                {op && (
+                    <div className="space-y-3">
+                        <Field label={op.mode === 'return' ? 'Склад повернення' : 'Склад'} required>
+                            <select className={T.select} value={op.warehouse_id}
+                                onChange={e => setOp(o => ({ ...o, warehouse_id: e.target.value }))}>
+                                {(activeWarehouses.length ? activeWarehouses : warehouses).map(w => {
+                                    const st = stockAt(op.item.nomenclature_id, w.id);
+                                    const hint = op.mode === 'reserve' ? `вільно ${num(st.available)}`
+                                        : op.mode === 'issue' ? `можна ${num(issuableAt(op.item.nomenclature_id, w.id))}`
+                                            : op.mode === 'unreserve' ? `резерв ${num(myReserved(op.item.nomenclature_id, w.id))}` : '';
+                                    return <option key={w.id} value={w.id}>{w.name}{hint ? ` — ${hint}` : ''}</option>;
+                                })}
+                            </select>
+                        </Field>
 
-                                                const isFullyCovered = defect <= 0;
-                                                const nom = nomenclatures.find(n => n.id === item.nomenclature_id);
-                                                const unitName = nom?.unit?.name || 'шт';
-
-                                                const availableGlobal = stockRows
-                                                    .filter(s => String(s.nomenclature_id) === String(item.nomenclature_id))
-                                                    .reduce((sum, s) => sum + parseFloat(s.quantity_available), 0);
-                                                const myReserved = reservedHereTotal(item.nomenclature_id);
-                                                const canIssue = myReserved > 0 || (defect > 0 && availableGlobal > 0);
-                                                const incoming = (incomingMap[selectedInst.custom_id] || {})[item.nomenclature_id] || 0;
-                                                const coveredByIncoming = defect > 0 && incoming >= defect;
-                                                const activeReq = objRequests.find(r => r.nomenclature_id === item.nomenclature_id && ['requested', 'ordered'].includes(r.status));
-
-                                                return (
-                                                    <div key={item.specification_item_id} className={`p-4 sm:px-5 hover:bg-slate-50/50 transition-colors ${isFullyCovered ? 'bg-emerald-50/20' : ''}`}>
-                                                        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-                                                            {/* Назва + статус позиції */}
-                                                            <div className="flex-1 min-w-[240px]">
-                                                                <div className="flex items-center gap-2 flex-wrap">
-                                                                    <span className="font-bold text-slate-800 text-sm leading-tight">{nom?.fullName || item.nomenclature_name}</span>
-                                                                    {defect <= 0
-                                                                        ? <span className="text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">✔ Забезпечено</span>
-                                                                        : coveredByIncoming
-                                                                            ? <span className="text-[9px] font-black uppercase tracking-wider text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded">🚚 В дорозі</span>
-                                                                            : <span className="text-[9px] font-black uppercase tracking-wider text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">⚠ Дефіцит {defect}</span>}
-                                                                </div>
-                                                                {nom?.sku && <div className="text-[10px] text-slate-400 font-mono mt-1 tracking-widest uppercase">SKU: {nom.sku}</div>}
-                                                            </div>
-
-                                                            {/* Показники */}
-                                                            <div className="flex items-center gap-1.5 flex-wrap">
-                                                                <div className="text-center px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 min-w-[62px]">
-                                                                    <div className="text-[9px] font-black uppercase text-slate-400">Потреба</div>
-                                                                    <div className="font-black text-sm text-slate-700">{req} <span className="text-[9px] font-bold text-slate-400 uppercase">{unitName}</span></div>
-                                                                </div>
-                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${res > 0 ? 'border-amber-100 bg-amber-50' : 'border-slate-100 bg-white'}`}>
-                                                                    <div className={`text-[9px] font-black uppercase ${res > 0 ? 'text-amber-500' : 'text-slate-300'}`}>Резерв</div>
-                                                                    <div className={`font-black text-sm ${res > 0 ? 'text-amber-700' : 'text-slate-300'}`}>{res > 0 ? res : '—'}</div>
-                                                                </div>
-                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${iss > 0 ? 'border-blue-100 bg-blue-50' : 'border-slate-100 bg-white'}`}>
-                                                                    <div className={`text-[9px] font-black uppercase ${iss > 0 ? 'text-blue-500' : 'text-slate-300'}`}>Видано</div>
-                                                                    <div className={`font-black text-sm ${iss > 0 ? 'text-blue-700' : 'text-slate-300'}`}>{iss > 0 ? iss : '—'}</div>
-                                                                </div>
-                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${defect > 0 ? 'border-red-200 bg-red-50' : 'border-slate-100 bg-white'}`}>
-                                                                    <div className={`text-[9px] font-black uppercase ${defect > 0 ? 'text-red-500' : 'text-slate-300'}`}>Дефіцит</div>
-                                                                    <div className={`font-black text-sm ${defect > 0 ? 'text-red-600' : 'text-slate-300'}`}>{defect > 0 ? defect : '—'}</div>
-                                                                </div>
-                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${incoming > 0 ? 'border-sky-200 bg-sky-50' : 'border-slate-100 bg-white'}`}>
-                                                                    <div className={`text-[9px] font-black uppercase ${incoming > 0 ? 'text-sky-500' : 'text-slate-300'}`}>В дорозі</div>
-                                                                    <div className={`font-black text-sm ${incoming > 0 ? 'text-sky-700' : 'text-slate-300'}`}>{incoming > 0 ? incoming : '—'}</div>
-                                                                </div>
-                                                                <div className={`text-center px-2.5 py-1 rounded-lg border min-w-[62px] ${availableGlobal > 0 ? 'border-emerald-100 bg-emerald-50' : 'border-slate-100 bg-white'}`} title="Вільний залишок на всіх складах">
-                                                                    <div className={`text-[9px] font-black uppercase ${availableGlobal > 0 ? 'text-emerald-500' : 'text-slate-300'}`}>Склад</div>
-                                                                    <div className={`font-black text-sm ${availableGlobal > 0 ? 'text-emerald-700' : 'text-slate-300'}`}>{availableGlobal > 0 ? availableGlobal : '—'}</div>
-                                                                </div>
-                                                            </div>
-
-                                                            {/* Дії */}
-                                                            <div className="flex items-center gap-1.5 ml-auto">
-                                                                {defect > 0 && (
-                                                                    <button
-                                                                        onClick={() => openOp('reserve', item)}
-                                                                        disabled={availableGlobal <= 0}
-                                                                        title={availableGlobal > 0 ? `На складах вільно: ${availableGlobal} ${unitName}` : 'Немає вільного залишку'}
-                                                                        className="px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white disabled:opacity-40 disabled:hover:bg-indigo-50 disabled:hover:text-indigo-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 border border-indigo-200"
-                                                                    >
-                                                                        <FaLock size={11}/> Резерв
-                                                                    </button>
-                                                                )}
-                                                                <button
-                                                                    onClick={() => openOp('issue', item)}
-                                                                    disabled={!canIssue}
-                                                                    title={myReserved > 0 ? `У резерві під об'єкт: ${myReserved} ${unitName}` : 'Видати зі складу'}
-                                                                    className="px-3 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white disabled:opacity-40 disabled:hover:bg-emerald-50 disabled:hover:text-emerald-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 border border-emerald-200"
-                                                                >
-                                                                    <FaArrowUp size={11}/> Видати
-                                                                </button>
-                                                                {myReserved > 0 && (
-                                                                    <button
-                                                                        onClick={() => openOp('unreserve', item)}
-                                                                        title={`Зняти резерв (у резерві: ${myReserved} ${unitName})`}
-                                                                        className="px-3 py-2 bg-slate-100 text-slate-600 hover:bg-slate-700 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 border border-slate-200"
-                                                                    >
-                                                                        <FaUnlock size={11}/> Зняти
-                                                                    </button>
-                                                                )}
-                                                                {iss > 0 && (
-                                                                    <button
-                                                                        onClick={() => openOp('return', item)}
-                                                                        title="Повернути на склад"
-                                                                        className="px-3 py-2 bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 border border-amber-200"
-                                                                    >
-                                                                        <FaUndo size={11}/> Повернути
-                                                                    </button>
-                                                                )}
-                                                                {defect > 0 && !coveredByIncoming && !activeReq && (
-                                                                    <button
-                                                                        onClick={() => openReqModal(item, defect)}
-                                                                        title="Створити заявку на закупівлю під цей об'єкт"
-                                                                        className="px-3 py-2 bg-orange-50 text-orange-700 hover:bg-orange-600 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 border border-orange-200"
-                                                                    >
-                                                                        <FaShoppingCart size={11}/> Замовити
-                                                                    </button>
-                                                                )}
-                                                                {activeReq && (
-                                                                    <span
-                                                                        title={`Заявка №${activeReq.id} на ${activeReq.quantity} ${unitName}`}
-                                                                        className={`px-2.5 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider border ${REQ_STATUSES[activeReq.status]?.cls || 'bg-slate-50 text-slate-500 border-slate-200'}`}
-                                                                    >
-                                                                        📝 {REQ_STATUSES[activeReq.status]?.label || activeReq.status}
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* --- ЗАЯВКИ НА ЗАКУПІВЛЮ ПІД ОБ'ЄКТ --- */}
-                                {objRequests.length > 0 && (
-                                    <div className="bg-white rounded-2xl shadow-sm border border-orange-200 overflow-hidden">
-                                        <div className="px-5 py-3 bg-orange-50 border-b border-orange-100 flex items-center gap-2 flex-wrap">
-                                            <FaShoppingCart className="text-orange-500" />
-                                            <span className="text-sm font-bold text-orange-900">Заявки на закупівлю</span>
-                                            <span className="text-[10px] font-bold text-orange-600 bg-white border border-orange-200 px-2 py-0.5 rounded-full">{objRequests.length}</span>
-                                            <span className="text-[11px] text-orange-700/70 font-medium hidden md:inline ml-auto">Статус можна змінювати вільно — «Замовлено», «Є на складі» тощо</span>
-                                        </div>
-                                        <div className="divide-y divide-slate-100">
-                                            {objRequests.map(req => {
-                                                const nom = nomenclatures.find(n => n.id === req.nomenclature_id);
-                                                const unitName = nom?.unit?.name || 'шт';
-                                                const isClosed = ['done', 'rejected'].includes(req.status);
-                                                return (
-                                                    <div key={req.id} className={`p-4 sm:px-5 flex flex-wrap items-center gap-3 transition-colors ${isClosed ? 'opacity-50' : 'hover:bg-orange-50/20'}`}>
-                                                        <div className="flex-1 min-w-[220px]">
-                                                            <div className="font-bold text-slate-800 text-sm leading-tight">{nom?.fullName || `Номенклатура #${req.nomenclature_id}`}</div>
-                                                            <div className="text-[10px] text-slate-400 font-medium mt-1 flex items-center gap-2 flex-wrap">
-                                                                <span>{new Date(req.created_at).toLocaleDateString('uk-UA')}</span>
-                                                                {req.note && <span className="italic text-slate-500">«{req.note}»</span>}
-                                                            </div>
-                                                        </div>
-                                                        <div className="text-center px-2.5 py-1 rounded-lg border border-orange-100 bg-orange-50 min-w-[70px]">
-                                                            <div className="text-[9px] font-black uppercase text-orange-500">К-сть</div>
-                                                            <div className="font-black text-sm text-orange-700">{parseFloat(req.quantity)} <span className="text-[9px] font-bold text-orange-400 uppercase">{unitName}</span></div>
-                                                        </div>
-                                                        <select
-                                                            value={req.status}
-                                                            onChange={e => handleRequestStatus(req.id, e.target.value)}
-                                                            className={`h-10 px-2.5 rounded-lg border text-xs font-bold outline-none cursor-pointer transition-colors ${REQ_STATUSES[req.status]?.cls || 'bg-slate-50 text-slate-600 border-slate-200'}`}
-                                                        >
-                                                            {Object.entries(REQ_STATUSES).map(([key, val]) => <option key={key} value={key}>{val.label}</option>)}
-                                                        </select>
-                                                        <button
-                                                            onClick={() => handleDeleteRequest(req.id)}
-                                                            title="Видалити заявку"
-                                                            className="p-2.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                                                        >
-                                                            <FaTrash size={13} />
-                                                        </button>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* --- ВИДАНО ПОЗА СПЕЦИФІКАЦІЄЮ --- */}
-                                {offSpecIssued.length > 0 && (
-                                    <div className="bg-white rounded-2xl shadow-sm border border-amber-200 overflow-hidden">
-                                        <div className="px-5 py-3 bg-amber-50 border-b border-amber-100 flex items-center gap-2 flex-wrap">
-                                            <FaExclamationTriangle className="text-amber-500" />
-                                            <span className="text-sm font-bold text-amber-900">Видано поза специфікацією</span>
-                                            <span className="text-[10px] font-bold text-amber-600 bg-white border border-amber-200 px-2 py-0.5 rounded-full">{offSpecIssued.length} поз.</span>
-                                            <span className="text-[11px] text-amber-700/70 font-medium hidden md:inline ml-auto">Ці матеріали пішли на об'єкт, але їх немає в плані — додайте в комплектацію або поверніть</span>
-                                        </div>
-                                        <div className="divide-y divide-slate-100">
-                                            {offSpecIssued.map(row => {
-                                                const nom = nomenclatures.find(n => n.id === row.nomenclature_id);
-                                                const unitName = nom?.unit?.name || 'шт';
-                                                return (
-                                                    <div key={row.nomenclature_id} className="p-4 sm:px-5 flex flex-wrap items-center gap-3 hover:bg-amber-50/20 transition-colors">
-                                                        <div className="flex-1 min-w-[240px]">
-                                                            <div className="font-bold text-slate-800 text-sm leading-tight">{nom?.fullName || `Номенклатура #${row.nomenclature_id}`}</div>
-                                                            {nom?.sku && <div className="text-[10px] text-slate-400 font-mono mt-1 tracking-widest uppercase">SKU: {nom.sku}</div>}
-                                                        </div>
-                                                        <div className="text-center px-2.5 py-1 rounded-lg border border-blue-100 bg-blue-50 min-w-[70px]">
-                                                            <div className="text-[9px] font-black uppercase text-blue-500">Видано</div>
-                                                            <div className="font-black text-sm text-blue-700">{row.quantity} <span className="text-[9px] font-bold text-blue-400 uppercase">{unitName}</span></div>
-                                                        </div>
-                                                        <button
-                                                            onClick={() => openOp('return', { nomenclature_id: row.nomenclature_id, required_quantity: 0, reserved_quantity: 0, issued_quantity: row.quantity, outstanding_need: 0, specification_item_id: null, nomenclature_name: nom?.fullName })}
-                                                            className="px-3 py-2 bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 border border-amber-200"
-                                                        >
-                                                            <FaUndo size={11}/> Повернути
-                                                        </button>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
+                        {opStock && (
+                            <div className={`${T.inset} px-3 py-2 flex items-center justify-between gap-2 text-[11.5px] flex-wrap`}>
+                                <span className="text-slate-500">фізично <b className="text-slate-900">{num(opStock.onHand)}</b></span>
+                                <span className="text-slate-500">вільно <b className="text-emerald-700">{num(opStock.available)}</b></span>
+                                <span className="text-slate-500">наш резерв <b className="text-indigo-700">{num(opStock.mine)}</b></span>
+                                {op.mode === 'issue' && (
+                                    <span className="text-slate-500">до видачі <b className="text-slate-900">{num(opStock.issuable)}</b></span>
                                 )}
                             </div>
                         )}
-                    </motion.div>
+
+                        <Field label={`Кількість, ${unitOf(op.item.nomenclature_id)}`} required>
+                            <input type="number" min="0" step="any" inputMode="decimal" autoFocus={autoFocus}
+                                className={`${T.input} text-lg font-black tabular-nums ${overage.over ? 'border-amber-400 bg-amber-50' : ''}`}
+                                value={op.quantity}
+                                onChange={e => setOp(o => ({ ...o, quantity: e.target.value }))} />
+                        </Field>
+
+                        {overage.over && (
+                            <div className={`${TONE.warn.chip} border rounded-lg px-3 py-2 text-[12px] font-semibold`}>
+                                Понад план на {num((parseFloat(op.quantity) || 0) - overage.ref)}.
+                                Провести можна, але потрібна причина.
+                            </div>
+                        )}
+
+                        {op.mode !== 'unreserve' && (
+                            <Field label={overage.over ? 'Причина — обов’язково' : 'Коментар'} required={overage.over}>
+                                <input className={T.input} value={op.reason}
+                                    placeholder={overage.over ? 'Напр. заміна пошкодженого' : 'Необов’язково'}
+                                    onChange={e => setOp(o => ({ ...o, reason: e.target.value }))} />
+                            </Field>
+                        )}
+                    </div>
                 )}
+            </Modal>
 
-                {/* --- ЄДИНА МОДАЛКА ОПЕРАЦІЇ (РЕЗЕРВ / ВИДАЧА / ПОВЕРНЕННЯ) --- */}
-                <AnimatePresence>
-                    {opModal.isOpen && opModal.item && modeCfg && (
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[80]">
-                            <motion.div initial={{ scale: 0.98, opacity: 0, y: 30 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0, y: 30 }} className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg shadow-2xl flex flex-col overflow-hidden max-h-[95vh]" onClick={e => e.stopPropagation()}>
-                                <div className={`p-5 sm:p-6 border-b border-slate-100 flex justify-between items-center ${modeCfg.headBg} flex-shrink-0`}>
-                                    <h2 className={`text-lg sm:text-xl font-bold ${modeCfg.headText} flex items-center gap-2`}>
-                                        <modeCfg.icon className={modeCfg.headIcon}/> {modeCfg.label}
-                                    </h2>
-                                    <button onClick={closeOp} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm"><FaTimes/></button>
-                                </div>
-
-                                <div className="p-5 sm:p-6 flex-1 overflow-y-auto custom-scrollbar">
-                                    {/* Товар + звірка */}
-                                    <div className="bg-white p-4 rounded-xl border border-slate-200 mb-5 shadow-sm">
-                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Товар</div>
-                                        <div className="font-bold text-slate-800 text-sm leading-tight mb-3">{nameOf(opModal.item)}</div>
-                                        <div className="grid grid-cols-4 gap-2 text-center text-[11px]">
-                                            <div className="bg-slate-50 rounded-lg py-1.5 border border-slate-100">
-                                                <div className="text-slate-400 font-bold uppercase">Потреба</div>
-                                                <div className="font-black text-slate-700">{parseFloat(opModal.item.required_quantity)}</div>
-                                            </div>
-                                            <div className="bg-amber-50 rounded-lg py-1.5 border border-amber-100">
-                                                <div className="text-amber-500 font-bold uppercase">Резерв</div>
-                                                <div className="font-black text-amber-700">{parseFloat(opModal.item.reserved_quantity)}</div>
-                                            </div>
-                                            <div className="bg-blue-50 rounded-lg py-1.5 border border-blue-100">
-                                                <div className="text-blue-500 font-bold uppercase">Видано</div>
-                                                <div className="font-black text-blue-700">{parseFloat(opModal.item.issued_quantity)}</div>
-                                            </div>
-                                            <div className="bg-red-50 rounded-lg py-1.5 border border-red-100">
-                                                <div className="text-red-500 font-bold uppercase">Дефіцит</div>
-                                                <div className="font-black text-red-700">{parseFloat(opModal.item.outstanding_need)}</div>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <form id="op-form" onSubmit={executeOp} className="space-y-5">
-                                        <div>
-                                            <label className="text-xs font-bold text-slate-600 mb-1.5 flex items-center gap-1.5">
-                                                <FaWarehouse className="text-slate-400"/>
-                                                {opModal.mode === 'return' ? 'Склад повернення (куди)' : 'Склад (звідки)'}
-                                            </label>
-                                            <select
-                                                required
-                                                value={opForm.warehouse_id}
-                                                onChange={e => setOpForm(f => ({ ...f, warehouse_id: e.target.value }))}
-                                                className={`w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 ${modeCfg.ring} focus:bg-white outline-none text-sm font-bold text-slate-800 transition-colors`}
-                                            >
-                                                <option value="">Оберіть склад...</option>
-                                                {warehouses.filter(w => w.is_active && (opModal.mode !== 'unreserve' || reservedHereAt(w.id, opModal.item.nomenclature_id) > 0)).map(w => {
-                                                    const s = stockAt(w.id, opModal.item.nomenclature_id);
-                                                    const hint = opModal.mode === 'reserve'
-                                                        ? `вільно: ${s.available}`
-                                                        : opModal.mode === 'issue'
-                                                            ? `можна видати: ${issuableAt(w.id, opModal.item.nomenclature_id)}`
-                                                            : opModal.mode === 'unreserve'
-                                                                ? `резерв об'єкта: ${reservedHereAt(w.id, opModal.item.nomenclature_id)}`
-                                                                : `на складі: ${s.onHand}`;
-                                                    return <option key={w.id} value={w.id}>{w.name} ({hint})</option>;
-                                                })}
-                                            </select>
-                                            {mInfo && (
-                                                <div className="text-[11px] text-slate-500 mt-2 flex flex-wrap gap-x-3 gap-y-1">
-                                                    <span>Фізично: <b className="text-slate-700">{mInfo.onHand}</b></span>
-                                                    <span>Резерв (всі): <b className="text-amber-600">{mInfo.reservedTotal}</b></span>
-                                                    <span>Резерв цього об'єкта: <b className="text-indigo-600">{mInfo.reservedHere}</b></span>
-                                                    <span>Вільно: <b className="text-emerald-600">{mInfo.available}</b></span>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Кількість <span className="text-red-500">*</span></label>
-                                            <div className="flex items-center gap-3">
-                                                <input
-                                                    type="number" min="0" step="any" required autoFocus
-                                                    value={opForm.quantity}
-                                                    onChange={e => setOpForm(f => ({ ...f, quantity: e.target.value }))}
-                                                    className={`w-36 px-4 py-3 bg-white border-2 ${modeCfg.border} rounded-xl text-xl font-black ${modeCfg.text} text-center outline-none transition-colors`}
-                                                />
-                                                <span className="text-sm font-bold text-slate-400 uppercase">{unitOf(opModal.item.nomenclature_id)}</span>
-                                            </div>
-                                        </div>
-
-                                        {/* Попередження про перевищення плану */}
-                                        {overage.over && (
-                                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
-                                                <FaExclamationTriangle className="text-amber-500 mt-0.5 flex-shrink-0"/>
-                                                <p className="text-[11px] text-amber-800 font-medium leading-relaxed">
-                                                    {opModal.mode === 'return'
-                                                        ? `Повернення (${opForm.quantity}) перевищує видану кількість (${overage.ref}).`
-                                                        : `Перевищення плану: ${opForm.quantity} проти залишкової потреби ${overage.ref}.`}
-                                                    {' '}Вкажіть причину нижче.
-                                                </p>
-                                            </div>
-                                        )}
-
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-600 mb-1.5">
-                                                Коментар / причина {overage.over && <span className="text-red-500">*</span>}
-                                            </label>
-                                            <input
-                                                type="text"
-                                                value={opForm.reason}
-                                                onChange={e => setOpForm(f => ({ ...f, reason: e.target.value }))}
-                                                placeholder={overage.over ? 'Обов’язково: чому перевищення?' : 'Опційно...'}
-                                                className={`w-full px-4 py-2.5 bg-slate-50 border rounded-xl focus:bg-white focus:ring-2 ${modeCfg.ring} outline-none text-sm text-slate-800 transition-colors ${overage.over ? 'border-amber-300' : 'border-slate-200'}`}
-                                            />
-                                        </div>
-                                    </form>
-                                </div>
-
-                                <div className="p-4 sm:p-5 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 flex-shrink-0 pb-safe">
-                                    <button type="button" onClick={closeOp} className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
-                                    <button form="op-form" type="submit" disabled={isSubmitting} className={`px-8 py-2.5 text-white rounded-xl font-bold shadow-md transition-colors text-sm flex items-center gap-2 disabled:opacity-50 ${modeCfg.btn}`}>
-                                        {isSubmitting ? 'Обробка...' : modeCfg.verb}
-                                    </button>
-                                </div>
-                            </motion.div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-
-                {/* --- МОДАЛКА: НОВА ЗАЯВКА НА ЗАКУПІВЛЮ --- */}
-                <AnimatePresence>
-                    {reqModal.isOpen && reqModal.item && (
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[80]">
-                            <motion.div initial={{ scale: 0.98, opacity: 0, y: 30 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0, y: 30 }} className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl flex flex-col overflow-hidden max-h-[95vh]" onClick={e => e.stopPropagation()}>
-                                <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-orange-50 flex-shrink-0">
-                                    <div className="min-w-0">
-                                        <h2 className="text-lg font-bold text-orange-900 flex items-center gap-2"><FaShoppingCart className="text-orange-500"/> Заявка на закупівлю</h2>
-                                        <p className="text-[11px] text-orange-700/70 mt-0.5">Інформативна заявка — її побачить менеджер закупівель</p>
-                                    </div>
-                                    <button onClick={() => setReqModal({ isOpen: false, item: null })} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm flex-shrink-0"><FaTimes/></button>
-                                </div>
-                                <form id="req-form" onSubmit={handleSaveRequest} className="p-5 flex-1 overflow-y-auto custom-scrollbar space-y-4">
-                                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
-                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Позиція</div>
-                                        <div className="font-bold text-slate-800 text-sm leading-tight">{nameOf(reqModal.item)}</div>
-                                        <div className="text-[11px] text-slate-500 mt-1.5">Дефіцит по специфікації: <b className="text-red-600">{parseFloat(reqModal.item.outstanding_need)}</b> {unitOf(reqModal.item.nomenclature_id)}</div>
-                                    </div>
-                                    <div>
-                                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Кількість до замовлення <span className="text-red-500">*</span></label>
-                                        <div className="flex items-center gap-3">
-                                            <input type="number" min="0" step="any" required autoFocus value={reqForm.quantity} onChange={e => setReqForm(f => ({ ...f, quantity: e.target.value }))} className="w-32 px-4 py-3 bg-white border-2 border-orange-200 focus:border-orange-500 rounded-xl text-xl font-black text-orange-700 text-center outline-none transition-colors" />
-                                            <span className="text-sm font-bold text-slate-400 uppercase">{unitOf(reqModal.item.nomenclature_id)}</span>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase">Коментар (постачальник, терміновість...)</label>
-                                        <textarea rows="2" value={reqForm.note} onChange={e => setReqForm(f => ({ ...f, note: e.target.value }))} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-200 outline-none text-sm text-slate-800 transition-colors resize-none" placeholder="Опційно..." />
-                                    </div>
-                                </form>
-                                <div className="p-4 sm:p-5 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 flex-shrink-0 pb-safe">
-                                    <button type="button" onClick={() => setReqModal({ isOpen: false, item: null })} className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
-                                    <button form="req-form" type="submit" disabled={isReqSubmitting} className="px-8 py-2.5 bg-orange-600 text-white rounded-xl font-bold shadow-md hover:bg-orange-700 transition-colors text-sm flex items-center gap-2 disabled:opacity-50">
-                                        {isReqSubmitting ? 'Створення...' : 'Створити заявку'}
-                                    </button>
-                                </div>
-                            </motion.div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-
-                {/* --- РУЧНЕ ВНЕСЕННЯ / РЕДАГУВАННЯ КОМПЛЕКТАЦІЇ --- */}
-                {isManualOpen && selectedInst && (
-                    <ManualSpecBuilder
-                        isOpen={isManualOpen}
-                        onClose={() => setIsManualOpen(false)}
-                        onSuccess={refreshDetails}
-                        installationId={selectedInst.custom_id}
-                        taskId="complectation"
-                        title="Комплектація матеріалів"
-                        showToast={showToast}
-                    />
+            {/* ---------- ЗАЯВКА НА ЗАКУПІВЛЮ ---------- */}
+            <Modal
+                isOpen={!!reqModal} onClose={() => setReqModal(null)}
+                title="Заявка на закупівлю"
+                subtitle={reqModal ? (nomOf(reqModal.item.nomenclature_id)?.fullName || reqModal.item.nomenclature_name) : ''}
+                tone="warn" size="sm"
+                footer={<>
+                    <Btn variant="outline" onClick={() => setReqModal(null)}>Скасувати</Btn>
+                    <Btn variant="accent" onClick={saveRequest} disabled={busy}>
+                        {busy ? 'Створюємо…' : 'Створити заявку'}
+                    </Btn>
+                </>}
+            >
+                {reqModal && (
+                    <div className="space-y-3">
+                        <p className="text-[12px] text-slate-500 leading-relaxed">
+                            Заявка потрапить у розділ «Закупівлі» — закупівельник побачить,
+                            що і під який об'єкт треба замовити.
+                        </p>
+                        <Field label={`Кількість, ${unitOf(reqModal.item.nomenclature_id)}`} required>
+                            <input type="number" min="0" step="any" inputMode="decimal" autoFocus={autoFocus}
+                                className={`${T.input} text-lg font-black tabular-nums`}
+                                value={reqModal.quantity}
+                                onChange={e => setReqModal(m => ({ ...m, quantity: e.target.value }))} />
+                        </Field>
+                        <Field label="Коментар">
+                            <input className={T.input} placeholder="Напр. терміново, до п'ятниці"
+                                value={reqModal.note}
+                                onChange={e => setReqModal(m => ({ ...m, note: e.target.value }))} />
+                        </Field>
+                    </div>
                 )}
+            </Modal>
 
-            </div>
+            {manualOpen && selected && (
+                <ManualSpecBuilder
+                    isOpen={manualOpen}
+                    onClose={() => setManualOpen(false)}
+                    onSuccess={refresh}
+                    installationId={selected.custom_id}
+                    taskId="complectation"
+                    title="Комплектація матеріалів"
+                    showToast={toast}
+                />
+            )}
         </Layout>
     );
 }

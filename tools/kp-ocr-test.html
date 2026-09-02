@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K-Core · Тест розпізнавання КП</title>
+<style>
+  :root{
+    --bg:#F1F5F9; --card:#fff; --line:#E2E8F0; --ink:#0F172A; --muted:#64748B;
+    --accent:#4F46E5; --ok:#059669; --warn:#B45309; --err:#DC2626;
+    --mono:"IBM Plex Mono",Consolas,"Courier New",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.55 "Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px}
+  h1{font-size:19px;margin:0 0 2px}
+  .sub{color:var(--muted);font-size:12.5px;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+  label{display:block;font-size:10px;font-weight:800;text-transform:uppercase;
+    letter-spacing:.08em;color:var(--muted);margin-bottom:5px}
+  input[type=text],input[type=password],select{
+    width:100%;height:38px;padding:0 10px;border:1px solid #CBD5E1;border-radius:8px;
+    font-size:13px;background:#fff;color:var(--ink);outline:none}
+  input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px #4F46E51a}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:150px}
+  .chk{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;height:38px}
+  .chk input{width:16px;height:16px}
+  button{height:38px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);
+    color:#fff;font-size:13px;font-weight:700;cursor:pointer}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.ghost{background:#fff;color:var(--ink);border:1px solid #CBD5E1}
+  #drop{border:2px dashed #CBD5E1;border-radius:10px;padding:26px;text-align:center;
+    cursor:pointer;background:#fff;transition:.15s}
+  #drop.over{border-color:var(--accent);background:#EEF2FF}
+  #drop b{display:block;font-size:15px;margin-bottom:3px}
+  #drop span{color:var(--muted);font-size:12.5px}
+  .tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  .tabs button{background:#fff;color:var(--muted);border:1px solid var(--line);height:32px;
+    font-size:12px;padding:0 12px}
+  .tabs button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  pre{background:#0F172A;color:#E2E8F0;padding:12px;border-radius:8px;overflow:auto;
+    font:12px/1.5 var(--mono);max-height:520px;margin:0;white-space:pre-wrap;word-break:break-word}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--muted);padding:6px 8px;background:#F8FAFC;border-bottom:1px solid var(--line)}
+  td{padding:7px 8px;border-bottom:1px solid #F1F5F9;vertical-align:top}
+  td.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .pill{display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;
+    text-transform:uppercase;letter-spacing:.04em}
+  .p-ok{background:#D1FAE5;color:#065F46}
+  .p-warn{background:#FEF3C7;color:#92400E}
+  .p-err{background:#FEE2E2;color:#991B1B}
+  .p-mute{background:#F1F5F9;color:#475569}
+  .facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+  .fact{background:#F8FAFC;border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+  .fact .k{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+  .fact .v{font-size:16px;font-weight:800;margin-top:2px}
+  .note{padding:10px 12px;border-radius:8px;font-size:12.5px;margin-bottom:10px}
+  .note.err{background:#FEE2E2;color:#991B1B}
+  .note.ok{background:#D1FAE5;color:#065F46}
+  .note.info{background:#EFF6FF;color:#1E3A8A}
+  .hidden{display:none}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid currentColor;
+    border-right-color:transparent;border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .small{font-size:11.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Тест розпізнавання комерційної пропозиції</h1>
+  <div class="sub">
+    Окремий інструмент. Ганяє PDF через OCR.space і показує, що саме вдалося витягнути.
+    У React-проєкт нічого не пише.
+  </div>
+
+  <!-- НАЛАШТУВАННЯ -->
+  <div class="card">
+    <div class="row">
+      <div style="flex:2">
+        <label>API-ключ OCR.space</label>
+        <input type="password" id="key" placeholder="Вставте ключ — збережеться в цьому браузері">
+      </div>
+      <div>
+        <label>Рушій</label>
+        <select id="engine">
+          <option value="3" selected>3 — таблиці (рекомендовано)</option>
+          <option value="2">2 — універсальний</option>
+          <option value="1">1 — старий</option>
+        </select>
+      </div>
+      <div>
+        <label>Мова</label>
+        <select id="lang">
+          <option value="auto" selected>auto (рушій 2/3)</option>
+          <option value="ukr">ukr (лише рушій 1)</option>
+          <option value="eng">eng</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div class="chk"><input type="checkbox" id="isTable" checked><span>isTable — рядок за рядком</span></div>
+      <div class="chk"><input type="checkbox" id="scale"><span>scale — збільшення</span></div>
+      <div class="chk"><input type="checkbox" id="overlay"><span>координати слів</span></div>
+    </div>
+    <div class="small" style="margin-top:8px">
+      Безкоштовний тариф: файл до 1 МБ, до 3 сторінок. Рушій 3 віддає таблицю в Markdown —
+      саме з нього виходить найточніший розбір.
+    </div>
+  </div>
+
+  <!-- ФАЙЛ -->
+  <div class="card">
+    <div id="drop">
+      <b>Перетягніть PDF або натисніть</b>
+      <span id="fileName">Файл не обрано</span>
+    </div>
+    <input type="file" id="file" accept="application/pdf,image/*" class="hidden">
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button id="go" disabled>Розпізнати</button>
+      <button id="clear" class="ghost">Очистити</button>
+      <span id="status" class="small"></span>
+    </div>
+  </div>
+
+  <div id="err" class="note err hidden"></div>
+
+  <!-- РЕЗУЛЬТАТ -->
+  <div id="result" class="hidden">
+    <div class="card">
+      <div class="tabs">
+        <button data-tab="parsed" class="on">Структуровано</button>
+        <button data-tab="text">Текст від OCR</button>
+        <button data-tab="json">JSON</button>
+      </div>
+
+      <div id="tab-parsed">
+        <div id="verdict"></div>
+        <div class="facts" id="facts"></div>
+        <div id="equip" style="background:#F8FAFC;border:1px solid var(--line);
+             border-radius:8px;padding:10px 12px;margin-bottom:12px"></div>
+        <table id="items">
+          <thead><tr>
+            <th>Категорія</th><th>Модель</th>
+            <th style="text-align:right">К-сть</th>
+            <th style="text-align:right">Ціна</th>
+            <th style="text-align:right">Сума</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="tab-text" class="hidden"><pre id="rawText"></pre></div>
+      <div id="tab-json" class="hidden"><pre id="rawJson"></pre></div>
+    </div>
+  </div>
+
+<script>
+/* =====================================================================
+   1. Стан і дрібні помічники
+   ===================================================================== */
+
+const $ = (id) => document.getElementById(id);
+let currentFile = null;
+
+// Ключ живе тільки в цьому браузері й нікуди не комітиться
+$('key').value = localStorage.getItem('ocr_key') || '';
+$('key').addEventListener('input', e => localStorage.setItem('ocr_key', e.target.value.trim()));
+
+const setErr = (msg) => {
+  const box = $('err');
+  if (!msg) { box.classList.add('hidden'); return; }
+  box.textContent = msg;
+  box.classList.remove('hidden');
+};
+
+/* Числа: «8 452», «1 740», «1,7», «7947 $», нерозривні пробіли */
+const toNum = (s) => {
+  if (s === null || s === undefined) return null;
+  const cleaned = String(s).replace(/\*/g, '').replace(/[\s  ]/g, '');
+  const m = cleaned.match(/-?\d+(?:[.,]\d+)?/);
+  return m ? parseFloat(m[0].replace(',', '.')) : null;
+};
+
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+/* Числа в комірці. Головна складність — пробіл: у «8 452» це розділювач
+   тисяч, а в «1450 1080» це два різні числа (об'єднаний рядок на два товари).
+   Розрізняємо за формою: розділювач тисяч — це 1–3 цифри, далі групи рівно
+   по 3 цифри. «1450 1080» під це не підпадає, бо перша група має 4 цифри. */
+const numbersIn = (s) => {
+  if (!s) return [];
+  const out = [];
+  const re = /(?<!\d)\d{1,3}(?:[\s  ]\d{3})+(?!\d)|\d+(?:[.,]\d+)?/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const v = parseFloat(m[0].replace(/[\s  ]/g, '').replace(',', '.'));
+    if (!isNaN(v)) out.push(v);
+  }
+  return out;
+};
+
+/* =====================================================================
+   2. Виклик OCR.space
+   ===================================================================== */
+
+async function runOcr(file) {
+  const key = $('key').value.trim();
+  if (!key) throw new Error('Спершу вставте API-ключ.');
+  if (file.size > 1024 * 1024) {
+    throw new Error(`Файл ${(file.size / 1048576).toFixed(2)} МБ — безкоштовний тариф приймає до 1 МБ.`);
+  }
+
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('OCREngine', $('engine').value);
+  fd.append('language', $('lang').value);
+  fd.append('isTable', $('isTable').checked ? 'true' : 'false');
+  fd.append('scale', $('scale').checked ? 'true' : 'false');
+  fd.append('isOverlayRequired', $('overlay').checked ? 'true' : 'false');
+
+  let res;
+  try {
+    res = await fetch('https://api.ocr.space/parse/image', {
+      method: 'POST',
+      headers: { apikey: key },
+      body: fd,
+    });
+  } catch (e) {
+    throw new Error(
+      'Не вдалося звернутися до api.ocr.space. Якщо ви відкрили файл подвійним кліком '
+      + '(адреса починається з file://), браузер блокує запит. Запустіть локальний сервер '
+      + 'у теці tools: npx serve  — і відкрийте сторінку через http://localhost:…'
+    );
+  }
+
+  const json = await res.json();
+  if (json.IsErroredOnProcessing) {
+    const m = json.ErrorMessage;
+    throw new Error(Array.isArray(m) ? m.join('; ') : (m || 'OCR повернув помилку'));
+  }
+  return json;
+}
+
+/* =====================================================================
+   3. Розбір відповіді
+   Рушій 3 віддає Markdown-таблицю, рушій 2 — колонки через табуляцію.
+   Обидва зводимо до однакового масиву рядків.
+   ===================================================================== */
+
+function tableFromMarkdown(text) {
+  const rows = [];
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('|')) continue;
+    if (/^\|[\s|:-]+\|$/.test(t)) continue;              // роздільник |---|---|
+    const cells = t.slice(1, t.endsWith('|') ? -1 : undefined)
+      .split('|').map(c => norm(c.replace(/\*\*/g, '')));
+    if (cells.some(c => c)) rows.push(cells);
+  }
+  return rows;
+}
+
+function tableFromTabs(text) {
+  const rows = [];
+  for (const line of text.split('\n')) {
+    if (!line.includes('\t')) continue;
+    const cells = line.split('\t').map(norm);
+    if (cells.filter(c => c).length >= 2) rows.push(cells);
+  }
+  return rows;
+}
+
+/* Категорії — порядок важливий: «Сонячний кабель» раніше за «Сонячна панель».
+   Увага: \b у JS не працює з кирилицею, тому межі — через lookaround \p{L}. */
+const CATEGORIES = [
+  { key:'dc_cable',   label:'Сонячний кабель',    re:/соняч[\p{L}]*\s*кабел/iu },
+  { key:'ac_cable',   label:'Електрика',          re:/електрика|аввг|пвс\s*\d/iu },
+  { key:'panel',      label:'Сонячна панель',     re:/панел/iu },
+  { key:'inverter',   label:'Інвертор',           re:/інвертор|комплект\s*станц/iu },
+  { key:'battery',    label:'АКБ',                re:/(?<![\p{L}])акб(?![\p{L}])|акумулятор/iu },
+  { key:'mounting',   label:'Конструкція',        re:/конструкц|кріплен/iu },
+  { key:'protection', label:'Електричний захист', re:/захист/iu },
+  { key:'grounding',  label:'Заземлення',         re:/заземлен/iu },
+  { key:'work',       label:'Роботи',             re:/робота|встановлен|монтаж/iu },
+  { key:'logistics',  label:'Логістика',          re:/логістик|доставк/iu },
+];
+
+const detectCategory = (s) => CATEGORIES.find(c => c.re.test(s || '')) || null;
+
+/* Сума не завжди є числом. Варіанти, які реально трапляються в КП:
+   «Згідно фактичних витрат», «Див. кінець сторінки», «за фактом». */
+const BY_FACT_RE = /згідно|фактичн|за\s*фактом|див\.?\s*кінець|дивись\s*кінець|нижче/iu;
+
+/* Заголовок колонки з назвою позиції називають по-різному:
+   «Назва товару» в одному шаблоні, «Позиція» в іншому. */
+const HEAD_PATTERNS = {
+  name:  /назва|позиц|наймен/iu,
+  model: /модель|характер/iu,
+  qty:   /к\s*-?\s*с|кільк/iu,
+  price: /ціна|вартість\s*за/iu,
+  sum:   /сума|разом/iu,
+};
+
+/** Чи є рядок шапкою таблиці */
+const isHeaderRow = (cells) => {
+  const j = cells.join(' ');
+  return HEAD_PATTERNS.model.test(j) && (HEAD_PATTERNS.sum.test(j) || HEAD_PATTERNS.price.test(j));
+};
+
+/* Колонки визначаємо за текстом заголовка, а не за номером: у різних
+   шаблонах їх різна кількість (з колонкою «Зображення» і без неї). */
+function columnIndexes(rows) {
+  for (const r of rows) {
+    if (!isHeaderRow(r)) continue;
+    const idx = {};
+    r.forEach((c, i) => {
+      const t = norm(c);
+      if (!t) return;
+      if (idx.name === undefined && HEAD_PATTERNS.name.test(t)) idx.name = i;
+      else if (idx.model === undefined && HEAD_PATTERNS.model.test(t)) idx.model = i;
+      else if (idx.qty === undefined && HEAD_PATTERNS.qty.test(t)) idx.qty = i;
+      else if (idx.price === undefined && HEAD_PATTERNS.price.test(t)) idx.price = i;
+      else if (idx.sum === undefined && HEAD_PATTERNS.sum.test(t)) idx.sum = i;
+    });
+    if (idx.name !== undefined && idx.sum !== undefined) return idx;
+  }
+  return null;
+}
+
+/* Розкладає об'єднану комірку на кілька товарів.
+   «Гібридний інвертор Deye SUN 8K … Акб Deye SE-F5 Pro-C» —
+   менеджер написав два товари в одній клітинці. Шукаємо в тексті місця,
+   де починається нова категорія, і ріжемо по них. Так не доводиться
+   змушувати менеджерів писати «тільки отак». */
+function splitMerged(text) {
+  if (!text) return [];
+  const marks = [];
+  for (const c of CATEGORIES) {
+    const re = new RegExp(c.re.source, 'giu');
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      marks.push({ at: m.index, cat: c });
+      if (m.index === re.lastIndex) re.lastIndex++;   // захист від нульових збігів
+    }
+  }
+  if (marks.length < 2) return [];
+
+  marks.sort((a, b) => a.at - b.at);
+  // Лишаємо перший збіг кожної категорії і прибираємо ті, що надто близько
+  const cut = [];
+  for (const m of marks) {
+    if (cut.some(x => x.cat.key === m.cat.key)) continue;
+    if (cut.length && m.at - cut[cut.length - 1].at < 6) continue;
+    cut.push(m);
+  }
+  if (cut.length < 2) return [];
+
+  return cut.map((m, i) => ({
+    cat: m.cat,
+    text: norm(text.slice(m.at, i + 1 < cut.length ? cut[i + 1].at : undefined)),
+  }));
+}
+
+function parseOffer(text) {
+  const mdRows = tableFromMarkdown(text);
+  const rows = mdRows.length >= 3 ? mdRows : tableFromTabs(text);
+  const idx = columnIndexes(rows) || { name: 1, model: 2, qty: 3, price: 4, sum: 5 };
+
+  const head = {};
+  const items = [];
+  let total = null;
+
+  for (const r of rows) {
+    const name = norm(r[idx.name]);
+    const model = norm(r[idx.model]);
+    const qtyRaw = norm(r[idx.qty]);
+    const priceRaw = norm(r[idx.price]);
+    const sumRaw = norm(r[idx.sum]);
+
+    // Шапка — може повторюватись, бо таблиць у документі буває кілька
+    if (isHeaderRow(r)) continue;
+
+    // Підсумковий рядок усередині таблиці
+    if (/^(сума|разом|всього|усього)\b/iu.test(name) || /^(сума|разом|всього)$/iu.test(model)) {
+      total = toNum(sumRaw || priceRaw || qtyRaw || r[r.length - 1]);
+      continue;
+    }
+
+    const cat = detectCategory(name) || detectCategory(model);
+    if (!cat) continue;
+
+    const byFact = BY_FACT_RE.test(sumRaw + ' ' + priceRaw);
+    const qtyParts = qtyRaw.match(/\d+(?:[.,]\d+)?\s*(?:шт|м2|мм|м)(?![\p{L}\d])/giu) || [];
+    const sumParts = numbersIn(sumRaw).filter(n => n);
+    const priceParts = numbersIn(priceRaw).filter(n => n);
+
+    // Кілька товарів в одній клітинці. Спершу пробуємо розділити за
+    // категоріями в тексті — так кожен рядок отримає СВОЮ назву,
+    // а не успадкує категорію сусіда.
+    if (!byFact && sumParts.length > 1) {
+      const parts = splitMerged(`${name} ${model}`);
+      const n = sumParts.length;
+
+      if (parts.length === n) {
+        parts.forEach((p, i) => {
+          const q = (qtyParts[i] || '').match(/(\d+(?:[.,]\d+)?)\s*(шт|м2|мм|м)/iu);
+          items.push({
+            category: p.cat.key, label: p.cat.label, model: p.text,
+            quantity: q ? toNum(q[1]) : null,
+            unit: q ? (/шт/i.test(q[2]) ? 'шт' : 'м') : null,
+            price: priceParts[i] ?? null, sum: sumParts[i] ?? null,
+            byFact: false, merged: true,
+          });
+        });
+        continue;
+      }
+
+      // Категорії не розпізнались, але кількостей стільки ж, скільки сум —
+      // ділимо хоча б за числами, категорію лишаємо спільну
+      if (qtyParts.length === n) {
+        qtyParts.forEach((q, i) => {
+          const qm = q.match(/(\d+(?:[.,]\d+)?)\s*(шт|м2|мм|м)/iu);
+          items.push({
+            category: cat.key, label: cat.label, model,
+            quantity: qm ? toNum(qm[1]) : null,
+            unit: qm ? (/шт/i.test(qm[2]) ? 'шт' : 'м') : null,
+            price: priceParts[i] ?? null, sum: sumParts[i] ?? null,
+            byFact: false, merged: true,
+          });
+        });
+        continue;
+      }
+    }
+
+    const q = qtyRaw.match(/(\d+(?:[.,]\d+)?)\s*(шт|м2|мм|м)(?![\p{L}\d])/iu);
+    items.push({
+      category: cat.key, label: cat.label, model,
+      quantity: q ? toNum(q[1]) : (/набір|комплект/i.test(qtyRaw) ? 1 : null),
+      unit: q ? (/шт/i.test(q[2]) ? 'шт' : 'м') : (/набір|комплект/i.test(qtyRaw) ? 'набір' : null),
+      price: priceParts[0] ?? null,
+      sum: byFact ? null : (sumParts[sumParts.length - 1] ?? null),
+      byFact, merged: false,
+    });
+  }
+
+  /* --- Поля з тексту поза таблицею --- */
+  const plain = text.replace(/\|/g, ' ');
+
+  const mCap = plain.match(/панел[\p{L}]*\s*([\d]+\s*[,.]?\s*\d*)\s*кВт/iu);
+  head.capacityKw = mCap ? toNum(mCap[1].replace(/\s/g, '')) : null;
+
+  const mInv = plain.match(/інвертор[\p{L}]*\s*(?:гібридний\s*)?([\d]+[,.]?\d*)\s*кВт/iu)
+            || plain.match(/(?:гібридний\s*)?інвертор\s*([\d]+[,.]?\d*)\s*кВт/iu);
+  head.inverterKw = mInv ? toNum(mInv[1]) : null;
+
+  const mBat = plain.match(/АКБ\s*([\d]+[,.]?\d*)\s*кВт/iu);
+  head.batteryKwh = mBat ? toNum(mBat[1]) : null;
+
+  // «Гібридна СЕС на дах», «СЕС гібридна», «ВАРТІСТЬ ГІБРИДНОЇ СЕС» —
+  // закінчення різні, тому корінь + [\p{L}]*
+  const mType = plain.match(/(гібридн|мережев|автономн)[\p{L}]*\s*СЕС[^\n|#]{0,24}/iu)
+             || plain.match(/СЕС\s*(гібридн|мережев|автономн)[\p{L}]*/iu);
+  head.stationType = mType ? norm(mType[0]) : null;
+
+  head.mount = /на\s*землю|наземн/iu.test(plain) ? 'земля'
+             : /на\s*дах|дахов|скатн/iu.test(plain) ? 'дах' : null;
+
+  head.payment = /безготівков/iu.test(plain) ? 'безготівковий'
+               : /готівков/iu.test(plain) ? 'готівковий' : null;
+
+  /* Підсумок не завжди рядок таблиці. У новому шаблоні він стоїть текстом:
+     «Орієнтовна вартість системи \n 4 160 $». Тому, якщо в таблиці не
+     знайшли, шукаємо в тексті — спершу біля ключових слів, потім
+     просто найбільше число з валютою. */
+  if (total == null) {
+    const near = plain.match(
+      /(?:орієнтовна\s+вартість|вартість\s+системи|загальна\s+вартість|усього|всього|разом|сума)[^\d]{0,40}(\d[\d\s  ]*(?:[.,]\d+)?)\s*(?:\$|USD|грн|UAH)?/iu
+    );
+    if (near) total = toNum(near[1]);
+  }
+  if (total == null) {
+    const withCurrency = [...plain.matchAll(/(\d[\d\s  ]*(?:[.,]\d+)?)\s*(?:\$|USD|грн|UAH)/giu)]
+      .map(m => toNum(m[1])).filter(n => n && n > 50);
+    if (withCurrency.length) total = Math.max(...withCurrency);
+  }
+
+  head.total = total;
+  head.currency = /\$|USD/.test(plain) ? 'USD' : (/грн|UAH/iu.test(plain) ? 'UAH' : null);
+
+  /* --- Ключове обладнання: те, що потім бронюється на складі --- */
+  const pick = (key) => items.find(i => i.category === key) || null;
+  head.equipment = {
+    panel: pick('panel'),
+    inverter: pick('inverter'),
+    battery: pick('battery'),
+  };
+
+  // Ціна за кВт — головний показник для порівняння пропозицій між собою
+  head.pricePerKw = (total && head.capacityKw)
+    ? Math.round((total / head.capacityKw) * 10) / 10 : null;
+
+  /* --- Звірка --- */
+  const itemsSum = items.reduce((s, i) => s + (i.sum || 0), 0);
+  const check = {
+    itemsSum,
+    total,
+    diff: total != null ? Math.round((total - itemsSum) * 100) / 100 : null,
+    ok: total != null && Math.abs(total - itemsSum) < 1,
+  };
+
+  return { head, items, check };
+}
+
+/* =====================================================================
+   4. Показ результату
+   ===================================================================== */
+
+function render(json) {
+  const text = (json.ParsedResults || []).map(p => p.ParsedText || '').join('\n');
+  $('rawText').textContent = text || '(порожньо)';
+  $('rawJson').textContent = JSON.stringify(json, null, 1);
+
+  const r = parseOffer(text);
+
+  // Вердикт
+  const v = $('verdict');
+  if (r.check.ok) {
+    v.className = 'note ok';
+    v.innerHTML = `<b>Звірка зійшлася.</b> Сума позицій ${r.check.itemsSum} = підсумок у документі ${r.check.total}.`;
+  } else if (r.check.total == null) {
+    v.className = 'note err';
+    v.innerHTML = `<b>Підсумкову суму не знайдено.</b> Позицій розібрано: ${r.items.length}, їхня сума ${r.check.itemsSum}.`;
+  } else {
+    v.className = 'note err';
+    v.innerHTML = `<b>Розбіжність ${r.check.diff}.</b> Сума позицій ${r.check.itemsSum}, у документі ${r.check.total}. `
+      + `Схоже, якийсь рядок не розпізнався — подивіться вкладку «Текст від OCR».`;
+  }
+
+  // Факти
+  const F = [
+    ['Сума угоди', r.head.total != null ? `${r.head.total} ${r.head.currency || ''}` : '—'],
+    ['Ціна за кВт', r.head.pricePerKw != null ? `${r.head.pricePerKw} $` : '—'],
+    ['Потужність', r.head.capacityKw != null ? `${r.head.capacityKw} кВт` : '—'],
+    ['Інвертор', r.head.inverterKw != null ? `${r.head.inverterKw} кВт` : '—'],
+    ['АКБ', r.head.batteryKwh != null ? `${r.head.batteryKwh} кВт·год` : '—'],
+    ['Тип', r.head.stationType || '—'],
+    ['Монтаж', r.head.mount || '—'],
+    ['Позицій', String(r.items.length)],
+  ];
+  $('facts').innerHTML = F.map(([k, val]) =>
+    `<div class="fact"><div class="k">${k}</div><div class="v">${val}</div></div>`).join('');
+
+  // Ключове обладнання — саме воно потім бронюється на складі
+  const eq = r.head.equipment || {};
+  const eqRows = [
+    ['Панель', eq.panel], ['Інвертор', eq.inverter], ['АКБ', eq.battery],
+  ].filter(([, it]) => it);
+
+  $('equip').innerHTML = eqRows.length ? `
+    <div class="k" style="font-size:10px;font-weight:800;text-transform:uppercase;
+         letter-spacing:.07em;color:var(--muted);margin-bottom:6px">Ключове обладнання</div>
+    <table>
+      <tbody>${eqRows.map(([k, it]) => `
+        <tr>
+          <td style="width:90px"><b>${k}</b></td>
+          <td>${it.model || '<span class="small">модель не вказана</span>'}</td>
+          <td class="n" style="width:80px">${it.quantity ?? '—'} <span class="small">${it.unit || ''}</span></td>
+          <td class="n" style="width:90px">${it.sum ?? '—'} $</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>` : '';
+
+  // Позиції
+  const tb = $('items').querySelector('tbody');
+  tb.innerHTML = r.items.map(i => `
+    <tr>
+      <td><b>${i.label}</b>${i.merged ? ' <span class="pill p-mute">об’єднаний рядок</span>' : ''}</td>
+      <td style="max-width:380px">${i.model || '<span class="small">—</span>'}</td>
+      <td class="n">${i.quantity ?? '—'} <span class="small">${i.unit || ''}</span></td>
+      <td class="n">${i.price ?? '—'}</td>
+      <td class="n">${i.byFact
+        ? '<span class="pill p-warn">за фактом</span>'
+        : (i.sum ?? '<span class="pill p-err">—</span>')}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="small">Позицій не розібрано</td></tr>';
+
+  $('result').classList.remove('hidden');
+}
+
+/* =====================================================================
+   5. Події
+   ===================================================================== */
+
+const drop = $('drop');
+drop.addEventListener('click', () => $('file').click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.classList.remove('over');
+  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+});
+$('file').addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
+
+function setFile(f) {
+  currentFile = f;
+  $('fileName').textContent = `${f.name} · ${(f.size / 1024).toFixed(0)} КБ`;
+  $('go').disabled = false;
+  setErr('');
+}
+
+$('clear').addEventListener('click', () => {
+  currentFile = null;
+  $('file').value = '';
+  $('fileName').textContent = 'Файл не обрано';
+  $('go').disabled = true;
+  $('result').classList.add('hidden');
+  setErr('');
+  $('status').textContent = '';
+});
+
+$('go').addEventListener('click', async () => {
+  if (!currentFile) return;
+  setErr('');
+  $('go').disabled = true;
+  $('status').innerHTML = '<span class="spin"></span> розпізнаємо…';
+  const t0 = performance.now();
+  try {
+    const json = await runOcr(currentFile);
+    render(json);
+    const ms = Math.round(performance.now() - t0);
+    $('status').textContent = `готово за ${(ms / 1000).toFixed(1)} с · рушій ${$('engine').value}`;
+  } catch (e) {
+    setErr(e.message);
+    $('status').textContent = '';
+  } finally {
+    $('go').disabled = false;
+  }
+});
+
+document.querySelectorAll('.tabs button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    for (const t of ['parsed', 'text', 'json']) {
+      $('tab-' + t).classList.toggle('hidden', t !== b.dataset.tab);
+    }
+  });
+});
+
+// Рушій 1 не розуміє language=auto, рушії 2/3 не розуміють ukr
+$('engine').addEventListener('change', () => {
+  $('lang').value = $('engine').value === '1' ? 'ukr' : 'auto';
+});
+</script>
+</div>
+</body>
+</html>

@@ -1,46 +1,48 @@
-import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { 
-    FaPlus, FaSearch, FaEdit, FaTimes, FaCheck, FaExclamationTriangle,
-    FaInfoCircle, FaFileInvoiceDollar, FaBoxOpen, FaRegCalendarAlt,
-    FaBuilding, FaHardHat, FaChevronRight, FaChevronDown,
-    FaTruckLoading, FaFileExcel, FaMoneyBillAlt, FaUniversity, FaShoppingCart, FaWarehouse
+// =====================================================================
+//  Закупівлі та постачання.
+//
+//  Замовлення постачальникам: що замовлено, скільки оплачено,
+//  скільки вже приїхало. Плюс черга заявок від об'єктів — те, що
+//  менеджери об'єктів просять закупити.
+//
+//  Кожне замовлення показує три показники одразу: борг, приймання
+//  і стан. Заглядати всередину треба лише тоді, коли справді треба.
+// =====================================================================
+
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+    FaPlus, FaEdit, FaInfoCircle, FaFileInvoiceDollar,
+    FaBuilding, FaHardHat, FaChevronDown, FaTruckLoading, FaFileExcel,
+    FaMoneyBillAlt, FaShoppingCart, FaWarehouse, FaCheck, FaBan,
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
+import PurchaseOrderModal from './PurchaseOrderModal';
+import {
+    T, Btn, IconBtn, Chip, Card, Field, Picker, Bar, EmptyState,
+    Skeleton, Modal, useToast, useConfirm, humanError, num, useIsMobile,
+} from '../ui';
 
-// Імпортуємо зовнішній компонент модалки
-import PurchaseOrderModal from './PurchaseOrderModal'; 
+const ORDER_STATUS = {
+    draft: { label: 'Чернетка', tone: 'neutral' },
+    sent: { label: 'Замовлено', tone: 'info' },
+    partially_received: { label: 'Приїхало частково', tone: 'warn' },
+    received: { label: 'Отримано', tone: 'ok' },
+    cancelled: { label: 'Скасовано', tone: 'danger' },
+};
 
-const Toast = memo(({ message, type = 'success', isVisible, onClose }) => {
-    useEffect(() => {
-        if (isVisible) {
-            const timer = setTimeout(onClose, 4000);
-            return () => clearTimeout(timer);
-        }
-    }, [isVisible, onClose]);
-    const styles = { success: 'bg-emerald-600 text-white', error: 'bg-red-600 text-white', warning: 'bg-amber-500 text-white' };
-    const icons = { success: <FaCheck />, error: <FaExclamationTriangle />, warning: <FaExclamationTriangle /> };
-    return (
-        <AnimatePresence>
-            {isVisible && (
-                <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="fixed top-20 right-4 z-[100] w-full sm:w-auto px-4 sm:px-0">
-                    <div className={`${styles[type] || 'bg-blue-600'} rounded-xl shadow-2xl p-4 flex items-center justify-between border border-white/20`}>
-                        <div className="flex items-center space-x-3">
-                            {icons[type] || <FaInfoCircle className="text-white" />}
-                            <span className="font-bold text-sm">{message}</span>
-                        </div>
-                        <button onClick={onClose} className="ml-4 text-white/80 hover:text-white transition-colors"><FaTimes /></button>
-                    </div>
-                </motion.div>
-            )}
-        </AnimatePresence>
-    );
-});
+const PAYMENT_TYPES = { bank_transfer: 'Банк. переказ', vat: 'З ПДВ', no_vat: 'Без ПДВ', fop: 'Рахунок ФОП', cash: 'Готівка' };
+const PAYMENT_PURPOSES = { advance: 'Аванс', partial: 'Часткова', post: 'Постоплата', realization: 'Реалізація' };
+const CURRENCIES = ['UAH', 'USD', 'EUR'];
+
+const money = (v, cur) => `${new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 2 }).format(Number(v) || 0)} ${cur || ''}`.trim();
 
 export default function PurchasesPage({ externalSearch = '', externalActionTrigger = 0 }) {
     const { employee, loading: authLoading } = useAuth();
-    
+    const toast = useToast();
+    const confirm = useConfirm();
+    const isMobile = useIsMobile();
+
     const [orders, setOrders] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
     const [installations, setInstallations] = useState([]);
@@ -48,761 +50,814 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
     const [categories, setCategories] = useState([]);
     const [warehouses, setWarehouses] = useState([]);
     const [systemMemory, setSystemMemory] = useState([]);
-    const [employeesDict, setEmployeesDict] = useState({});
-    
+    const [requests, setRequests] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [expandedRowId, setExpandedRowId] = useState(null);
+
     const [statusFilter, setStatusFilter] = useState('all');
+    const [expandedId, setExpandedId] = useState(null);
+    const [requestsOpen, setRequestsOpen] = useState(true);
 
-    // Вхідні заявки на закупівлю від об'єктів (procurement_requests, status='requested')
-    const [incomingRequests, setIncomingRequests] = useState([]);
-    const [requestsExpanded, setRequestsExpanded] = useState(true);
-    const [toast, setToast] = useState({ isVisible: false, message: '', type: 'success' });
-    const showToast = useCallback((message, type = 'success') => setToast({ isVisible: true, message, type }), []);
+    // Модалка замовлення
+    const [poModal, setPoModal] = useState(false);
+    const [poMode, setPoMode] = useState('manual');
+    const [poEdit, setPoEdit] = useState(null);
+    const [poFile, setPoFile] = useState(null);
+    const fileRef = useRef(null);
 
-    // Стейт для нової модалки PurchaseOrderModal
-    const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
-    const [purchaseModalMode, setPurchaseModalMode] = useState('manual'); 
-    const [purchaseModalEditData, setPurchaseModalEditData] = useState(null);
-    const [purchaseModalImportFile, setPurchaseModalImportFile] = useState(null);
+    // Оплати та приймання
+    const [payModal, setPayModal] = useState(null);       // order
+    const [payForm, setPayForm] = useState({ payment_type: 'bank_transfer', purpose: 'partial', amount: '', currency: 'UAH', exchange_rate: 1, notes: '' });
+    const [recvModal, setRecvModal] = useState(null);     // { order, warehouse_id, items }
+    const [busy, setBusy] = useState(false);
 
-    // Стейт для інших модалок
-    const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-    const [isReceivingModalOpen, setIsReceivingModalOpen] = useState(false);
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    
-    const [selectedOrder, setSelectedOrder] = useState(null);
-    const [paymentForm, setPaymentForm] = useState({ payment_type: 'bank_transfer', purpose: 'partial', amount: '', currency: 'UAH', exchange_rate: 1, notes: '' });
-    const [receivingForm, setReceivingForm] = useState({ warehouse_id: '', items: [] });
-    const fileInputRef = useRef(null);
-
-    const ORDER_STATUSES = {
-        draft: { l: 'Чернетка', c: 'bg-slate-100 text-slate-600 border-slate-200' },
-        sent: { l: 'Замовлено', c: 'bg-blue-100 text-blue-700 border-blue-200' },
-        partially_received: { l: 'Отримано частково', c: 'bg-amber-100 text-amber-700 border-amber-200' },
-        received: { l: 'Отримано повністю', c: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-        cancelled: { l: 'Скасовано', c: 'bg-red-100 text-red-700 border-red-200' }
-    };
-    const PAYMENT_TYPES = { bank_transfer: 'Банк. переказ', vat: 'З ПДВ', no_vat: 'Без ПДВ', fop: 'Рахунок ФОП', cash: 'Готівка' };
-    const PAYMENT_PURPOSES = { advance: 'Аванс', partial: 'Часткова', post: 'Постоплата', realization: 'Реалізація' };
-    const CURRENCIES = ['UAH', 'USD', 'EUR']; 
-    
-    const toggleRowExpansion = (id) => setExpandedRowId(prev => prev === id ? null : id);
-
-    // --- СЛУХАЄМО СИГНАЛ З БАТЬКІВСЬКОЇ СТОРІНКИ ---
-    // Використовуємо useRef, щоб модалка не відкривалась сама при перемиканні вкладок
-    const prevActionTrigger = useRef(externalActionTrigger);
-    
+    const prevTrigger = useRef(externalActionTrigger);
     useEffect(() => {
-        if (externalActionTrigger > prevActionTrigger.current) {
-            setPurchaseModalEditData(null);
-            setPurchaseModalImportFile(null);
-            setPurchaseModalMode('manual');
-            setIsPurchaseModalOpen(true);
+        if (externalActionTrigger > prevTrigger.current) {
+            setPoEdit(null); setPoFile(null); setPoMode('manual'); setPoModal(true);
         }
-        prevActionTrigger.current = externalActionTrigger;
+        prevTrigger.current = externalActionTrigger;
     }, [externalActionTrigger]);
 
-    // --- ЗАВАНТАЖЕННЯ ДАНИХ ---
+    /* ---------------- ЗАВАНТАЖЕННЯ ---------------- */
+
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            const [supRes, instRes, nomRes, catRes, whRes, empRes, memRes, reqRes] = await Promise.all([
+            const [supRes, instRes, nomRes, catRes, whRes, memRes, reqRes] = await Promise.all([
                 supabase.from('suppliers').select('id, name').order('name'),
                 supabase.from('installations').select('custom_id, name, status').in('status', ['planning', 'in_progress', 'pending']),
                 supabase.from('nomenclature').select('id, name, sku, brand, model, technical_characteristics, category_id, type, package_name, package_multiplier, unit:units(name)').eq('is_active', true).order('name'),
                 supabase.from('categories').select('*'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
-                supabase.from('employees').select('id, name'),
                 supabase.from('supplier_mappings').select('*'),
-                supabase.from('procurement_requests').select('*').eq('status', 'requested').order('created_at', { ascending: true })
+                supabase.from('procurement_requests').select('*').eq('status', 'requested').order('created_at', { ascending: true }),
             ]);
-            
+
             setSuppliers(supRes.data || []);
             setInstallations(instRes.data || []);
             setWarehouses(whRes.data || []);
             setSystemMemory(memRes.data || []);
-            setIncomingRequests(reqRes.data || []);
-            
-            const empDict = {};
-            (empRes.data || []).forEach(e => empDict[e.id] = e.name);
-            setEmployeesDict(empDict);
+            setRequests(reqRes.data || []);
 
             const cats = catRes.data || [];
             setCategories(cats);
-            const processedNom = (nomRes.data || []).map(item => {
-                let path = [];
-                let currentId = item.category_id;
-                while (currentId) {
-                    const cat = cats.find(c => c.id === currentId);
-                    if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break;
+            const catById = new Map(cats.map(c => [c.id, c]));
+            setNomenclatures((nomRes.data || []).map(item => {
+                const path = [];
+                let id = item.category_id, guard = 0;
+                while (id && guard++ < 20) {
+                    const c = catById.get(id);
+                    if (!c) break;
+                    path.unshift(c.name);
+                    id = c.parent_id;
                 }
                 return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim() };
-            });
-            setNomenclatures(processedNom);
+            }));
 
             const { data: ordersData, error } = await supabase
                 .from('purchase_orders')
-                .select(`
-                    *,
-                    supplier:suppliers(name),
-                    installation:installations(name),
-                    items:purchase_order_items(
-                        *,
-                        movements:stock_movements(quantity, operation_type)
-                    ),
-                    payments:purchase_payments(*)
-                `)
+                .select(`*, supplier:suppliers(name), installation:installations(name),
+                         items:purchase_order_items(*, movements:stock_movements(quantity, operation_type)),
+                         payments:purchase_payments(*)`)
                 .order('created_at', { ascending: false });
-            
             if (error) throw error;
             setOrders(ordersData || []);
-        } catch (error) {
-            showToast(`Помилка: ${error.message}`, 'error');
-        } finally {
-            setLoading(false);
-        }
-    }, [showToast]);
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setLoading(false); }
+    }, [toast]);
 
     useEffect(() => { if (!authLoading) loadData(); }, [authLoading, loadData]);
 
-    const calculateEffectivePayment = (amount, pCurr, rate, oCurr) => {
-        if (pCurr === oCurr) return parseFloat(amount);
-        if (pCurr === 'UAH' && oCurr !== 'UAH') return parseFloat(amount) / parseFloat(rate);
-        if (pCurr !== 'UAH' && oCurr === 'UAH') return parseFloat(amount) * parseFloat(rate);
-        return parseFloat(amount);
+    /* ---------------- РОЗРАХУНКИ ---------------- */
+
+    /** Платіж в іншій валюті переводимо у валюту замовлення */
+    const effectivePayment = (amount, payCur, rate, orderCur) => {
+        const a = parseFloat(amount) || 0;
+        if (payCur === orderCur) return a;
+        if (payCur === 'UAH' && orderCur !== 'UAH') return a / (parseFloat(rate) || 1);
+        if (payCur !== 'UAH' && orderCur === 'UAH') return a * (parseFloat(rate) || 1);
+        return a;
     };
 
-    const getOrderTotals = (order) => {
-        const totalCost = (order.items || []).reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
-        const activePayments = (order.payments || []).filter(p => p.is_active);
-        const totalPaid = activePayments.reduce((sum, p) => sum + calculateEffectivePayment(p.amount, p.currency, p.exchange_rate, order.currency), 0);
-        return { totalCost, totalPaid, debt: Math.max(0, totalCost - totalPaid) };
-    };
+    const receivedQty = (item) => (item.movements || [])
+        .filter(m => m.operation_type === 'purchase')
+        .reduce((s, m) => s + parseFloat(m.quantity), 0);
 
-    const getItemReceivedQty = (item) => {
-        return (item.movements || []).filter(m => m.operation_type === 'purchase').reduce((sum, m) => sum + parseFloat(m.quantity), 0);
-    };
+    const orderStats = useCallback((order) => {
+        const items = order.items || [];
+        const cost = items.reduce((s, i) => s + i.quantity * i.unit_price, 0);
+        const paid = (order.payments || []).filter(p => p.is_active)
+            .reduce((s, p) => s + effectivePayment(p.amount, p.currency, p.exchange_rate, order.currency), 0);
 
-    // --- ОБРОБКА ЗАЯВОК НА ЗАКУПІВЛЮ ВІД ОБ'ЄКТІВ ---
-    const handleRequestAction = async (reqId, newStatus) => {
+        const ordered = items.reduce((s, i) => s + parseFloat(i.quantity), 0);
+        const received = items.reduce((s, i) => s + receivedQty(i), 0);
+
+        return {
+            cost, paid,
+            debt: Math.max(0, cost - paid),
+            paidPct: cost > 0 ? Math.min(100, (paid / cost) * 100) : 0,
+            ordered, received,
+            recvPct: ordered > 0 ? Math.min(100, (received / ordered) * 100) : 0,
+            pendingItems: items.filter(i => receivedQty(i) < parseFloat(i.quantity)).length,
+        };
+    }, []);
+
+    const counts = useMemo(() => {
+        const c = { all: orders.length };
+        Object.keys(ORDER_STATUS).forEach(k => { c[k] = orders.filter(o => o.status === k).length; });
+        return c;
+    }, [orders]);
+
+    const filtered = useMemo(() => {
+        const term = externalSearch.trim().toLowerCase();
+        return orders.filter(o => {
+            if (statusFilter !== 'all' && o.status !== statusFilter) return false;
+            if (!term) return true;
+            return (o.order_number || '').toLowerCase().includes(term)
+                || (o.supplier?.name || '').toLowerCase().includes(term)
+                || (o.invoice_number || '').toLowerCase().includes(term)
+                || (o.installation?.name || '').toLowerCase().includes(term);
+        });
+    }, [orders, statusFilter, externalSearch]);
+
+    const nomById = useMemo(() => new Map(nomenclatures.map(n => [n.id, n])), [nomenclatures]);
+
+    /* ---------------- ЗАЯВКИ ВІД ОБ'ЄКТІВ ---------------- */
+
+    const resolveRequest = async (reqId, status) => {
         try {
             const { error } = await supabase.from('procurement_requests')
-                .update({ status: newStatus, resolved_by: employee?.id ?? null, updated_at: new Date().toISOString() })
+                .update({ status, resolved_by: employee?.id ?? null, updated_at: new Date().toISOString() })
                 .eq('id', reqId);
             if (error) throw error;
-            setIncomingRequests(prev => prev.filter(r => r.id !== reqId));
-            const labels = { ordered: 'Позначено як «Замовлено»', stock_confirmed: 'Підтверджено наявність на складі', rejected: 'Заявку відхилено' };
-            showToast(labels[newStatus] || 'Статус оновлено', 'success');
-        } catch (error) {
-            showToast(error.message, 'error');
+            setRequests(prev => prev.filter(r => r.id !== reqId));
+            toast({
+                ordered: 'Позначено як «Замовлено»',
+                stock_confirmed: 'Підтверджено наявність на складі',
+                rejected: 'Заявку відхилено',
+            }[status] || 'Статус оновлено');
+        } catch (e) {
+            toast(humanError(e), 'error');
         }
     };
 
-    const handleQuickAddSupplier = async (name) => {
+    /* ---------------- ЗАМОВЛЕННЯ ---------------- */
+
+    const quickAddSupplier = async (name) => {
         try {
-            const { data, error } = await supabase.from('suppliers').insert([{ name, created_by: employee?.id }]).select().single();
+            const { data, error } = await supabase.from('suppliers')
+                .insert([{ name, created_by: employee?.id }]).select().single();
             if (error) throw error;
-            setSuppliers(prev => [...prev, data].sort((a,b) => a.name.localeCompare(b.name)));
-            showToast(`Постачальника "${name}" додано`, 'success');
-            return data.id; 
-        } catch (error) { 
-            showToast(error.message, 'error'); 
+            setSuppliers(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name, 'uk')));
+            toast(`Постачальника «${name}» додано`);
+            return data.id;
+        } catch (e) {
+            toast(humanError(e), 'error');
             return null;
         }
     };
 
-    const openEditOrder = (order) => {
-        setPurchaseModalEditData(order);
-        setPurchaseModalMode('manual');
-        setIsPurchaseModalOpen(true);
-    };
-
-    const handleExcelUpload = (e) => {
-        const file = e.target.files[0];
+    const onExcelPick = (e) => {
+        const file = e.target.files?.[0];
         if (!file) return;
-        
-        setPurchaseModalImportFile(file);
-        setPurchaseModalMode('import');
-        setIsPurchaseModalOpen(true);
-        
-        if (fileInputRef.current) fileInputRef.current.value = '';
+        setPoFile(file); setPoMode('import'); setPoEdit(null); setPoModal(true);
+        if (fileRef.current) fileRef.current.value = '';
     };
 
-    const openPayments = (order) => { 
-        setSelectedOrder(order); 
-        setPaymentForm({ payment_type: 'bank_transfer', purpose: 'partial', amount: '', currency: order.currency, exchange_rate: 1, notes: '' }); 
-        setIsPaymentModalOpen(true); 
-    };
-    
-    const handleSavePayment = async (e) => {
-        e.preventDefault();
-        if (!paymentForm.amount || paymentForm.amount <= 0) return showToast('Сума має бути більшою за 0', 'error');
+    /* ---------------- ОПЛАТИ ---------------- */
 
-        setIsSubmitting(true);
+    const openPayments = (order) => {
+        setPayForm({
+            payment_type: 'bank_transfer', purpose: 'partial', amount: '',
+            currency: order.currency, exchange_rate: 1, notes: '',
+        });
+        setPayModal(order);
+    };
+
+    const refreshOrderPayments = async (orderId) => {
+        const { data } = await supabase.from('purchase_orders')
+            .select('*, payments:purchase_payments(*)').eq('id', orderId).single();
+        if (data) setPayModal(prev => prev ? { ...prev, payments: data.payments } : prev);
+    };
+
+    const savePayment = async () => {
+        const amount = parseFloat(payForm.amount);
+        if (!amount || amount <= 0) return toast('Сума має бути більшою за 0', 'error');
+
+        setBusy(true);
         try {
-            const payload = {
-                purchase_order_id: selectedOrder.id, payment_type: paymentForm.payment_type, payment_purpose: paymentForm.purpose,
-                amount: parseFloat(paymentForm.amount), currency: paymentForm.currency, exchange_rate: parseFloat(paymentForm.exchange_rate),
-                notes: paymentForm.notes || null, created_by: employee?.id, is_active: true
-            };
-            const { error } = await supabase.from('purchase_payments').insert([payload]);
+            const { error } = await supabase.from('purchase_payments').insert([{
+                purchase_order_id: payModal.id,
+                payment_type: payForm.payment_type,
+                payment_purpose: payForm.purpose,
+                amount, currency: payForm.currency,
+                exchange_rate: parseFloat(payForm.exchange_rate) || 1,
+                notes: payForm.notes.trim() || null,
+                created_by: employee?.id, is_active: true,
+            }]);
             if (error) throw error;
-
-            showToast('Платіж успішно додано', 'success');
-            setPaymentForm({ payment_type: 'bank_transfer', purpose: 'partial', amount: '', currency: selectedOrder.currency, exchange_rate: 1, notes: '' });
-            loadData(); 
-            const { data } = await supabase.from('purchase_orders').select(`*, payments:purchase_payments(*)`).eq('id', selectedOrder.id).single();
-            if (data) setSelectedOrder(prev => ({ ...prev, payments: data.payments }));
-        } catch (error) { showToast(error.message, 'error'); } 
-        finally { setIsSubmitting(false); }
-    };
-
-    const handleTogglePaymentStatus = async (payment) => {
-        if (!window.confirm(payment.is_active ? "Анулювати платіж? Він не враховуватиметься в балансі." : "Відновити платіж?")) return;
-        try {
-            const { error } = await supabase.from('purchase_payments').update({ is_active: !payment.is_active, updated_by: employee?.id }).eq('id', payment.id);
-            if (error) throw error;
-            showToast('Статус платежу змінено', 'success');
+            toast('Платіж додано');
+            setPayForm(f => ({ ...f, amount: '', notes: '' }));
+            await refreshOrderPayments(payModal.id);
             loadData();
-            const { data } = await supabase.from('purchase_orders').select(`*, payments:purchase_payments(*)`).eq('id', selectedOrder.id).single();
-            if (data) setSelectedOrder(prev => ({ ...prev, payments: data.payments }));
-        } catch (error) { showToast(error.message, 'error'); }
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setBusy(false); }
     };
+
+    const togglePayment = async (payment) => {
+        const ok = await confirm({
+            title: payment.is_active ? 'Анулювати платіж?' : 'Відновити платіж?',
+            tone: payment.is_active ? 'danger' : 'accent',
+            confirmLabel: payment.is_active ? 'Анулювати' : 'Відновити',
+            message: payment.is_active
+                ? 'Платіж перестане враховуватись у балансі замовлення. Запис лишиться в історії.'
+                : 'Платіж знову враховуватиметься в балансі.',
+            details: [
+                money(payment.amount, payment.currency),
+                `${PAYMENT_TYPES[payment.payment_type] || payment.payment_type} · ${PAYMENT_PURPOSES[payment.payment_purpose] || ''}`,
+            ],
+        });
+        if (!ok) return;
+
+        try {
+            const { error } = await supabase.from('purchase_payments')
+                .update({ is_active: !payment.is_active, updated_by: employee?.id })
+                .eq('id', payment.id);
+            if (error) throw error;
+            toast('Статус платежу змінено');
+            await refreshOrderPayments(payModal.id);
+            loadData();
+        } catch (e) {
+            toast(humanError(e), 'error');
+        }
+    };
+
+    /* ---------------- ПРИЙМАННЯ ---------------- */
 
     const openReceiving = (order) => {
-        const itemsToReceive = order.items.map(item => {
-            const rcvd = getItemReceivedQty(item);
+        const items = (order.items || []).map(item => {
+            const already = receivedQty(item);
             return {
-                po_item_id: item.id, nomenclature_id: item.nomenclature_id,
-                ordered: item.quantity, received_already: rcvd,
-                receive_now: rcvd < item.quantity ? (item.quantity - rcvd) : 0 
+                po_item_id: item.id,
+                nomenclature_id: item.nomenclature_id,
+                ordered: parseFloat(item.quantity),
+                already,
+                now: already < item.quantity ? String(item.quantity - already) : '0',
             };
-        }).filter(item => item.receive_now > 0); 
+        }).filter(i => i.ordered - i.already > 0);
 
-        setSelectedOrder(order);
-        setReceivingForm({ warehouse_id: '', items: itemsToReceive });
-        setIsReceivingModalOpen(true);
+        if (!items.length) return toast('Усе за цим замовленням уже прийнято', 'info');
+        setRecvModal({ order, warehouse_id: '', items });
     };
 
-    const handleSaveReceiving = async (e) => {
-        e.preventDefault();
-        if (!receivingForm.warehouse_id) return showToast('Оберіть склад призначення', 'error');
-        
-        const validItems = receivingForm.items.filter(i => parseInt(i.receive_now, 10) > 0);
-        if (validItems.length === 0) return showToast('Вкажіть кількість для приймання (більше 0 цілих)', 'error');
+    const saveReceiving = async () => {
+        const { order, warehouse_id, items } = recvModal;
+        if (!warehouse_id) return toast('Оберіть склад призначення', 'error');
 
-        setIsSubmitting(true);
+        const valid = items.filter(i => parseFloat(i.now) > 0);
+        if (!valid.length) return toast('Вкажіть кількість для приймання', 'error');
+
+        const over = valid.find(i => parseFloat(i.now) > i.ordered - i.already);
+        if (over) {
+            const nom = nomById.get(over.nomenclature_id);
+            return toast(`«${nom?.fullName || 'позиція'}»: приймаєте більше, ніж лишилось`, 'error');
+        }
+
+        setBusy(true);
         try {
-            const movementsPayload = validItems.map(item => ({
+            const { error } = await supabase.from('stock_movements').insert(valid.map(i => ({
                 operation_type: 'purchase',
-                nomenclature_id: item.nomenclature_id,
-                quantity: parseInt(item.receive_now, 10),
-                warehouse_to_id: receivingForm.warehouse_id,
-                purchase_order_item_id: item.po_item_id,
-                created_by: employee?.id,
-                performed_by: employee?.id
-            }));
+                nomenclature_id: i.nomenclature_id,
+                quantity: parseFloat(i.now),
+                warehouse_to_id: warehouse_id,
+                purchase_order_item_id: i.po_item_id,
+                created_by: employee?.id, performed_by: employee?.id,
+            })));
+            if (error) throw error;
 
-            const { error: moveErr } = await supabase.from('stock_movements').insert(movementsPayload);
-            if (moveErr) throw moveErr;
-
-            let allFullyReceived = true;
-            let someReceived = false;
-
-            selectedOrder.items.forEach(orderItem => {
-                const alreadyReceived = getItemReceivedQty(orderItem);
-                const receivingNowObj = validItems.find(vi => vi.po_item_id === orderItem.id);
-                const receivingNow = receivingNowObj ? parseInt(receivingNowObj.receive_now, 10) : 0;
-                
-                const totalAfter = alreadyReceived + receivingNow;
-                
-                if (totalAfter > 0) someReceived = true;
-                if (totalAfter < orderItem.quantity) allFullyReceived = false;
+            // Перерахунок стану замовлення
+            let allReceived = true, someReceived = false;
+            (order.items || []).forEach(item => {
+                const already = receivedQty(item);
+                const now = parseFloat(valid.find(v => v.po_item_id === item.id)?.now || 0);
+                const after = already + now;
+                if (after > 0) someReceived = true;
+                if (after < parseFloat(item.quantity)) allReceived = false;
             });
-
-            const newStatus = allFullyReceived ? 'received' : (someReceived ? 'partially_received' : selectedOrder.status);
-
-            if (newStatus !== selectedOrder.status) {
-                const { error: stErr } = await supabase.from('purchase_orders').update({ status: newStatus }).eq('id', selectedOrder.id);
-                if (stErr) throw stErr;
+            const newStatus = allReceived ? 'received' : someReceived ? 'partially_received' : order.status;
+            if (newStatus !== order.status) {
+                await supabase.from('purchase_orders').update({ status: newStatus }).eq('id', order.id);
             }
 
-            // --- АВТО-РЕЗЕРВ ПІД ОБ'ЄКТ (якщо PO прив'язане до об'єкта) ---
-            let reservedCount = 0;
-            if (selectedOrder.installation_custom_id) {
+            // Замовлення під об'єкт — одразу резервуємо приїхале під його потребу
+            let reserved = 0;
+            if (order.installation_custom_id) {
                 try {
-                    const instId = selectedOrder.installation_custom_id;
-                    const { data: needs } = await supabase
-                        .from('v_object_material_needs')
+                    const { data: needs } = await supabase.from('v_object_material_needs')
                         .select('nomenclature_id, outstanding_need')
-                        .eq('installation_custom_id', instId);
-                    const outstandingByNom = {};
+                        .eq('installation_custom_id', order.installation_custom_id);
+                    const outstanding = {};
                     (needs || []).forEach(n => {
-                        outstandingByNom[n.nomenclature_id] = (outstandingByNom[n.nomenclature_id] || 0) + parseFloat(n.outstanding_need);
+                        outstanding[n.nomenclature_id] = (outstanding[n.nomenclature_id] || 0) + parseFloat(n.outstanding_need);
                     });
-                    for (const item of validItems) {
-                        const need = outstandingByNom[item.nomenclature_id] || 0;
-                        const qty = Math.min(parseInt(item.receive_now, 10), need);
+                    for (const i of valid) {
+                        const need = outstanding[i.nomenclature_id] || 0;
+                        const qty = Math.min(parseFloat(i.now), need);
                         if (qty > 0) {
                             const { data: rr } = await supabase.rpc('reserve_for_object', {
-                                p_installation: instId,
-                                p_warehouse: parseInt(receivingForm.warehouse_id),
-                                p_nomenclature: item.nomenclature_id,
-                                p_spec_item: null,
-                                p_qty: qty,
-                                p_emp: employee?.id ?? null,
+                                p_installation: order.installation_custom_id,
+                                p_warehouse: parseInt(warehouse_id),
+                                p_nomenclature: i.nomenclature_id,
+                                p_spec_item: null, p_qty: qty, p_emp: employee?.id ?? null,
                             });
-                            if (rr && rr.ok) reservedCount++;
-                            outstandingByNom[item.nomenclature_id] = need - qty;
+                            if (rr?.ok) reserved += 1;
+                            outstanding[i.nomenclature_id] = need - qty;
                         }
                     }
                 } catch (rErr) {
-                    console.warn('Авто-резерв під об\'єкт не вдався:', rErr.message);
+                    console.warn('Авто-резерв під об’єкт не вдався:', rErr.message);
                 }
             }
 
-            showToast(reservedCount > 0 ? `Прийнято на склад. Авто-резерв під об'єкт: ${reservedCount} поз.` : 'Товари успішно прийняті на склад', 'success');
-            setIsReceivingModalOpen(false);
+            toast(reserved > 0
+                ? `Прийнято на склад · зарезервовано під об'єкт: ${reserved} поз.`
+                : 'Товари прийнято на склад');
+            setRecvModal(null);
             loadData();
-        } catch (error) { showToast(error.message, 'error'); }
-        finally { setIsSubmitting(false); }
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setBusy(false); }
     };
 
-    // Фільтрація з використанням externalSearch
-    const filteredOrders = orders.filter(o => {
-        const term = externalSearch.toLowerCase();
-        const matchesSearch = o.order_number.toLowerCase().includes(term) || (o.supplier?.name && o.supplier.name.toLowerCase().includes(term)) || (o.invoice_number && o.invoice_number.toLowerCase().includes(term));
-        const matchesStatus = statusFilter === 'all' || o.status === statusFilter;
-        return matchesSearch && matchesStatus;
-    });
+    /* ---------------- ЧАСТИНИ ІНТЕРФЕЙСУ ---------------- */
 
-    if (authLoading) return <div className="flex-1 flex items-center justify-center text-slate-500">Завантаження...</div>;
+    const StatusChip = ({ status }) => {
+        const s = ORDER_STATUS[status] || { label: status, tone: 'neutral' };
+        return <Chip tone={s.tone}>{s.label}</Chip>;
+    };
+
+    /** Позиції замовлення з відміткою, скільки вже приїхало */
+    const OrderItems = ({ order }) => (
+        <div className="space-y-1">
+            {(order.items || []).map(item => {
+                const nom = nomById.get(item.nomenclature_id);
+                const got = receivedQty(item);
+                const qty = parseFloat(item.quantity);
+                const pct = qty > 0 ? (got / qty) * 100 : 0;
+                const done = got >= qty;
+                return (
+                    <div key={item.id} className={`${T.cardFlat} px-2.5 py-2`}>
+                        <div className="flex items-start gap-2 mb-1">
+                            <span className="text-[12.5px] font-semibold text-slate-900 leading-snug flex-1">
+                                {nom?.fullName || item.supplier_item_name || 'Позиція'}
+                            </span>
+                            <span className="text-[12px] font-black tabular-nums text-slate-900 flex-shrink-0">
+                                {num(got)}<span className="text-slate-400">/{num(qty)}</span>
+                            </span>
+                            {done ? <Chip tone="ok">приїхало</Chip> : <Chip tone="warn">{num(qty - got)} в дорозі</Chip>}
+                        </div>
+                        <Bar segments={[{ pct, tone: done ? 'ok' : 'info' }]} />
+                        <div className="flex items-center justify-between mt-1 text-[10.5px] text-slate-400">
+                            <span>{nom?.sku || ''}</span>
+                            <span className="tabular-nums">
+                                {money(item.unit_price, order.currency)} × {num(qty)} = <b className="text-slate-700">{money(item.quantity * item.unit_price, order.currency)}</b>
+                            </span>
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+
+    const OrderActions = ({ order, full }) => {
+        const canReceive = ['sent', 'partially_received', 'draft'].includes(order.status)
+            && (order.items || []).some(i => receivedQty(i) < parseFloat(i.quantity));
+        const cls = full ? 'grid grid-cols-2 gap-2' : 'flex items-center justify-end gap-1';
+        return (
+            <div className={cls}>
+                {canReceive && (
+                    <Btn size={full ? 'md' : 'sm'} variant="ok" icon={FaTruckLoading}
+                        onClick={() => openReceiving(order)}>Прийняти</Btn>
+                )}
+                <Btn size={full ? 'md' : 'sm'} variant="softWarn" icon={FaMoneyBillAlt}
+                    onClick={() => openPayments(order)}>Оплати</Btn>
+                <Btn size={full ? 'md' : 'sm'} variant="outline" icon={FaEdit}
+                    onClick={() => { setPoEdit(order); setPoMode('manual'); setPoFile(null); setPoModal(true); }}>
+                    Редагувати
+                </Btn>
+            </div>
+        );
+    };
+
+    if (authLoading) return <div className="flex-1 flex items-center justify-center text-slate-500 text-[13px]">Завантаження…</div>;
+
+    /* ---------------- РЕНДЕР ---------------- */
 
     return (
-        <div className="flex flex-col h-full w-full">
-            <Toast {...toast} onClose={() => setToast(prev => ({ ...prev, isVisible: false }))} />
+        <div className="flex flex-col h-full w-full gap-2.5">
 
-            {/* --- ПАНЕЛЬ ФІЛЬТРІВ ТА КНОПОК --- */}
-            <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 bg-white p-3 rounded-[16px] border border-slate-200 shadow-sm mb-4 flex-none w-full">
-                
-                {/* ЛІВА ЧАСТИНА: Фільтри статусів */}
-                <div className="flex-1 w-full xl:w-auto overflow-x-auto hide-scrollbar">
-                    <div className="flex bg-slate-50 rounded-xl p-1.5 w-fit border border-slate-100">
-                        <button onClick={() => setStatusFilter('all')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${statusFilter === 'all' ? 'bg-[#0F172A] text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Всі</button>
-                        {Object.entries(ORDER_STATUSES).map(([key, val]) => (
-                            <button key={key} onClick={() => setStatusFilter(key)} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${statusFilter === key ? 'bg-indigo-100 text-indigo-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>{val.l}</button>
-                        ))}
+            {/* ---------- ФІЛЬТРИ ТА ДІЇ ---------- */}
+            <Card pad="p-2.5" className="flex-none">
+                <div className="flex items-center gap-1.5 overflow-x-auto">
+                    {[['all', 'Всі'], ...Object.entries(ORDER_STATUS).map(([k, v]) => [k, v.label])].map(([k, label]) => (
+                        <button
+                            key={k} onClick={() => setStatusFilter(k)}
+                            className={`px-2.5 h-8 rounded-lg text-[11.5px] font-bold whitespace-nowrap border transition-colors flex-shrink-0
+                                ${statusFilter === k
+                                    ? 'bg-slate-900 text-white border-slate-900'
+                                    : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
+                        >
+                            {label}
+                            <span className={`ml-1 tabular-nums ${statusFilter === k ? 'opacity-70' : 'text-slate-400'}`}>
+                                {counts[k] || 0}
+                            </span>
+                        </button>
+                    ))}
+
+                    <div className="ml-auto flex items-center gap-1.5 flex-shrink-0 pl-2">
+                        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={onExcelPick} className="hidden" />
+                        <Btn variant="softOk" icon={FaFileExcel} onClick={() => fileRef.current?.click()}>
+                            <span className="hidden sm:inline">Імпорт</span>
+                        </Btn>
+                        <Btn variant="accent" icon={FaPlus}
+                            onClick={() => { setPoEdit(null); setPoFile(null); setPoMode('manual'); setPoModal(true); }}>
+                            <span className="hidden sm:inline">Замовлення</span>
+                        </Btn>
                     </div>
                 </div>
+            </Card>
 
-                {/* ПРАВА ЧАСТИНА: Кнопки дій */}
-                <div className="flex gap-3 w-full sm:w-fit flex-none">
-                    <input type="file" accept=".xlsx, .xls" className="hidden" ref={fileInputRef} onChange={handleExcelUpload} />
-                    <button onClick={() => fileInputRef.current?.click()} className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl font-bold shadow-sm hover:bg-emerald-100 transition-colors text-sm">
-                        <FaFileExcel size={16} /> <span className="hidden sm:inline">Імпорт рахунку (Excel)</span>
-                    </button>
-                    {/* Кнопка "Вручну" дублює головну кнопку, але залишаємо для зручності */}
-                    <button onClick={() => { setPurchaseModalEditData(null); setPurchaseModalImportFile(null); setPurchaseModalMode('manual'); setIsPurchaseModalOpen(true); }} className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold shadow-sm hover:bg-slate-50 transition-colors text-sm">
-                        <FaPlus size={14} /> <span>Вручну</span>
-                    </button>
-                </div>
-            </div>
-
-            {/* --- ВХІДНІ ЗАЯВКИ НА ЗАКУПІВЛЮ ВІД ОБ'ЄКТІВ --- */}
-            {incomingRequests.length > 0 && (
-                <div className="bg-white rounded-[16px] shadow-sm border border-orange-200 mb-4 flex-none overflow-hidden">
+            {/* ---------- ЗАЯВКИ ВІД ОБ'ЄКТІВ ---------- */}
+            {requests.length > 0 && (
+                <Card pad="p-0" className="flex-none border-orange-200 overflow-hidden">
                     <button
-                        onClick={() => setRequestsExpanded(v => !v)}
-                        className="w-full px-4 sm:px-5 py-3 bg-orange-50 flex items-center gap-2 flex-wrap text-left"
+                        onClick={() => setRequestsOpen(v => !v)}
+                        className="w-full px-3 py-2.5 bg-orange-50 flex items-center gap-2 text-left"
                     >
-                        <FaShoppingCart className="text-orange-500" />
-                        <span className="text-sm font-bold text-orange-900">Заявки від об'єктів — потрібно замовити</span>
-                        <span className="text-[10px] font-black text-white bg-orange-500 px-2 py-0.5 rounded-full">{incomingRequests.length}</span>
-                        <FaChevronDown className={`text-orange-400 text-xs ml-auto transition-transform ${requestsExpanded ? 'rotate-180' : ''}`} />
+                        <FaShoppingCart className="text-orange-500 flex-shrink-0" size={13} />
+                        <span className="text-[13px] font-bold text-orange-900">Заявки від об'єктів</span>
+                        <Chip tone="warn">{requests.length}</Chip>
+                        <span className="text-[11px] text-orange-700/70 hidden md:inline ml-2">
+                            менеджери об'єктів просять закупити
+                        </span>
+                        <FaChevronDown
+                            className={`ml-auto text-orange-400 transition-transform ${requestsOpen ? 'rotate-180' : ''}`}
+                            size={12}
+                        />
                     </button>
-                    <AnimatePresence>
-                        {requestsExpanded && (
-                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-                                <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto custom-scrollbar">
-                                    {incomingRequests.map(req => {
-                                        const nom = nomenclatures.find(n => n.id === req.nomenclature_id);
-                                        const inst = installations.find(i => i.custom_id === req.installation_custom_id);
-                                        const unitName = nom?.unit?.name || 'шт';
-                                        const empName = employeesDict[req.requested_by] || null;
-                                        return (
-                                            <div key={req.id} className="px-4 sm:px-5 py-3 flex flex-wrap items-center gap-3 hover:bg-orange-50/20 transition-colors">
-                                                <div className="flex-1 min-w-[220px]">
-                                                    <div className="font-bold text-slate-800 text-sm leading-tight">{nom?.fullName || `Номенклатура #${req.nomenclature_id}`}</div>
-                                                    <div className="text-[10px] text-slate-500 font-medium mt-1 flex items-center gap-2 flex-wrap">
-                                                        <span className="flex items-center gap-1"><FaHardHat className="text-slate-400" /> {inst ? `[#${inst.custom_id}] ${inst.name}` : `Об'єкт #${req.installation_custom_id}`}</span>
-                                                        <span>{new Date(req.created_at).toLocaleDateString('uk-UA')}</span>
-                                                        {empName && <span>від: {empName}</span>}
-                                                        {req.note && <span className="italic text-slate-400">«{req.note}»</span>}
-                                                    </div>
-                                                </div>
-                                                <div className="text-center px-2.5 py-1 rounded-lg border border-orange-100 bg-orange-50 min-w-[70px]">
-                                                    <div className="text-[9px] font-black uppercase text-orange-500">К-сть</div>
-                                                    <div className="font-black text-sm text-orange-700">{parseFloat(req.quantity)} <span className="text-[9px] font-bold text-orange-400 uppercase">{unitName}</span></div>
-                                                </div>
-                                                <div className="flex items-center gap-1.5 flex-wrap">
-                                                    <button onClick={() => handleRequestAction(req.id, 'ordered')} title="Позначити: замовлення зроблено" className="px-3 py-2 bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white rounded-lg text-xs font-bold transition-colors border border-blue-200 flex items-center gap-1.5">
-                                                        <FaCheck size={10} /> Замовлено
-                                                    </button>
-                                                    <button onClick={() => handleRequestAction(req.id, 'stock_confirmed')} title="Підтвердити: це є на складі, замовляти не треба" className="px-3 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-lg text-xs font-bold transition-colors border border-emerald-200 flex items-center gap-1.5">
-                                                        <FaWarehouse size={10} /> Є на складі
-                                                    </button>
-                                                    <button onClick={() => handleRequestAction(req.id, 'rejected')} title="Відхилити заявку" className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                                                        <FaTimes size={13} />
-                                                    </button>
-                                                </div>
+
+                    {requestsOpen && (
+                        <div className="divide-y divide-orange-100 sm:max-h-64 sm:overflow-y-auto">
+                            {requests.map(r => {
+                                const nom = nomById.get(r.nomenclature_id);
+                                return (
+                                    <div key={r.id} className="px-3 py-2 flex items-center gap-2 flex-wrap hover:bg-orange-50/40 transition-colors">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="text-[12.5px] font-semibold text-slate-900 truncate">
+                                                {nom?.fullName || `Номенклатура #${r.nomenclature_id}`}
                                             </div>
-                                        );
-                                    })}
-                                </div>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </div>
+                                            <div className="text-[10.5px] text-slate-400">
+                                                СЕС-{r.installation_custom_id} · {new Date(r.created_at).toLocaleDateString('uk-UA')}
+                                                {r.note && <span className="italic"> · {r.note}</span>}
+                                            </div>
+                                        </div>
+                                        <span className="text-[13px] font-black tabular-nums text-orange-700 flex-shrink-0">
+                                            {num(r.quantity)}
+                                            <span className="text-[9px] text-orange-400 ml-0.5">{nom?.unit?.name || 'шт'}</span>
+                                        </span>
+                                        <div className="flex items-center gap-1 flex-shrink-0">
+                                            <IconBtn variant="softOk" icon={FaCheck} label="Є на складі"
+                                                onClick={() => resolveRequest(r.id, 'stock_confirmed')} />
+                                            <Btn size="sm" variant="soft" icon={FaShoppingCart}
+                                                onClick={() => resolveRequest(r.id, 'ordered')}>Замовлено</Btn>
+                                            <IconBtn variant="softDanger" icon={FaBan} label="Відхилити"
+                                                onClick={() => resolveRequest(r.id, 'rejected')} />
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </Card>
             )}
 
-            {/* ТАБЛИЦЯ */}
-            <div className="bg-white rounded-[16px] shadow-sm border border-slate-200 flex-1 overflow-hidden flex flex-col min-h-0">
-                {loading ? (
-                    <div className="flex-1 flex items-center justify-center"><div className="animate-pulse flex gap-2"><div className="w-3 h-3 bg-indigo-400 rounded-full"></div><div className="w-3 h-3 bg-indigo-400 rounded-full"></div><div className="w-3 h-3 bg-indigo-400 rounded-full"></div></div></div>
-                ) : filteredOrders.length === 0 ? (
-                    <div className="flex-1 flex flex-col items-center justify-center py-12">
-                        <FaBoxOpen className="text-6xl text-slate-200 mb-4" />
-                        <h3 className="text-lg font-bold text-slate-600">Немає закупівель</h3>
-                        <p className="text-slate-400 text-sm mt-1">Змініть фільтри або створіть нове замовлення.</p>
-                    </div>
+            {/* ---------- ЗАМОВЛЕННЯ ---------- */}
+            <div className={`${T.card} flex-1 flex flex-col overflow-hidden min-h-0`}>
+                {loading ? <Skeleton rows={6} /> : filtered.length === 0 ? (
+                    <EmptyState
+                        icon={FaFileInvoiceDollar}
+                        title="Замовлень немає"
+                        hint="Створіть замовлення вручну або імпортуйте рахунок постачальника з Excel."
+                    >
+                        <Btn variant="softOk" icon={FaFileExcel} onClick={() => fileRef.current?.click()}>Імпорт з Excel</Btn>
+                        <Btn variant="accent" icon={FaPlus}
+                            onClick={() => { setPoEdit(null); setPoFile(null); setPoMode('manual'); setPoModal(true); }}>
+                            Нове замовлення
+                        </Btn>
+                    </EmptyState>
                 ) : (
-                    <div className="overflow-x-auto overflow-y-auto custom-scrollbar flex-1">
-                        <table className="w-full text-left border-collapse min-w-[1100px]">
-                            <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
-                                <tr className="border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                                    <th className="px-4 py-4 w-10"></th>
-                                    <th className="px-2 py-4 font-bold">Замовлення / Рахунок</th>
-                                    <th className="px-6 py-4 font-bold">Постачальник</th>
-                                    <th className="px-6 py-4 font-bold">Статус / Форма</th>
-                                    <th className="px-6 py-4 font-bold w-1/5">Фінанси</th>
-                                    <th className="px-6 py-4 font-bold text-right">Дії</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {filteredOrders.map(order => {
-                                    const { totalCost, totalPaid } = getOrderTotals(order);
-                                    const progress = totalCost > 0 ? Math.min(100, Math.round((totalPaid / totalCost) * 100)) : 0;
-                                    const statusObj = ORDER_STATUSES[order.status];
-                                    const isExpanded = expandedRowId === order.id;
-                                    const canReceive = order.status === 'sent' || order.status === 'partially_received';
-                                    const canPay = order.status !== 'draft' && order.status !== 'cancelled';
-
-                                    // Отримуємо красиву назву об'єкта
-                                    const instName = order.installation_custom_id ? installations.find(i=>i.custom_id === order.installation_custom_id)?.name : null;
-                                    const instLabel = instName ? `${instName} (Об'єкт #${order.installation_custom_id})` : `Об'єкт #${order.installation_custom_id}`;
-
-                                    return (
-                                        <React.Fragment key={order.id}>
-                                            <tr className={`hover:bg-slate-50/50 transition-colors ${isExpanded ? 'bg-indigo-50/30' : ''}`}>
-                                                <td className="px-4 py-4 text-center cursor-pointer" onClick={() => toggleRowExpansion(order.id)}>
-                                                    <div className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-slate-200 transition-colors mx-auto">
-                                                        <FaChevronRight className={`text-slate-400 transition-transform ${isExpanded ? 'rotate-90 text-indigo-500' : ''}`} />
-                                                    </div>
-                                                </td>
-                                                <td className="px-2 py-4 cursor-pointer" onClick={() => toggleRowExpansion(order.id)}>
-                                                    <div className="font-bold text-slate-800 text-sm">{order.order_number}</div>
-                                                    {order.invoice_number ? (
-                                                        <div className="text-[11px] text-indigo-600 mt-1 font-bold">Рах: {order.invoice_number}</div>
-                                                    ) : (
-                                                        <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1"><FaRegCalendarAlt/> {new Date(order.order_date).toLocaleDateString('uk-UA')}</div>
-                                                    )}
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <div className="font-bold text-slate-700 text-sm flex items-center gap-2"><FaBuilding className="text-slate-300"/> {order.supplier?.name}</div>
-                                                    {order.installation_custom_id && (
-                                                        <div className="text-[10px] font-bold text-slate-500 mt-1 flex items-center gap-1">
-                                                            <FaHardHat className="flex-shrink-0"/> {instLabel}
-                                                        </div>
-                                                    )}
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <div className="flex flex-col items-start gap-1">
-                                                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border uppercase tracking-wide ${statusObj.c}`}>{statusObj.l}</span>
-                                                        <span className={`text-[10px] font-bold flex items-center gap-1 px-2 py-0.5 rounded ${order.payment_form === 'cash' ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-600 border border-slate-200'}`}>
-                                                            {order.payment_form === 'cash' ? <FaMoneyBillAlt/> : <FaUniversity/>} {order.payment_form === 'cash' ? 'Готівка' : 'Безготівка'}
-                                                        </span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <div className="flex justify-between text-[13px] mb-1.5">
-                                                        <span className="font-bold text-slate-800">{totalCost.toLocaleString('uk-UA', {minimumFractionDigits: 2})} {order.currency}</span>
-                                                        <span className={`font-bold ${progress >= 100 ? 'text-emerald-600' : 'text-slate-500'}`}>{totalPaid.toLocaleString('uk-UA', {minimumFractionDigits: 2})}</span>
-                                                    </div>
-                                                    <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden flex">
-                                                        <div className={`h-full ${progress >= 100 ? 'bg-emerald-500' : 'bg-indigo-500'}`} style={{ width: `${progress}%` }}></div>
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4 text-right">
-                                                    <div className="flex items-center justify-end gap-1">
-                                                        {order.invoice_file_id && (
-                                                            <a href={`https://drive.google.com/open?id=${order.invoice_file_id}`} target="_blank" rel="noreferrer" className="p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors mr-1" title="Відкрити рахунок">
-                                                                <FaFileExcel size={16}/>
-                                                            </a>
+                    <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                        {filtered.map(order => {
+                            const s = orderStats(order);
+                            const open = expandedId === order.id;
+                            return (
+                                <div key={order.id} className={open ? 'bg-indigo-50/30' : ''}>
+                                    <div className="px-3 py-2.5">
+                                        {/* Шапка замовлення */}
+                                        <div className="flex items-start gap-2 flex-wrap">
+                                            <button
+                                                onClick={() => setExpandedId(open ? null : order.id)}
+                                                className="flex items-start gap-2 min-w-0 flex-1 text-left"
+                                            >
+                                                <FaChevronDown
+                                                    className={`text-slate-300 mt-1 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+                                                    size={11}
+                                                />
+                                                <div className="min-w-0">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <span className="text-[13px] font-bold text-slate-900">{order.order_number}</span>
+                                                        <StatusChip status={order.status} />
+                                                        {order.installation && (
+                                                            <Chip tone="accent" icon={FaHardHat}>{order.installation.name}</Chip>
                                                         )}
-                                                        {canReceive && (
-                                                            <button onClick={() => openReceiving(order)} className="p-2 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg transition-colors border border-transparent hover:border-emerald-200 mr-1" title="Прийняти товар на склад">
-                                                                <FaTruckLoading size={16}/>
-                                                            </button>
-                                                        )}
-                                                        {canPay && (
-                                                            <button onClick={() => openPayments(order)} className="p-2 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors border border-transparent hover:border-indigo-100" title="Взаєморозрахунки (Платежі)">
-                                                                <FaFileInvoiceDollar size={16} />
-                                                            </button>
-                                                        )}
-                                                        <button onClick={() => openEditOrder(order)} className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors border border-transparent hover:border-amber-100" title="Редагувати">
-                                                            <FaEdit size={16} />
-                                                        </button>
                                                     </div>
-                                                </td>
-                                            </tr>
-                                            
-                                            {/* Розгорнутий рядок (Специфікація) */}
-                                            <AnimatePresence>
-                                                {isExpanded && (
-                                                    <tr>
-                                                        <td colSpan="6" className="p-0 border-b border-slate-200 bg-slate-50/80 shadow-inner">
-                                                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-                                                                <div className="p-6 pl-14">
-                                                                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-slate-200 pb-2">Детальна специфікація замовлення</h4>
-                                                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                                                        {order.items.map(item => {
-                                                                            const rcvd = getItemReceivedQty(item);
-                                                                            const rcvdProgress = item.quantity > 0 ? Math.min(100, Math.round((rcvd / item.quantity) * 100)) : 0;
-                                                                            const nom = nomenclatures.find(n => n.id === item.nomenclature_id);
-                                                                            
-                                                                            return (
-                                                                                <div key={item.id} className="bg-white border border-slate-200 p-3 rounded-xl shadow-sm hover:border-indigo-200 transition-colors">
-                                                                                    <div className="font-bold text-slate-800 text-sm leading-tight mb-1">{nom?.fullName || 'Невідомий товар'}</div>
-                                                                                    {item.supplier_item_name && <div className="text-[10px] text-slate-400 italic mb-2">Оригінал: {item.supplier_item_name}</div>}
-                                                                                    <div className="flex justify-between items-center mb-3">
-                                                                                        <span className="text-[10px] text-slate-400 font-mono bg-slate-100 px-1.5 py-0.5 rounded">SKU: {nom?.sku || '---'}</span>
-                                                                                        <span className="font-bold text-indigo-700 text-xs">{parseFloat(item.unit_price).toLocaleString('uk-UA')} {order.currency} <span className="text-slate-400 font-normal">/ {nom?.unit?.name || 'од'}</span></span>
-                                                                                    </div>
-                                                                                    
-                                                                                    <div className="flex justify-between items-center text-[10px] mb-1 font-medium">
-                                                                                        <span className="text-slate-500">На складі: <b className={rcvd >= item.quantity ? 'text-emerald-600' : 'text-amber-600'}>{rcvd}</b> з {item.quantity}</span>
-                                                                                    </div>
-                                                                                    <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                                                                                        <div className={`h-full ${rcvd >= item.quantity ? 'bg-emerald-400' : 'bg-amber-400'}`} style={{ width: `${rcvdProgress}%` }}></div>
-                                                                                    </div>
-                                                                                </div>
-                                                                            );
-                                                                        })}
-                                                                    </div>
-                                                                </div>
-                                                            </motion.div>
-                                                        </td>
-                                                    </tr>
-                                                )}
-                                            </AnimatePresence>
-                                        </React.Fragment>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
+                                                    <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                                                        <FaBuilding className="text-slate-400" size={9} />
+                                                        {order.supplier?.name || 'Постачальник не вказаний'}
+                                                        <span className="text-slate-300">·</span>
+                                                        {new Date(order.order_date).toLocaleDateString('uk-UA')}
+                                                        {order.invoice_number && (
+                                                            <>
+                                                                <span className="text-slate-300">·</span>
+                                                                рахунок {order.invoice_number}
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </button>
 
-            {/* Модалка Створення Замовлення / Імпорту */}
-            <PurchaseOrderModal
-                isOpen={isPurchaseModalOpen}
-                onClose={() => {
-                    setIsPurchaseModalOpen(false);
-                    setPurchaseModalImportFile(null);
-                    setPurchaseModalEditData(null);
-                }}
-                onSuccess={loadData}
-                initialMode={purchaseModalMode}
-                editOrder={purchaseModalEditData}
-                importFile={purchaseModalImportFile}
-                dictionaries={{ suppliers, installations, nomenclatures, categories, systemMemory }}
-                employee={employee}
-                showToast={showToast}
-                onAddSupplier={handleQuickAddSupplier}
-            />
-
-            {/* --- СТАРІ МОДАЛКИ (ОПЛАТА ТА ПРИЙМАННЯ НА СКЛАД) ЗАЛИШАЮТЬСЯ БЕЗ ЗМІН --- */}
-            <AnimatePresence>
-                {isPaymentModalOpen && selectedOrder && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col overflow-hidden max-h-[90vh]" onClick={e => e.stopPropagation()}>
-                            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50 flex-shrink-0">
-                                <div>
-                                    <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2"><FaFileInvoiceDollar className="text-indigo-500"/> Взаєморозрахунки</h2>
-                                    <p className="text-sm text-slate-500 mt-1">Замовлення {selectedOrder.order_number}</p>
-                                </div>
-                                <button onClick={() => setIsPaymentModalOpen(false)} className="p-2 bg-white hover:bg-slate-200 text-slate-400 rounded-full transition-colors"><FaTimes/></button>
-                            </div>
-                            <div className="p-6 flex-1 overflow-y-auto custom-scrollbar">
-                                <div className="grid grid-cols-3 gap-4 mb-6">
-                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Загальна сума</div>
-                                        <div className="text-xl font-black text-slate-800">{getOrderTotals(selectedOrder).totalCost.toLocaleString('uk-UA', {minimumFractionDigits: 2})} <span className="text-sm text-slate-500">{selectedOrder.currency}</span></div>
-                                    </div>
-                                    <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200">
-                                        <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1">Оплачено</div>
-                                        <div className="text-xl font-black text-emerald-700">{getOrderTotals(selectedOrder).totalPaid.toLocaleString('uk-UA', {minimumFractionDigits: 2})} <span className="text-sm text-emerald-500">{selectedOrder.currency}</span></div>
-                                    </div>
-                                    <div className="bg-red-50 p-4 rounded-xl border border-red-200">
-                                        <div className="text-[10px] font-bold text-red-600 uppercase tracking-wider mb-1">Борг</div>
-                                        <div className="text-xl font-black text-red-700">{getOrderTotals(selectedOrder).debt.toLocaleString('uk-UA', {minimumFractionDigits: 2})} <span className="text-sm text-red-500">{selectedOrder.currency}</span></div>
-                                    </div>
-                                </div>
-                                
-                                {getOrderTotals(selectedOrder).debt > 0 && (
-                                    <form id="payment-form" onSubmit={handleSavePayment} className="bg-white border border-slate-200 p-5 rounded-xl shadow-sm mb-6">
-                                        <h3 className="font-bold text-sm text-slate-800 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Внести платіж</h3>
-                                        <div className="grid grid-cols-2 gap-4 mb-4">
-                                            <div>
-                                                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Тип оплати</label>
-                                                <select value={paymentForm.payment_type} onChange={e => setPaymentForm({...paymentForm, payment_type: e.target.value})} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-indigo-400 text-sm font-bold text-slate-800 outline-none">
-                                                    {Object.entries(PAYMENT_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Призначення</label>
-                                                <select value={paymentForm.purpose} onChange={e => setPaymentForm({...paymentForm, purpose: e.target.value})} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-indigo-400 text-sm font-bold text-slate-800 outline-none">
-                                                    {Object.entries(PAYMENT_PURPOSES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Сума</label>
-                                                <input type="number" step="0.01" max={getOrderTotals(selectedOrder).debt} required value={paymentForm.amount} onChange={e => setPaymentForm({...paymentForm, amount: e.target.value})} className="w-full px-4 py-2.5 bg-white border border-indigo-200 rounded-xl focus:ring-2 focus:ring-indigo-500 text-lg font-black text-indigo-700 outline-none" placeholder="0.00" />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Валюта платежу</label>
-                                                <div className="flex gap-2">
-                                                    <select value={paymentForm.currency} onChange={e => setPaymentForm({...paymentForm, currency: e.target.value})} className="w-1/2 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-indigo-400 text-sm font-bold text-slate-800 outline-none">
-                                                        {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-                                                    </select>
-                                                    {paymentForm.currency !== selectedOrder.currency && (
-                                                        <input type="number" step="0.0001" value={paymentForm.exchange_rate} onChange={e => setPaymentForm({...paymentForm, exchange_rate: e.target.value})} className="w-1/2 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-indigo-400 text-sm outline-none" title="Курс валюти" />
-                                                    )}
+                                            {/* Три показники, які вирішують: чи треба сюди лізти */}
+                                            <div className="flex items-center gap-4 flex-shrink-0">
+                                                <div className="text-right">
+                                                    <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">Сума</div>
+                                                    <div className="text-[13px] font-black tabular-nums text-slate-900">
+                                                        {money(s.cost, order.currency)}
+                                                    </div>
+                                                </div>
+                                                <div className="text-right w-24">
+                                                    <div className={`text-[9px] font-black uppercase tracking-wider ${s.debt > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                                                        {s.debt > 0 ? 'Борг' : 'Оплачено'}
+                                                    </div>
+                                                    <div className={`text-[13px] font-black tabular-nums ${s.debt > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                        {s.debt > 0 ? money(s.debt, order.currency) : '✓'}
+                                                    </div>
+                                                    <Bar className="mt-1" segments={[{ pct: s.paidPct, tone: s.debt > 0 ? 'warn' : 'ok' }]} />
+                                                </div>
+                                                <div className="text-right w-24 hidden sm:block">
+                                                    <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">Приїхало</div>
+                                                    <div className="text-[13px] font-black tabular-nums text-slate-900">
+                                                        {Math.round(s.recvPct)}%
+                                                    </div>
+                                                    <Bar className="mt-1" segments={[{ pct: s.recvPct, tone: s.recvPct >= 100 ? 'ok' : 'info' }]} />
                                                 </div>
                                             </div>
                                         </div>
-                                        <button type="submit" disabled={isSubmitting} className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-md hover:bg-indigo-700 transition-colors disabled:opacity-50">
-                                            {isSubmitting ? 'Обробка...' : 'Підтвердити оплату'}
-                                        </button>
-                                    </form>
-                                )}
 
-                                <div>
-                                    <h3 className="font-bold text-sm text-slate-800 uppercase tracking-wider mb-3">Історія платежів</h3>
-                                    {!selectedOrder.payments || selectedOrder.payments.length === 0 ? (
-                                        <div className="text-center p-6 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-400 text-sm">Платежів ще не було</div>
-                                    ) : (
-                                        <div className="space-y-2">
-                                            {selectedOrder.payments.sort((a,b) => new Date(b.created_at) - new Date(a.created_at)).map(p => (
-                                                <div key={p.id} className={`flex justify-between items-center p-3 rounded-xl border ${p.is_active ? 'bg-white border-slate-200' : 'bg-slate-50 border-slate-200 opacity-60'}`}>
-                                                    <div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className={`font-bold ${p.is_active ? 'text-slate-800' : 'text-slate-500 line-through'}`}>{parseFloat(p.amount).toLocaleString('uk-UA', {minimumFractionDigits: 2})} {p.currency}</span>
-                                                            <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">{PAYMENT_TYPES[p.payment_type]}</span>
-                                                        </div>
-                                                        <div className="text-xs text-slate-400 mt-1">{new Date(p.created_at).toLocaleString('uk-UA')} • {employeesDict[p.created_by] || 'Система'}</div>
-                                                    </div>
-                                                    <button onClick={() => handleTogglePaymentStatus(p)} className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${p.is_active ? 'text-red-600 border-red-200 hover:bg-red-50' : 'text-emerald-600 border-emerald-200 hover:bg-emerald-50'}`}>
-                                                        {p.is_active ? 'Анулювати' : 'Відновити'}
-                                                    </button>
+                                        {!isMobile && (
+                                            <div className="mt-2"><OrderActions order={order} /></div>
+                                        )}
+                                    </div>
+
+                                    {open && (
+                                        <div className="px-3 pb-3 space-y-2">
+                                            <div className={T.label}>
+                                                Позиції ({(order.items || []).length})
+                                                {s.pendingItems > 0 && (
+                                                    <span className="text-amber-600 ml-2 normal-case tracking-normal">
+                                                        · {s.pendingItems} ще не приїхало
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <OrderItems order={order} />
+                                            {order.notes && (
+                                                <div className={`${T.inset} px-3 py-2 text-[12px] text-slate-600 italic`}>
+                                                    <FaInfoCircle className="inline text-slate-400 mr-1.5" size={10} />
+                                                    {order.notes}
                                                 </div>
-                                            ))}
+                                            )}
+                                            {isMobile && <OrderActions order={order} full />}
                                         </div>
                                     )}
                                 </div>
-                            </div>
-                        </motion.div>
-                    </motion.div>
+                            );
+                        })}
+                    </div>
                 )}
-            </AnimatePresence>
+            </div>
 
-            <AnimatePresence>
-                {isReceivingModalOpen && selectedOrder && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden max-h-[90vh]" onClick={e => e.stopPropagation()}>
-                            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-emerald-50 flex-shrink-0">
+            {/* ---------- ОПЛАТИ ---------- */}
+            <Modal
+                isOpen={!!payModal}
+                onClose={() => setPayModal(null)}
+                title="Оплати за замовленням"
+                subtitle={payModal ? `${payModal.order_number} · ${payModal.supplier?.name || ''}` : ''}
+                tone="warn"
+                size="md"
+            >
+                {payModal && (() => {
+                    const s = orderStats(payModal);
+                    return (
+                        <div className="space-y-4">
+                            <div className={`${T.inset} px-3 py-2.5 grid grid-cols-3 gap-3 text-center`}>
                                 <div>
-                                    <h2 className="text-xl font-bold text-emerald-900 flex items-center gap-2"><FaTruckLoading className="text-emerald-600"/> Приймання товару</h2>
-                                    <p className="text-sm text-emerald-700 mt-1 font-medium">Замовлення {selectedOrder.order_number} від {selectedOrder.supplier?.name}</p>
+                                    <div className={T.label}>Сума</div>
+                                    <div className="text-[14px] font-black tabular-nums text-slate-900">{money(s.cost, payModal.currency)}</div>
                                 </div>
-                                <button onClick={() => setIsReceivingModalOpen(false)} className="p-2 bg-white hover:bg-slate-200 text-slate-400 rounded-full transition-colors"><FaTimes/></button>
+                                <div>
+                                    <div className={T.label}>Оплачено</div>
+                                    <div className="text-[14px] font-black tabular-nums text-emerald-600">{money(s.paid, payModal.currency)}</div>
+                                </div>
+                                <div>
+                                    <div className={T.label}>Борг</div>
+                                    <div className={`text-[14px] font-black tabular-nums ${s.debt > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                        {money(s.debt, payModal.currency)}
+                                    </div>
+                                </div>
                             </div>
-                            <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
-                                <form id="receive-form" onSubmit={handleSaveReceiving}>
-                                    <div className="mb-6 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                                        <label className="block text-sm font-bold text-slate-700 mb-2">Оберіть склад для отримання <span className="text-red-500">*</span></label>
-                                        <select required value={receivingForm.warehouse_id} onChange={e => setReceivingForm({...receivingForm, warehouse_id: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-slate-800">
-                                            <option value="">Не обрано...</option>
-                                            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+
+                            {/* Новий платіж */}
+                            <div className="space-y-2.5">
+                                <div className={T.label}>Додати платіж</div>
+                                <div className="grid grid-cols-2 gap-2.5">
+                                    <Field label="Спосіб">
+                                        <select className={T.select} value={payForm.payment_type}
+                                            onChange={e => setPayForm(f => ({ ...f, payment_type: e.target.value }))}>
+                                            {Object.entries(PAYMENT_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                                         </select>
-                                    </div>
-
-                                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                                        <table className="w-full text-left">
-                                            <thead className="bg-slate-50 border-b border-slate-200">
-                                                <tr className="text-[10px] uppercase tracking-wider text-slate-500">
-                                                    <th className="px-4 py-3 font-bold">Товар</th>
-                                                    <th className="px-4 py-3 font-bold text-center">Замовлено</th>
-                                                    <th className="px-4 py-3 font-bold text-center">Отримано</th>
-                                                    <th className="px-4 py-3 font-bold text-center bg-emerald-50/50">Прийняти зараз</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-slate-100">
-                                                {receivingForm.items.length === 0 ? (
-                                                    <tr><td colSpan="4" className="px-4 py-8 text-center text-slate-400 font-medium">Всі товари з цього замовлення вже прийняті.</td></tr>
-                                                ) : (
-                                                    receivingForm.items.map((item, index) => {
-                                                        const nom = nomenclatures.find(n => n.id === item.nomenclature_id);
-                                                        return (
-                                                            <tr key={item.po_item_id} className="hover:bg-slate-50 transition-colors">
-                                                                <td className="px-4 py-3">
-                                                                    <div className="font-bold text-slate-800 text-sm">{nom?.fullName || 'Невідомий товар'}</div>
-                                                                    {nom?.sku && <div className="text-[10px] font-mono text-slate-400 mt-0.5">SKU: {nom.sku}</div>}
-                                                                </td>
-                                                                <td className="px-4 py-3 text-center font-bold text-slate-600">{item.ordered} <span className="text-[10px] font-normal">{nom?.unit?.name}</span></td>
-                                                                <td className="px-4 py-3 text-center font-bold text-indigo-600">{item.received_already} <span className="text-[10px] font-normal">{nom?.unit?.name}</span></td>
-                                                                <td className="px-4 py-3 text-center bg-emerald-50/20">
-                                                                    <input 
-                                                                        type="number" min="0" step="1" max={item.ordered - item.received_already} required
-                                                                        value={item.receive_now} 
-                                                                        onChange={e => { const newItems = [...receivingForm.items]; newItems[index].receive_now = e.target.value; setReceivingForm({...receivingForm, items: newItems}); }}
-                                                                        className="w-24 text-center px-3 py-1.5 bg-white border-2 border-emerald-200 focus:border-emerald-500 rounded-lg text-lg font-black text-emerald-700 outline-none"
-                                                                    />
-                                                                </td>
-                                                            </tr>
-                                                        );
-                                                    })
-                                                )}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </form>
-                            </div>
-                            <div className="p-6 border-t border-slate-100 flex justify-end gap-3 flex-shrink-0 bg-slate-50 rounded-b-2xl">
-                                <button type="button" onClick={() => setIsReceivingModalOpen(false)} className="px-6 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
-                                {receivingForm.items.length > 0 && (
-                                    <button form="receive-form" type="submit" disabled={isSubmitting} className="px-8 py-2.5 bg-emerald-500 text-white rounded-xl font-bold hover:bg-emerald-600 shadow-md transition-colors text-sm flex items-center gap-2">
-                                        {isSubmitting ? 'Обробка...' : 'Підтвердити приймання'}
-                                    </button>
+                                    </Field>
+                                    <Field label="Призначення">
+                                        <select className={T.select} value={payForm.purpose}
+                                            onChange={e => setPayForm(f => ({ ...f, purpose: e.target.value }))}>
+                                            {Object.entries(PAYMENT_PURPOSES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                                        </select>
+                                    </Field>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2.5">
+                                    <Field label="Сума" required className="col-span-2">
+                                        <input type="number" step="any" min="0" inputMode="decimal"
+                                            className={`${T.input} font-black tabular-nums`} placeholder="0"
+                                            value={payForm.amount}
+                                            onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))} />
+                                    </Field>
+                                    <Field label="Валюта">
+                                        <select className={T.select} value={payForm.currency}
+                                            onChange={e => setPayForm(f => ({ ...f, currency: e.target.value }))}>
+                                            {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </Field>
+                                </div>
+                                {payForm.currency !== payModal.currency && (
+                                    <Field label="Курс"
+                                        hint={`Платіж у ${payForm.currency}, замовлення в ${payModal.currency} — вкажіть курс перерахунку`}>
+                                        <input type="number" step="any" min="0" className={T.input}
+                                            value={payForm.exchange_rate}
+                                            onChange={e => setPayForm(f => ({ ...f, exchange_rate: e.target.value }))} />
+                                    </Field>
                                 )}
+                                <Field label="Коментар">
+                                    <input className={T.input} placeholder="Необов’язково" value={payForm.notes}
+                                        onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))} />
+                                </Field>
+                                <Btn variant="ok" icon={FaPlus} className="w-full" onClick={savePayment} disabled={busy}>
+                                    {busy ? 'Зберігаємо…' : 'Додати платіж'}
+                                </Btn>
                             </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
 
+                            {/* Історія */}
+                            {(payModal.payments || []).length > 0 && (
+                                <div className="space-y-1.5">
+                                    <div className={T.label}>Проведені платежі</div>
+                                    {(payModal.payments || [])
+                                        .slice()
+                                        .sort((a, b) => new Date(b.payment_date) - new Date(a.payment_date))
+                                        .map(p => (
+                                            <div key={p.id}
+                                                className={`${T.cardFlat} px-2.5 py-2 flex items-center gap-2 ${p.is_active ? '' : 'opacity-50'}`}>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="text-[12.5px] font-bold text-slate-900">
+                                                        {money(p.amount, p.currency)}
+                                                        {!p.is_active && <span className="text-rose-500 ml-2 text-[10px] font-black uppercase">анульовано</span>}
+                                                    </div>
+                                                    <div className="text-[10.5px] text-slate-400">
+                                                        {PAYMENT_TYPES[p.payment_type] || p.payment_type}
+                                                        {' · '}{PAYMENT_PURPOSES[p.payment_purpose] || p.payment_purpose}
+                                                        {' · '}{new Date(p.payment_date).toLocaleDateString('uk-UA')}
+                                                        {p.notes && <span className="italic"> · {p.notes}</span>}
+                                                    </div>
+                                                </div>
+                                                <IconBtn
+                                                    variant={p.is_active ? 'softDanger' : 'softOk'}
+                                                    icon={p.is_active ? FaBan : FaCheck}
+                                                    label={p.is_active ? 'Анулювати' : 'Відновити'}
+                                                    onClick={() => togglePayment(p)}
+                                                />
+                                            </div>
+                                        ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
+            </Modal>
+
+            {/* ---------- ПРИЙМАННЯ НА СКЛАД ---------- */}
+            <Modal
+                isOpen={!!recvModal}
+                onClose={() => setRecvModal(null)}
+                title="Приймання на склад"
+                subtitle={recvModal ? `${recvModal.order.order_number} · ${recvModal.order.supplier?.name || ''}` : ''}
+                tone="ok"
+                size="md"
+                footer={<>
+                    <Btn variant="outline" onClick={() => setRecvModal(null)}>Скасувати</Btn>
+                    <Btn variant="ok" icon={FaTruckLoading} onClick={saveReceiving} disabled={busy}>
+                        {busy ? 'Приймаємо…' : 'Прийняти'}
+                    </Btn>
+                </>}
+            >
+                {recvModal && (
+                    <div className="space-y-3">
+                        <Field label="Склад призначення" required>
+                            <Picker
+                                options={warehouses.map(w => ({ id: w.id, label: w.name }))}
+                                value={recvModal.warehouse_id}
+                                onChange={v => setRecvModal(m => ({ ...m, warehouse_id: v }))}
+                                placeholder="Куди приймаємо…" icon={FaWarehouse}
+                            />
+                        </Field>
+
+                        {recvModal.order.installation_custom_id && (
+                            <div className={`${T.inset} px-3 py-2 text-[12px] text-slate-600 leading-relaxed`}>
+                                <FaHardHat className="inline text-indigo-500 mr-1.5" size={11} />
+                                Замовлення під об'єкт <b>«{recvModal.order.installation?.name}»</b> —
+                                прийняте одразу зарезервуємо під його потребу.
+                            </div>
+                        )}
+
+                        <div className={T.label}>Що приймаємо</div>
+                        <div className="space-y-1.5 sm:max-h-[42vh] sm:overflow-y-auto -mx-1 px-1">
+                            {recvModal.items.map((it, idx) => {
+                                const nom = nomById.get(it.nomenclature_id);
+                                const left = it.ordered - it.already;
+                                const now = parseFloat(it.now) || 0;
+                                const over = now > left;
+                                return (
+                                    <div key={it.po_item_id}
+                                        className={`px-2.5 py-2 rounded-lg border transition-colors
+                                            ${now > 0 ? 'border-emerald-300 bg-emerald-50/50' : 'border-slate-200 bg-white'}`}>
+                                        <div className="text-[12.5px] font-semibold text-slate-900 leading-snug mb-1.5">
+                                            {nom?.fullName || 'Позиція'}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[11px] text-slate-500 tabular-nums">
+                                                замовлено <b className="text-slate-800">{num(it.ordered)}</b>
+                                                {it.already > 0 && <> · вже прийнято <b className="text-slate-800">{num(it.already)}</b></>}
+                                                {' · '}лишилось <b className="text-emerald-700">{num(left)}</b>
+                                            </span>
+                                            <input
+                                                type="number" min="0" max={left} step="any" inputMode="decimal"
+                                                className={`w-24 h-9 ml-auto px-2 text-center border rounded-lg text-[13px] font-bold tabular-nums outline-none transition-colors
+                                                    ${over ? 'border-rose-400 bg-rose-50 text-rose-700' : 'border-slate-300 focus:border-emerald-500'}`}
+                                                value={it.now}
+                                                onChange={e => setRecvModal(m => ({
+                                                    ...m,
+                                                    items: m.items.map((x, i) => i === idx ? { ...x, now: e.target.value } : x),
+                                                }))}
+                                            />
+                                            <span className="text-[10px] text-slate-400 w-8">{nom?.unit?.name || 'шт'}</span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+            </Modal>
+
+            <PurchaseOrderModal
+                isOpen={poModal}
+                onClose={() => { setPoModal(false); setPoEdit(null); setPoFile(null); }}
+                onSuccess={() => { setPoModal(false); setPoEdit(null); setPoFile(null); loadData(); }}
+                initialMode={poMode}
+                editOrder={poEdit}
+                importFile={poFile}
+                dictionaries={{ suppliers, installations, nomenclatures, categories, systemMemory }}
+                employee={employee}
+                showToast={toast}
+                onAddSupplier={quickAddSupplier}
+            />
         </div>
     );
 }

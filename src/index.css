@@ -11,3 +11,37 @@
     font-size: 16px !important;
   }
 }
+
+@layer utilities {
+  /* Відступ під «домашню смугу» iPhone та навігаційну панель Android.
+     Класи pb-safe/pt-safe уже стояли в коді у 30 місцях, але ніде не були
+     визначені — тому нижня навігація частково ховалась під смугою. */
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .pt-safe { padding-top: env(safe-area-inset-top, 0px); }
+  .mb-safe { margin-bottom: env(safe-area-inset-bottom, 0px); }
+
+  /* Тонкий скролбар замість системного — щоб не з'їдав ширину таблиць */
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
+
+  /* Смуга, яка гортається, але без видимого скролбара */
+  .hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .hide-scrollbar::-webkit-scrollbar { display: none; }
+}
+
+/* Поля дати на мобільному Safari без цього стискаються до нечитабельного */
+input[type="date"],
+input[type="datetime-local"] {
+  min-height: 2.5rem;
+}

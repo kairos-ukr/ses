@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -9,6 +9,7 @@ import {
     FaShoppingCart,
     FaExchangeAlt,
     FaWarehouse,
+    FaClipboardList,
     FaArrowLeft
 } from 'react-icons/fa';
 
@@ -16,10 +17,13 @@ import WarehousePage from './WarehousePage';
 import ToolsPage from './ToolsPage';
 import PurchasesPage from './PurchasesPage';
 import StockMovementsPage from './StockMovementsPage';
+import IssueOrdersPage from './warehouse/IssueOrdersPage';
+import { hasIssueOrders } from '../utils/features';
 
 // Розділи складського сервісу — власне бічне меню, окреме від CRM
-const SECTIONS = [
+const ALL_SECTIONS = [
     { id: 'stock', label: 'Залишки', icon: FaWarehouse, title: 'Залишки та номенклатура', action: 'Додати товар' },
+    { id: 'issue', label: 'Видача', icon: FaClipboardList, title: 'Документи видачі', action: 'Новий документ' },
     { id: 'movements', label: 'Рух товарів', icon: FaExchangeAlt, title: 'Рух товарів', action: 'Видача / Продаж' },
     { id: 'purchases', label: 'Закупівлі', icon: FaShoppingCart, title: 'Закупівлі та постачання', action: 'Замовлення / Імпорт' },
     { id: 'tools', label: 'Інструмент', icon: FaToolbox, title: 'Інструмент та інвентар', action: 'Видати інвентар' },
@@ -29,6 +33,15 @@ export default function InventoryWorkspace() {
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('stock');
     const [globalSearch, setGlobalSearch] = useState('');
+
+    // Розділ «Видача» з'являється після міграції issue_orders
+    const [issueReady, setIssueReady] = useState(false);
+    useEffect(() => { hasIssueOrders().then(setIssueReady); }, []);
+
+    const SECTIONS = useMemo(
+        () => ALL_SECTIONS.filter(s => s.id !== 'issue' || issueReady),
+        [issueReady]
+    );
 
     // Стейт-тригер головної кнопки дії. Інкрементується при кожному натисканні.
     const [actionTrigger, setActionTrigger] = useState(0);
@@ -138,7 +151,7 @@ export default function InventoryWorkspace() {
                 </header>
 
                 {/* Контент розділу */}
-                <main className="flex-1 min-h-0 p-3 sm:p-5 pb-24 lg:pb-5 flex flex-col">
+                <main className="flex-1 min-h-0 p-2.5 sm:p-3 pb-24 lg:pb-3 flex flex-col">
                     <AnimatePresence mode="wait">
                         <motion.div
                             key={activeTab}
@@ -149,6 +162,7 @@ export default function InventoryWorkspace() {
                             className="flex-1 flex flex-col min-h-0"
                         >
                             {activeTab === 'stock' && <WarehousePage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
+                            {activeTab === 'issue' && <IssueOrdersPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
                             {activeTab === 'movements' && <StockMovementsPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
                             {activeTab === 'purchases' && <PurchasesPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
                             {activeTab === 'tools' && <ToolsPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}

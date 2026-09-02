@@ -1,7 +1,8 @@
 import React from "react";
 // Додаємо Navigate для перенаправлення
 import { HashRouter as Router, Routes, Route, Navigate } from "react-router-dom";
-import { AuthProvider } from "./AuthProvider"; 
+import { AuthProvider } from "./AuthProvider";
+import { ToastProvider, ConfirmProvider } from "./ui";
 
 import AuthPage from "./AuthPage";
 // import HomePage from "./homep"; // Вже не потрібен, можеш видалити файл
@@ -33,6 +34,8 @@ import InventoryWorkspace from './pages/InventoryWorkspace';
 export default function App() {
   return (
     <AuthProvider>
+     <ToastProvider>
+      <ConfirmProvider>
       <Router>
         <Routes>
           <Route path="/" element={<AuthPage />} />
@@ -68,6 +71,8 @@ export default function App() {
           <Route path="/admin" element={<Admin />} />
         </Routes>
       </Router>
+      </ConfirmProvider>
+     </ToastProvider>
     </AuthProvider>
   );
 }

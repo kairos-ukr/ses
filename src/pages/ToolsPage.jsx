@@ -1,200 +1,95 @@
-import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { 
-    FaPlus, FaWrench, FaHardHat, FaWarehouse, 
-    FaExchangeAlt, FaArrowUp, FaArrowDown, FaHistory, FaCheck, 
-    FaExclamationTriangle, FaTimes, FaInfoCircle, FaHashtag, 
-    FaHeartBroken, FaQuestionCircle, FaChevronDown
+// =====================================================================
+//  Інструмент та інвентар.
+//
+//  Кожна одиниця має інвентарний номер і поточну локацію: склад або
+//  об'єкт. Дві вкладки — інвентар і журнал переміщень.
+//
+//  Дії залежать від стану: інструмент на складі можна видати чи
+//  перемістити, виданий — повернути. Показуємо лише те, що доречно
+//  просто зараз, а не всі шість кнопок одразу.
+// =====================================================================
+
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+    FaWrench, FaWarehouse, FaHardHat, FaHeartBroken, FaQuestionCircle,
+    FaArrowUp, FaArrowDown, FaExchangeAlt, FaHistory, FaPlus, FaHashtag,
+    FaInfoCircle, FaMagic, FaBoxOpen, FaClock, FaFileExcel,
 } from 'react-icons/fa';
+import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
+import {
+    T, Btn, IconBtn, Chip, Card, Field, Picker, Segmented, EmptyState,
+    Skeleton, Modal, useToast, useConfirm, humanError, useIsMobile,
+} from '../ui';
 
-// --- ДОПОМІЖНІ КОМПОНЕНТИ ---
-const Toast = memo(({ message, type = 'success', isVisible, onClose }) => {
-    useEffect(() => {
-        if (isVisible) { const timer = setTimeout(onClose, 4000); return () => clearTimeout(timer); }
-    }, [isVisible, onClose]);
-    const styles = { success: 'bg-emerald-600', error: 'bg-red-600' };
-    return (
-        <AnimatePresence>
-            {isVisible && (
-                <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="fixed top-20 right-4 z-[100]">
-                    <div className={`${styles[type] || 'bg-blue-600'} text-white rounded-xl shadow-2xl p-4 flex items-center space-x-3`}>
-                        {type === 'success' ? <FaCheck /> : <FaExclamationTriangle />}
-                        <span className="font-bold text-sm">{message}</span>
-                        <button onClick={onClose} className="ml-4 text-white/80 hover:text-white"><FaTimes /></button>
-                    </div>
-                </motion.div>
-            )}
-        </AnimatePresence>
-    );
-});
-
-// Кастомний селект з пошуком
-const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, disabled = false }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [search, setSearch] = useState('');
-    const wrapperRef = useRef(null);
-
-    useEffect(() => {
-        const handleClickOutside = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setIsOpen(false); };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    const selectedOption = options.find(o => o.id === value);
-    const filtered = options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()));
-
-    return (
-        <div className="relative w-full" ref={wrapperRef}>
-            <div 
-                className={`w-full px-4 py-3 border rounded-xl flex justify-between items-center text-sm transition-colors ${disabled ? 'bg-slate-50 border-slate-200 cursor-not-allowed text-slate-400' : 'bg-white border-slate-300 cursor-pointer hover:border-indigo-400'}`}
-                onClick={() => !disabled && setIsOpen(!isOpen)}
-            >
-                <div className="flex items-center gap-2 truncate pr-2">
-                    {Icon && <Icon className={selectedOption ? "text-indigo-500" : "text-slate-400"} />}
-                    <span className={selectedOption ? 'text-slate-800 font-bold' : 'text-slate-400'}>
-                        {selectedOption ? selectedOption.label : placeholder}
-                    </span>
-                </div>
-                <FaChevronDown className={`text-slate-400 text-xs flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-            </div>
-            
-            <AnimatePresence>
-                {isOpen && (
-                    <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 5 }} transition={{ duration: 0.15 }} className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden flex flex-col max-h-60">
-                        <div className="p-2 border-b border-slate-100 bg-slate-50 flex-shrink-0">
-                            <input autoFocus type="text" placeholder="Пошук..." value={search} onChange={e => setSearch(e.target.value)} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition-colors" />
-                        </div>
-                        <div className="overflow-y-auto custom-scrollbar flex-1 p-1">
-                            {filtered.length > 0 ? filtered.map(o => (
-                                <div key={o.id} className={`px-3 py-2.5 cursor-pointer text-sm rounded-lg transition-colors mb-0.5 ${o.id === value ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => { onChange(o.id); setIsOpen(false); setSearch(''); }}>
-                                    {o.label}
-                                </div>
-                            )) : <div className="px-4 py-4 text-sm text-slate-400 text-center">Нічого не знайдено</div>}
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
-    );
+const STATUS = {
+    in_stock: { label: 'На складі', tone: 'ok', icon: FaWarehouse },
+    issued: { label: 'Видано', tone: 'info', icon: FaHardHat },
+    under_repair: { label: 'В ремонті', tone: 'warn', icon: FaWrench },
+    written_off: { label: 'Списано', tone: 'danger', icon: FaHeartBroken },
+    lost: { label: 'Втрачено', tone: 'neutral', icon: FaQuestionCircle },
 };
 
-// Селект з пошуком ТА швидким додаванням
-const SearchableSelectWithAdd = ({ options, value, onChange, onAddNew, placeholder, icon: Icon }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [search, setSearch] = useState('');
-    const wrapperRef = useRef(null);
-
-    useEffect(() => {
-        const handleClickOutside = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setIsOpen(false); };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    const selectedOption = options.find(o => o.id === value);
-    const filtered = options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()));
-    const exactMatch = options.some(o => o.label.toLowerCase() === search.trim().toLowerCase());
-
-    return (
-        <div className="relative w-full" ref={wrapperRef}>
-            <div 
-                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl flex justify-between items-center cursor-pointer text-sm transition-colors hover:border-indigo-400"
-                onClick={() => setIsOpen(!isOpen)}
-            >
-                <div className="flex items-center gap-2 truncate pr-2">
-                    {Icon && <Icon className={selectedOption ? "text-indigo-500" : "text-slate-400"} />}
-                    <span className={selectedOption ? 'text-slate-800 font-bold' : 'text-slate-400'}>
-                        {selectedOption ? selectedOption.label : placeholder}
-                    </span>
-                </div>
-                <FaChevronDown className={`text-slate-400 text-xs flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-            </div>
-            
-            <AnimatePresence>
-                {isOpen && (
-                    <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 5 }} transition={{ duration: 0.15 }} className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden flex flex-col max-h-72">
-                        <div className="p-2 border-b border-slate-100 bg-slate-50 flex-shrink-0">
-                            <input autoFocus type="text" placeholder="Пошук об'єкта..." value={search} onChange={e => setSearch(e.target.value)} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition-colors" />
-                        </div>
-                        <div className="overflow-y-auto custom-scrollbar flex-1 p-1">
-                            {filtered.length > 0 ? filtered.map(o => (
-                                <div key={o.id} className={`px-3 py-2.5 cursor-pointer text-sm rounded-lg transition-colors mb-0.5 ${o.id === value ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => { onChange(o.id); setIsOpen(false); setSearch(''); }}>
-                                    {o.label}
-                                </div>
-                            )) : <div className="px-4 py-4 text-sm text-slate-400 text-center border-dashed border-2 border-slate-100 rounded-lg m-1">Нічого не знайдено</div>}
-                        </div>
-                        {search.trim() !== '' && !exactMatch && (
-                            <div className="p-2 border-t border-slate-100 bg-slate-50 flex-shrink-0">
-                                <button type="button" onClick={() => { onAddNew(search.trim()); setIsOpen(false); setSearch(''); }} className="w-full py-2 bg-indigo-100 text-indigo-700 hover:bg-indigo-600 hover:text-white rounded-lg text-sm font-bold transition-colors flex items-center justify-center gap-2">
-                                    <FaPlus /> Додати як віртуальний об'єкт
-                                </button>
-                            </div>
-                        )}
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
-    );
+const MOVE = {
+    issue: { label: 'Видача', tone: 'info', icon: FaArrowUp },
+    return: { label: 'Повернення', tone: 'ok', icon: FaArrowDown },
+    transfer: { label: 'Переміщення', tone: 'accent', icon: FaExchangeAlt },
+    writeoff: { label: 'Списання', tone: 'danger', icon: FaHeartBroken },
 };
 
-// --- КОНФІГИ СТАТУСІВ ---
-const TOOL_STATUSES = {
-    'in_stock': { label: 'На складі', color: 'text-emerald-700 bg-emerald-100 border-emerald-200', icon: FaWarehouse },
-    'issued': { label: 'Видано', color: 'text-blue-700 bg-blue-100 border-blue-200', icon: FaHardHat },
-    'under_repair': { label: 'В ремонті', color: 'text-amber-700 bg-amber-100 border-amber-200', icon: FaWrench },
-    'written_off': { label: 'Списано', color: 'text-rose-700 bg-rose-100 border-rose-200', icon: FaHeartBroken },
-    'lost': { label: 'Втрачено', color: 'text-slate-600 bg-slate-200 border-slate-300', icon: FaQuestionCircle }
+/* Що можна зробити з інструментом у кожному стані */
+const ACTIONS = {
+    issue: { label: 'Видати', icon: FaArrowUp, variant: 'accent', title: 'Видача на об’єкт' },
+    return: { label: 'Повернути', icon: FaArrowDown, variant: 'softOk', title: 'Повернення на склад' },
+    transfer: { label: 'Перемістити', icon: FaExchangeAlt, variant: 'soft', title: 'Переміщення між складами' },
+    repair: { label: 'В ремонт', icon: FaWrench, variant: 'softWarn', title: 'Відправити в ремонт' },
+    writeoff: { label: 'Списати', icon: FaHeartBroken, variant: 'softDanger', title: 'Списання' },
+    lost: { label: 'Втрачено', icon: FaQuestionCircle, variant: 'soft', title: 'Позначити втраченим' },
 };
 
-const MOVEMENT_TYPES = {
-    'issue': { label: 'Видача', color: 'text-blue-700 bg-blue-50 border-blue-200', icon: FaArrowUp },
-    'return': { label: 'Повернення', color: 'text-emerald-700 bg-emerald-50 border-emerald-200', icon: FaArrowDown },
-    'transfer': { label: 'Переміщення', color: 'text-indigo-700 bg-indigo-50 border-indigo-200', icon: FaExchangeAlt },
-    'writeoff': { label: 'Списання/Втрата', color: 'text-rose-700 bg-rose-50 border-rose-200', icon: FaHeartBroken }
+const allowedActions = (status) => {
+    switch (status) {
+        case 'in_stock': return ['issue', 'transfer', 'repair', 'writeoff', 'lost'];
+        case 'issued': return ['return', 'lost', 'writeoff'];
+        case 'under_repair': return ['return', 'writeoff'];
+        default: return ['return'];   // списаний / втрачений — можна повернути в обіг
+    }
 };
 
-// --- ГОЛОВНИЙ КОМПОНЕНТ ---
 export default function ToolsPage({ externalSearch = '', externalActionTrigger = 0 }) {
     const { employee, loading: authLoading } = useAuth();
-    
-    const [activeTab, setActiveTab] = useState('inventory');
-    
-    // Дані
+    const toast = useToast();
+    const confirm = useConfirm();
+    const isMobile = useIsMobile();
+
+    const [tab, setTab] = useState('inventory');
     const [tools, setTools] = useState([]);
     const [movements, setMovements] = useState([]);
     const [nomenclatures, setNomenclatures] = useState([]);
-    const [categories, setCategories] = useState([]);
     const [warehouses, setWarehouses] = useState([]);
     const [installations, setInstallations] = useState([]);
-    const [employeesDict, setEmployeesDict] = useState({});
-    
+    const [empDict, setEmpDict] = useState({});
     const [loading, setLoading] = useState(true);
+
     const [statusFilter, setStatusFilter] = useState('all');
-    
-    const [toast, setToast] = useState({ isVisible: false, message: '', type: 'success' });
-    const showToast = useCallback((message, type = 'success') => setToast({ isVisible: true, message, type }), []);
-
-    const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-    const [isActionModalOpen, setIsActionModalOpen] = useState(false);
-    const [isSubmitting, setIsSubmitting] = useState(false);
-
+    const [addModal, setAddModal] = useState(false);
     const [addForm, setAddForm] = useState({ nomenclature_id: '', inventory_number: '', serial_number: '', warehouse_id: '', notes: '' });
-    const [selectedTool, setSelectedTool] = useState(null);
-    const [actionForm, setActionForm] = useState({ type: '', installation_id: '', warehouse_id: '', notes: '', expected_date: '' });
+    const [action, setAction] = useState(null);   // { tool, type, installation_id, warehouse_id, notes, expected_date }
+    const [sheetTool, setSheetTool] = useState(null);
+    const [busy, setBusy] = useState(false);
 
-    // Відстежуємо сигнал створення з батьківського компонента (ВИПРАВЛЕНО!)
-    const prevActionTrigger = useRef(externalActionTrigger);
-    
+    const prevTrigger = useRef(externalActionTrigger);
     useEffect(() => {
-        if (externalActionTrigger > prevActionTrigger.current) {
+        if (externalActionTrigger > prevTrigger.current) {
             setAddForm({ nomenclature_id: '', inventory_number: '', serial_number: '', warehouse_id: '', notes: '' });
-            setIsAddModalOpen(true);
+            setAddModal(true);
         }
-        prevActionTrigger.current = externalActionTrigger;
+        prevTrigger.current = externalActionTrigger;
     }, [externalActionTrigger]);
 
-    // --- ЗАВАНТАЖЕННЯ ДАНИХ ---
+    /* ---------------- ЗАВАНТАЖЕННЯ ---------------- */
+
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
@@ -205,315 +100,443 @@ export default function ToolsPage({ externalSearch = '', externalActionTrigger =
                 supabase.from('categories').select('id, name, parent_id'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
                 supabase.from('installations').select('custom_id, name, status'),
-                supabase.from('employees').select('id, name')
+                supabase.from('employees').select('id, name'),
             ]);
+            if (toolRes.error) throw toolRes.error;
 
-            setCategories(catRes.data || []);
             setWarehouses(whRes.data || []);
             setInstallations(instRes.data || []);
-            
-            const cats = catRes.data || [];
-            
-            const processedNom = (nomRes.data || []).map(item => {
-                let path = [];
-                let currentId = item.category_id;
-                while (currentId) {
-                    const cat = cats.find(c => c.id === currentId);
-                    if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } 
-                    else break;
+
+            const catById = new Map((catRes.data || []).map(c => [c.id, c]));
+            const nom = (nomRes.data || []).map(item => {
+                const path = [];
+                let id = item.category_id, guard = 0;
+                while (id && guard++ < 20) {
+                    const c = catById.get(id);
+                    if (!c) break;
+                    path.unshift(c.name);
+                    id = c.parent_id;
                 }
                 return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim() };
             });
-            setNomenclatures(processedNom);
+            setNomenclatures(nom);
 
-            const processedTools = (toolRes.data || []).map(t => {
-                const nom = processedNom.find(n => n.id === t.nomenclature_id);
-                return { ...t, nomenclature: nom };
-            });
-            setTools(processedTools);
+            const nomById = new Map(nom.map(n => [n.id, n]));
+            setTools((toolRes.data || []).map(t => ({ ...t, nomenclature: nomById.get(t.nomenclature_id) })));
             setMovements(movRes.data || []);
 
-            const empDict = {};
-            (empRes.data || []).forEach(e => empDict[e.id] = e.name);
-            setEmployeesDict(empDict);
-
-        } catch (error) {
-            showToast(error.message, 'error');
-        } finally {
-            setLoading(false);
-        }
-    }, [showToast]);
+            const emps = {};
+            (empRes.data || []).forEach(e => emps[e.id] = e.name);
+            setEmpDict(emps);
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setLoading(false); }
+    }, [toast]);
 
     useEffect(() => { if (!authLoading) loadData(); }, [authLoading, loadData]);
 
-    // --- ОБРОБНИКИ СТВОРЕННЯ ІНСТРУМЕНТУ ---
-    const handleGenerateInvNumber = () => {
-        const randomNum = Math.floor(1000 + Math.random() * 9000);
-        setAddForm(prev => ({ ...prev, inventory_number: `INV-${randomNum}` }));
-    };
+    /* ---------------- ДОВІДКОВІ ЗНАЧЕННЯ ---------------- */
 
-    const handleSaveTool = async (e) => {
-        e.preventDefault();
-        if (!addForm.nomenclature_id || !addForm.inventory_number || !addForm.warehouse_id) {
-            return showToast('Заповніть всі обов\'язкові поля', 'error');
-        }
-        setIsSubmitting(true);
+    const whName = useCallback(id => warehouses.find(w => w.id === id)?.name, [warehouses]);
+    const instName = useCallback(id => installations.find(i => i.custom_id === id)?.name, [installations]);
+
+    const nomOptions = useMemo(
+        () => nomenclatures.map(n => ({ id: n.id, label: `${n.fullName}${n.sku ? ` · ${n.sku}` : ''}` })),
+        [nomenclatures]
+    );
+    const whOptions = useMemo(() => warehouses.map(w => ({ id: w.id, label: w.name })), [warehouses]);
+    const instOptions = useMemo(() => installations
+        .filter(i => ['planning', 'in_progress', 'pending'].includes(i.status))
+        .map(i => ({ id: i.custom_id, label: `#${i.custom_id} ${i.name}` })), [installations]);
+
+    const counts = useMemo(() => {
+        const c = { all: tools.length };
+        Object.keys(STATUS).forEach(k => { c[k] = tools.filter(t => t.status === k).length; });
+        return c;
+    }, [tools]);
+
+    const filteredTools = useMemo(() => {
+        const term = externalSearch.trim().toLowerCase();
+        return tools.filter(t => {
+            if (statusFilter !== 'all' && t.status !== statusFilter) return false;
+            if (!term) return true;
+            return (t.inventory_number || '').toLowerCase().includes(term)
+                || (t.serial_number || '').toLowerCase().includes(term)
+                || (t.nomenclature?.fullName || '').toLowerCase().includes(term);
+        });
+    }, [tools, statusFilter, externalSearch]);
+
+    const filteredMovements = useMemo(() => {
+        const term = externalSearch.trim().toLowerCase();
+        const byId = new Map(tools.map(t => [t.id, t]));
+        return movements
+            .map(m => ({ ...m, tool: byId.get(m.tool_id) }))
+            .filter(m => !term
+                || (m.tool?.inventory_number || '').toLowerCase().includes(term)
+                || (m.tool?.nomenclature?.fullName || '').toLowerCase().includes(term));
+    }, [movements, tools, externalSearch]);
+
+    /* Інструмент на об'єкті довше очікуваного — це те, що варто бачити */
+    const overdue = useCallback((tool) => {
+        if (tool.status !== 'issued') return null;
+        const mv = movements.find(m => m.tool_id === tool.id && m.movement_type === 'issue');
+        if (!mv?.expected_return_date) return null;
+        const due = new Date(mv.expected_return_date);
+        return due < new Date() ? due : null;
+    }, [movements]);
+
+    /* ---------------- СТВОРЕННЯ ---------------- */
+
+    const genInvNumber = () => setAddForm(f => ({
+        ...f, inventory_number: `INV-${Math.floor(1000 + Math.random() * 9000)}`,
+    }));
+
+    const saveTool = async () => {
+        if (!addForm.nomenclature_id) return toast('Оберіть позицію номенклатури', 'error');
+        if (!addForm.inventory_number.trim()) return toast('Вкажіть інвентарний номер', 'error');
+        if (!addForm.warehouse_id) return toast('Оберіть склад', 'error');
+
+        setBusy(true);
         try {
-            const payload = {
+            const { error } = await supabase.from('tools').insert([{
                 nomenclature_id: addForm.nomenclature_id,
-                inventory_number: addForm.inventory_number,
-                serial_number: addForm.serial_number || null,
+                inventory_number: addForm.inventory_number.trim(),
+                serial_number: addForm.serial_number.trim() || null,
                 status: 'in_stock',
                 current_warehouse_id: addForm.warehouse_id,
-                notes: addForm.notes || null,
-                created_by: employee?.id
-            };
-            const { error } = await supabase.from('tools').insert([payload]);
+                notes: addForm.notes.trim() || null,
+                created_by: employee?.id,
+            }]);
             if (error) throw error;
-            
-            showToast('Інструмент успішно додано в інвентар', 'success');
-            setIsAddModalOpen(false);
+            toast('Інструмент додано в інвентар');
+            setAddModal(false);
             loadData();
-        } catch (error) {
-            if (error.code === '23505') showToast('Інструмент з таким інвентарним або серійним номером вже існує', 'error');
-            else showToast(error.message, 'error');
-        } finally {
-            setIsSubmitting(false);
-        }
+        } catch (e) {
+            toast(e.code === '23505'
+                ? 'Інструмент із таким інвентарним або серійним номером уже є'
+                : humanError(e), 'error');
+        } finally { setBusy(false); }
     };
 
-    const handleQuickAddInstallation = async (name) => {
+    const quickAddInstallation = async (name) => {
         try {
-            const payload = {
-                name: name,
-                status: 'in_progress', 
-                notes: 'Віртуальний об\'єкт для нестандартних переміщень інструменту'
-            };
-            const { data, error } = await supabase.from('installations').insert([payload]).select().single();
+            const { data, error } = await supabase.from('installations').insert([{
+                name, status: 'in_progress',
+                notes: 'Віртуальний об’єкт для переміщень інструменту',
+            }]).select().single();
             if (error) throw error;
-            
             setInstallations(prev => [...prev, data]);
-            setActionForm(prev => ({...prev, installation_id: data.custom_id}));
-            showToast(`Віртуальний об'єкт "${name}" створено`, 'success');
-        } catch (error) {
-            showToast(error.message, 'error');
+            setAction(a => ({ ...a, installation_id: data.custom_id }));
+            toast(`Об’єкт «${name}» створено`);
+        } catch (e) {
+            toast(humanError(e), 'error');
         }
     };
 
-    const openActionModal = (tool, type) => {
-        setSelectedTool(tool);
-        setActionForm({ 
-            type,
-            installation_id: tool.current_installation_custom_id || '', 
-            warehouse_id: tool.current_warehouse_id || '', 
-            notes: tool.notes || '', 
-            expected_date: '' 
-        });
-        setIsActionModalOpen(true);
-    };
+    /* ---------------- ОПЕРАЦІЇ ---------------- */
 
-    const handleExecuteAction = async (e) => {
-        e.preventDefault();
-        setIsSubmitting(true);
-        
+    const openAction = (tool, type) => setAction({
+        tool, type,
+        installation_id: tool.current_installation_custom_id || '',
+        warehouse_id: tool.current_warehouse_id || '',
+        notes: '', expected_date: '',
+    });
+
+    const runAction = async () => {
+        const { tool, type } = action;
+        const empId = employee?.id;
+        let update = {}, move = null;
+
         try {
-            const tId = selectedTool.id;
-            const empId = employee?.id;
-            let toolUpdate = {};
-            let moveInsert = null;
-
-            if (actionForm.type === 'issue') {
-                if (!actionForm.installation_id) throw new Error("Оберіть об'єкт для видачі");
-                toolUpdate = { status: 'issued', current_warehouse_id: null, current_installation_custom_id: actionForm.installation_id, notes: actionForm.notes || null };
-                moveInsert = { tool_id: tId, movement_type: 'issue', warehouse_from_id: selectedTool.current_warehouse_id, installation_custom_id: actionForm.installation_id, expected_return_date: actionForm.expected_date || null, notes: actionForm.notes || null, performed_by: empId };
-            } 
-            else if (actionForm.type === 'return') {
-                if (!actionForm.warehouse_id) throw new Error("Оберіть склад для повернення");
-                toolUpdate = { status: 'in_stock', current_warehouse_id: actionForm.warehouse_id, current_installation_custom_id: null, notes: actionForm.notes || null };
-                moveInsert = { tool_id: tId, movement_type: 'return', warehouse_to_id: actionForm.warehouse_id, installation_custom_id: selectedTool.current_installation_custom_id, notes: actionForm.notes || null, performed_by: empId };
-            }
-            else if (actionForm.type === 'transfer') {
-                if (!actionForm.warehouse_id || actionForm.warehouse_id === selectedTool.current_warehouse_id) throw new Error("Оберіть інший склад");
-                toolUpdate = { current_warehouse_id: actionForm.warehouse_id, notes: actionForm.notes || null };
-                moveInsert = { tool_id: tId, movement_type: 'transfer', warehouse_from_id: selectedTool.current_warehouse_id, warehouse_to_id: actionForm.warehouse_id, notes: actionForm.notes || null, performed_by: empId };
-            }
-            else if (['repair', 'writeoff', 'lost'].includes(actionForm.type)) {
-                const newStatus = actionForm.type === 'repair' ? 'under_repair' : actionForm.type === 'writeoff' ? 'written_off' : 'lost';
-                toolUpdate = { status: newStatus, current_warehouse_id: null, current_installation_custom_id: null, notes: actionForm.notes || null };
-                if (actionForm.type === 'writeoff' || actionForm.type === 'lost') {
-                    moveInsert = { tool_id: tId, movement_type: 'writeoff', warehouse_from_id: selectedTool.current_warehouse_id, installation_custom_id: selectedTool.current_installation_custom_id, notes: actionForm.notes || null, performed_by: empId };
+            if (type === 'issue') {
+                if (!action.installation_id) throw new Error("Оберіть об'єкт для видачі");
+                update = {
+                    status: 'issued', current_warehouse_id: null,
+                    current_installation_custom_id: action.installation_id,
+                };
+                move = {
+                    tool_id: tool.id, movement_type: 'issue',
+                    warehouse_from_id: tool.current_warehouse_id,
+                    installation_custom_id: action.installation_id,
+                    expected_return_date: action.expected_date || null,
+                };
+            } else if (type === 'return') {
+                if (!action.warehouse_id) throw new Error('Оберіть склад для повернення');
+                update = {
+                    status: 'in_stock', current_warehouse_id: action.warehouse_id,
+                    current_installation_custom_id: null,
+                };
+                move = {
+                    tool_id: tool.id, movement_type: 'return',
+                    warehouse_to_id: action.warehouse_id,
+                    installation_custom_id: tool.current_installation_custom_id,
+                };
+            } else if (type === 'transfer') {
+                if (!action.warehouse_id || String(action.warehouse_id) === String(tool.current_warehouse_id)) {
+                    throw new Error('Оберіть інший склад');
+                }
+                update = { current_warehouse_id: action.warehouse_id };
+                move = {
+                    tool_id: tool.id, movement_type: 'transfer',
+                    warehouse_from_id: tool.current_warehouse_id,
+                    warehouse_to_id: action.warehouse_id,
+                };
+            } else {
+                const newStatus = type === 'repair' ? 'under_repair' : type === 'writeoff' ? 'written_off' : 'lost';
+                if (['writeoff', 'lost'].includes(type) && !action.notes.trim()) {
+                    throw new Error('Вкажіть причину — без неї запис нічого не пояснює');
+                }
+                update = {
+                    status: newStatus, current_warehouse_id: null,
+                    current_installation_custom_id: null,
+                };
+                if (['writeoff', 'lost'].includes(type)) {
+                    move = {
+                        tool_id: tool.id, movement_type: 'writeoff',
+                        warehouse_from_id: tool.current_warehouse_id,
+                        installation_custom_id: tool.current_installation_custom_id,
+                    };
                 }
             }
+        } catch (e) {
+            return toast(e.message, 'error');
+        }
 
-            toolUpdate.updated_by = empId;
-            const { error: tErr } = await supabase.from('tools').update(toolUpdate).eq('id', tId);
-            if (tErr) throw tErr;
+        // Незворотні стани підтверджуємо явно
+        if (['writeoff', 'lost'].includes(type)) {
+            const ok = await confirm({
+                title: type === 'writeoff' ? 'Списати інструмент?' : 'Позначити втраченим?',
+                tone: 'danger',
+                confirmLabel: type === 'writeoff' ? 'Списати' : 'Позначити',
+                message: tool.nomenclature?.fullName,
+                details: [
+                    `Інв. № ${tool.inventory_number}`,
+                    `Причина: ${action.notes.trim()}`,
+                    'Інструмент зникне зі списку доступних. Повернути в обіг можна дією «Повернути».',
+                ],
+            });
+            if (!ok) return;
+        }
 
-            if (moveInsert) {
-                moveInsert.created_by = empId;
-                const { error: mErr } = await supabase.from('tool_movements').insert([moveInsert]);
+        setBusy(true);
+        try {
+            update.notes = action.notes.trim() || tool.notes || null;
+            update.updated_by = empId;
+            const { error } = await supabase.from('tools').update(update).eq('id', tool.id);
+            if (error) throw error;
+
+            if (move) {
+                const { error: mErr } = await supabase.from('tool_movements')
+                    .insert([{ ...move, notes: action.notes.trim() || null, performed_by: empId, created_by: empId }]);
                 if (mErr) throw mErr;
             }
 
-            showToast('Операцію успішно виконано', 'success');
-            setIsActionModalOpen(false);
+            toast(`${ACTIONS[type].label}: виконано`);
+            setAction(null);
+            setSheetTool(null);
             loadData();
-
-        } catch (error) {
-            showToast(error.message, 'error');
-        } finally {
-            setIsSubmitting(false);
-        }
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setBusy(false); }
     };
 
+    /* ---------------- ЕКСПОРТ ---------------- */
 
-    // --- ФІЛЬТРАЦІЯ ТА ОПЦІЇ ---
-    const nomOptions = nomenclatures.map(n => ({ id: n.id, label: `${n.fullName} (SKU: ${n.sku || '---'})` }));
-    const whOptions = warehouses.map(w => ({ id: w.id, label: w.name }));
-    
-    // В селект для видачі пропонуємо тільки активні об'єкти
-    const instOptions = installations
-        .filter(i => ['planning', 'in_progress', 'pending'].includes(i.status))
-        .map(i => ({ id: i.custom_id, label: `[#${i.custom_id}] ${i.name}` }));
+    const exportExcel = () => {
+        if (!filteredTools.length) return toast('За цими фільтрами порожньо', 'error');
+        const rows = filteredTools.map(t => ({
+            'Інв. номер': t.inventory_number,
+            'Найменування': t.nomenclature?.fullName || '',
+            'Серійний номер': t.serial_number || '',
+            'Статус': STATUS[t.status]?.label || t.status,
+            'Склад': whName(t.current_warehouse_id) || '',
+            "Об'єкт": t.current_installation_custom_id
+                ? `#${t.current_installation_custom_id} ${instName(t.current_installation_custom_id) || ''}`.trim() : '',
+            'Примітка': t.notes || '',
+        }));
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws['!cols'] = [{ wch: 14 }, { wch: 46 }, { wch: 18 }, { wch: 14 }, { wch: 20 }, { wch: 30 }, { wch: 30 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Інструмент');
+        XLSX.writeFile(wb, `Інструмент_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        toast(`Вивантажено ${rows.length} позицій`);
+    };
 
-    // Фільтрація по externalSearch
-    const filteredTools = tools.filter(t => {
-        const term = externalSearch.toLowerCase();
-        const matchesSearch = t.inventory_number.toLowerCase().includes(term) || (t.nomenclature?.fullName || '').toLowerCase().includes(term);
-        const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
-        return matchesSearch && matchesStatus;
-    });
+    /* ---------------- ЧАСТИНИ ІНТЕРФЕЙСУ ---------------- */
 
-    if (authLoading) return <div className="flex-1 flex items-center justify-center text-slate-500">Завантаження...</div>;
+    const StatusChip = ({ status }) => {
+        const s = STATUS[status] || { label: status, tone: 'neutral', icon: FaInfoCircle };
+        return <Chip tone={s.tone} icon={s.icon}>{s.label}</Chip>;
+    };
+
+    const Location = ({ tool }) => {
+        if (tool.status === 'in_stock' && tool.current_warehouse_id) {
+            return (
+                <span className="inline-flex items-center gap-1.5 text-[12px] text-slate-700">
+                    <FaWarehouse className="text-emerald-500" size={11} />
+                    {whName(tool.current_warehouse_id) || 'Склад'}
+                </span>
+            );
+        }
+        if (tool.status === 'issued' && tool.current_installation_custom_id) {
+            const late = overdue(tool);
+            return (
+                <span className="inline-flex items-center gap-1.5 text-[12px] text-slate-700 flex-wrap">
+                    <FaHardHat className="text-sky-500 flex-shrink-0" size={11} />
+                    #{tool.current_installation_custom_id} {instName(tool.current_installation_custom_id) || ''}
+                    {late && (
+                        <Chip tone="danger" icon={FaClock}>
+                            мав повернутись {late.toLocaleDateString('uk-UA')}
+                        </Chip>
+                    )}
+                </span>
+            );
+        }
+        return <span className="text-[12px] text-slate-400">локації немає</span>;
+    };
+
+    const ToolActions = ({ tool, full }) => {
+        const list = allowedActions(tool.status);
+        if (full) return (
+            <div className="grid grid-cols-2 gap-2">
+                {list.map(k => (
+                    <Btn key={k} variant={ACTIONS[k].variant} icon={ACTIONS[k].icon}
+                        onClick={() => { openAction(tool, k); setSheetTool(null); }}>
+                        {ACTIONS[k].label}
+                    </Btn>
+                ))}
+            </div>
+        );
+        // У таблиці — головна дія текстом, решта іконками
+        const [primary, ...rest] = list;
+        return (
+            <div className="flex items-center justify-end gap-1">
+                <Btn size="sm" variant={ACTIONS[primary].variant} icon={ACTIONS[primary].icon}
+                    onClick={() => openAction(tool, primary)}>
+                    {ACTIONS[primary].label}
+                </Btn>
+                {rest.map(k => (
+                    <IconBtn key={k} variant="ghost" icon={ACTIONS[k].icon} label={ACTIONS[k].title}
+                        onClick={() => openAction(tool, k)} />
+                ))}
+            </div>
+        );
+    };
+
+    if (authLoading) return <div className="flex-1 flex items-center justify-center text-slate-500 text-[13px]">Завантаження…</div>;
+
+    const needsWarehouse = action && ['return', 'transfer'].includes(action.type);
+    const needsInstallation = action && action.type === 'issue';
+
+    /* ---------------- РЕНДЕР ---------------- */
 
     return (
-        <div className="flex flex-col h-full w-full">
-            <Toast {...toast} onClose={() => setToast(prev => ({ ...prev, isVisible: false }))} />
+        <div className="flex flex-col h-full w-full gap-2.5">
 
-            {/* --- ОБ'ЄДНАНА ПАНЕЛЬ ФІЛЬТРІВ ТА ВКЛАДОК --- */}
-            <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 bg-white p-3 rounded-[16px] border border-slate-200 shadow-sm mb-4 flex-none w-full">
-                
-                {/* ЛІВА ЧАСТИНА: Фільтри (залежать від вкладки) */}
-                <div className="flex-1 w-full xl:w-auto overflow-x-auto hide-scrollbar">
-                    {activeTab === 'inventory' ? (
-                        <div className="flex bg-slate-50 rounded-xl p-1.5 w-fit border border-slate-100">
-                            <button onClick={() => setStatusFilter('all')} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${statusFilter === 'all' ? 'bg-[#0F172A] text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>Всі</button>
-                            {Object.entries(TOOL_STATUSES).map(([k,v]) => (
-                                <button key={k} onClick={() => setStatusFilter(k)} className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${statusFilter === k ? 'bg-indigo-100 text-indigo-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'}`}>{v.label}</button>
+            {/* ---------- ВКЛАДКИ ТА ФІЛЬТРИ ---------- */}
+            <Card pad="p-2.5" className="flex-none">
+                <div className="flex items-center gap-2 flex-wrap">
+                    <Segmented
+                        value={tab} onChange={setTab}
+                        options={[
+                            { value: 'inventory', label: 'Інвентар' },
+                            { value: 'movements', label: 'Журнал рухів' },
+                        ]}
+                    />
+                    <div className="ml-auto flex items-center gap-1.5">
+                        <Btn variant="softOk" icon={FaFileExcel} onClick={exportExcel}>Excel</Btn>
+                        <Btn variant="accent" icon={FaPlus} onClick={() => setAddModal(true)}>
+                            <span className="hidden sm:inline">Додати інструмент</span>
+                            <span className="sm:hidden">Додати</span>
+                        </Btn>
+                    </div>
+                </div>
+
+                {tab === 'inventory' && (
+                    <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex items-center gap-1.5 overflow-x-auto">
+                        {[['all', 'Всі'], ...Object.entries(STATUS).map(([k, v]) => [k, v.label])].map(([k, label]) => (
+                            <button
+                                key={k}
+                                onClick={() => setStatusFilter(k)}
+                                className={`px-2.5 h-8 rounded-lg text-[11.5px] font-bold whitespace-nowrap border transition-colors flex-shrink-0
+                                    ${statusFilter === k
+                                        ? 'bg-slate-900 text-white border-slate-900'
+                                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
+                            >
+                                {label}
+                                <span className={`ml-1 tabular-nums ${statusFilter === k ? 'opacity-70' : 'text-slate-400'}`}>
+                                    {counts[k] || 0}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+                )}
+            </Card>
+
+            {/* ---------- ІНВЕНТАР ---------- */}
+            {tab === 'inventory' && (
+                <div className={`${T.card} flex-1 flex flex-col overflow-hidden min-h-0`}>
+                    {loading ? <Skeleton rows={8} /> : filteredTools.length === 0 ? (
+                        <EmptyState
+                            icon={FaWrench}
+                            title="Інструментів не знайдено"
+                            hint="Змініть фільтр за станом або додайте нову одиницю в інвентар."
+                        >
+                            <Btn variant="accent" icon={FaPlus} onClick={() => setAddModal(true)}>Додати інструмент</Btn>
+                        </EmptyState>
+                    ) : isMobile ? (
+                        <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                            {filteredTools.map(t => (
+                                <button key={t.id} onClick={() => setSheetTool(t)}
+                                    className="w-full text-left px-3 py-2.5 active:bg-slate-50 transition-colors">
+                                    <div className="flex items-start gap-2 mb-1.5">
+                                        <span className="text-[13px] font-bold text-slate-900 leading-snug flex-1">
+                                            {t.nomenclature?.fullName || 'Невідома позиція'}
+                                        </span>
+                                        <StatusChip status={t.status} />
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                            <FaHashtag className="text-slate-400" size={8} />{t.inventory_number}
+                                        </span>
+                                        <Location tool={t} />
+                                    </div>
+                                </button>
                             ))}
                         </div>
                     ) : (
-                        <div className="text-slate-500 text-sm font-bold px-4 py-2 uppercase tracking-wide">
-                            Історія переміщень інструменту
-                        </div>
-                    )}
-                </div>
-
-                {/* ПРАВА ЧАСТИНА: Внутрішні таби */}
-                <div className="flex bg-slate-50 p-1.5 rounded-xl w-full sm:w-fit shadow-inner border border-slate-100 flex-none">
-                    <button onClick={() => setActiveTab('inventory')} className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'inventory' ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/50' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}>
-                        <FaWrench/> Інвентар
-                    </button>
-                    <button onClick={() => setActiveTab('movements')} className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'movements' ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/50' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}>
-                        <FaHistory/> Журнал рухів
-                    </button>
-                </div>
-            </div>
-
-            {/* --- ВМІСТ: ІНВЕНТАР --- */}
-            {activeTab === 'inventory' && (
-                <div className="bg-white rounded-[16px] shadow-sm border border-slate-200 flex-1 flex flex-col mb-4 overflow-hidden min-h-0">
-                    {loading ? (
-                        <div className="flex-1 flex items-center justify-center"><div className="animate-pulse flex gap-2"><div className="w-3 h-3 bg-indigo-400 rounded-full"></div><div className="w-3 h-3 bg-indigo-400 rounded-full"></div><div className="w-3 h-3 bg-indigo-400 rounded-full"></div></div></div>
-                    ) : filteredTools.length === 0 ? (
-                        <div className="flex-1 flex flex-col items-center justify-center py-12">
-                            <FaWrench className="text-6xl text-slate-200 mb-4" />
-                            <h3 className="text-lg font-bold text-slate-600">Інструментів не знайдено</h3>
-                            <p className="text-slate-400 text-sm mt-1">Змініть пошуковий запит або додайте новий інструмент.</p>
-                        </div>
-                    ) : (
-                        <div className="overflow-x-auto overflow-y-auto custom-scrollbar flex-1">
-                            <table className="w-full text-left border-collapse min-w-[1000px]">
-                                <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
-                                    <tr className="border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                                        <th className="px-6 py-4">Інструмент</th>
-                                        <th className="px-6 py-4">Статус</th>
-                                        <th className="px-6 py-4 w-1/3">Поточна Локація</th>
-                                        <th className="px-6 py-4 text-right">Дії</th>
+                        <div className="flex-1 overflow-auto custom-scrollbar">
+                            <table className="w-full border-collapse min-w-[900px]">
+                                <thead className="sticky top-0 z-10">
+                                    <tr className="border-b border-slate-200">
+                                        <th className={`${T.th} text-left`}>Інструмент</th>
+                                        <th className={`${T.th} text-left w-32`}>Стан</th>
+                                        <th className={`${T.th} text-left w-[30%]`}>Локація</th>
+                                        <th className={`${T.th} text-right w-72`}></th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
-                                    {filteredTools.map(t => {
-                                        const sObj = TOOL_STATUSES[t.status];
-                                        const SIcon = sObj.icon;
-                                        const whName = t.current_warehouse_id ? warehouses.find(w=>w.id === t.current_warehouse_id)?.name : null;
-                                        const instName = t.current_installation_custom_id ? installations.find(i=>i.custom_id === t.current_installation_custom_id)?.name : null;
-
-                                        return (
-                                            <tr key={t.id} className="hover:bg-slate-50/70 transition-colors">
-                                                <td className="px-6 py-4">
-                                                    <div className="font-bold text-slate-900 text-sm leading-tight max-w-sm">{t.nomenclature?.fullName || 'Невідомий товар'}</div>
-                                                    <div className="flex items-center gap-3 mt-2">
-                                                        <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 flex items-center gap-1"><FaHashtag className="text-slate-400"/> {t.inventory_number}</span>
-                                                        {t.serial_number && <span className="text-[10px] text-slate-400 uppercase tracking-widest">SN: {t.serial_number}</span>}
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider border shadow-sm ${sObj.color}`}>
-                                                        <SIcon size={10} /> {sObj.label}
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <div className="flex flex-col gap-2">
-                                                        {t.status === 'in_stock' && whName && (
-                                                            <div className="flex items-center gap-2 text-xs font-bold text-slate-700 bg-emerald-50 w-fit px-3 py-1.5 rounded-lg border border-emerald-100"><FaWarehouse className="text-emerald-500"/> Склад: {whName}</div>
-                                                        )}
-                                                        {t.status === 'issued' && t.current_installation_custom_id && (
-                                                            <div className="flex items-center gap-2 text-xs font-bold text-slate-700 bg-blue-50 w-fit px-3 py-1.5 rounded-lg border border-blue-100">
-                                                                <FaHardHat className="text-blue-500 flex-shrink-0"/> 
-                                                                Об'єкт: #{t.current_installation_custom_id} {instName ? `— ${instName}` : ''}
-                                                            </div>
-                                                        )}
-                                                        {['under_repair', 'written_off', 'lost'].includes(t.status) && (
-                                                            <div className="text-xs font-bold text-slate-400">Локація не визначена (Статус: {sObj.label})</div>
-                                                        )}
-                                                        {t.notes && (
-                                                            <div className="text-[11px] text-slate-500 font-medium italic flex items-start gap-1">
-                                                                <FaInfoCircle className="mt-0.5 flex-shrink-0 text-slate-400"/> 
-                                                                <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-100 line-clamp-2">{t.notes}</span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4 text-right">
-                                                    <div className="flex items-center justify-end gap-2">
-                                                        {t.status === 'in_stock' && (
-                                                            <>
-                                                                <button onClick={() => openActionModal(t, 'issue')} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5"><FaArrowUp/> Видати</button>
-                                                                <button onClick={() => openActionModal(t, 'transfer')} className="p-2 text-indigo-500 hover:bg-indigo-50 rounded-lg transition-colors border border-transparent hover:border-indigo-100" title="Перемістити на інший склад"><FaExchangeAlt/></button>
-                                                            </>
-                                                        )}
-                                                        {t.status === 'issued' && (
-                                                            <button onClick={() => openActionModal(t, 'return')} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5"><FaArrowDown/> Повернути</button>
-                                                        )}
-                                                        {t.status === 'under_repair' && (
-                                                            <button onClick={() => openActionModal(t, 'return')} className="px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded-lg text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5"><FaCheck/> Ремонт завершено</button>
-                                                        )}
-                                                        
-                                                        {(t.status === 'in_stock' || t.status === 'issued') && (
-                                                            <div className="h-6 w-px bg-slate-200 mx-1"></div> 
-                                                        )}
-                                                        {(t.status === 'in_stock' || t.status === 'issued') && (
-                                                            <>
-                                                                <button onClick={() => openActionModal(t, 'repair')} className="p-2 text-amber-500 hover:bg-amber-50 rounded-lg transition-colors border border-transparent hover:border-amber-100" title="Відправити в ремонт"><FaWrench/></button>
-                                                                <button onClick={() => openActionModal(t, 'writeoff')} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-100" title="Списати / Втрачено"><FaHeartBroken/></button>
-                                                            </>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
+                                    {filteredTools.map(t => (
+                                        <tr key={t.id} className="hover:bg-slate-50 transition-colors">
+                                            <td className={T.td}>
+                                                <div className="font-semibold text-slate-900">{t.nomenclature?.fullName || 'Невідома позиція'}</div>
+                                                <div className="flex items-center gap-2 mt-0.5">
+                                                    <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                                        <FaHashtag className="text-slate-400" size={8} />{t.inventory_number}
+                                                    </span>
+                                                    {t.serial_number && <span className={T.mono}>SN {t.serial_number}</span>}
+                                                </div>
+                                            </td>
+                                            <td className={T.td}><StatusChip status={t.status} /></td>
+                                            <td className={T.td}>
+                                                <Location tool={t} />
+                                                {t.notes && (
+                                                    <div className="text-[10.5px] text-slate-400 italic truncate mt-0.5">{t.notes}</div>
+                                                )}
+                                            </td>
+                                            <td className={T.td}><ToolActions tool={t} /></td>
+                                        </tr>
+                                    ))}
                                 </tbody>
                             </table>
                         </div>
@@ -521,207 +544,206 @@ export default function ToolsPage({ externalSearch = '', externalActionTrigger =
                 </div>
             )}
 
-            {/* --- ВМІСТ: ІСТОРІЯ РУХІВ --- */}
-            {activeTab === 'movements' && (
-                <div className="bg-white rounded-[16px] shadow-sm border border-slate-200 flex-1 flex flex-col mb-4 overflow-hidden min-h-0">
-                     <div className="overflow-x-auto overflow-y-auto custom-scrollbar flex-1">
-                        <table className="w-full text-left border-collapse min-w-[1000px]">
-                            <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
-                                <tr className="border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                                    <th className="px-6 py-4">Дата / Час</th>
-                                    <th className="px-6 py-4">Інструмент</th>
-                                    <th className="px-6 py-4">Операція</th>
-                                    <th className="px-6 py-4">Маршрут / Локація</th>
-                                    <th className="px-6 py-4 text-right">Виконав</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {movements.length === 0 ? (
-                                    <tr><td colSpan="5" className="text-center py-12 text-slate-400">Історія порожня</td></tr>
-                                ) : movements.map(m => {
-                                    const d = new Date(m.movement_date);
-                                    const tool = tools.find(t => t.id === m.tool_id);
-                                    const opConf = MOVEMENT_TYPES[m.movement_type] || { label: 'Інше', color: 'bg-slate-100 text-slate-600 border-slate-200', icon: FaInfoCircle };
-                                    const OpIcon = opConf.icon;
-                                    
-                                    // Формування назви об'єкта для історії з бази
-                                    const instName = m.installation_custom_id ? installations.find(i=>i.custom_id === m.installation_custom_id)?.name : null;
-                                    const instLabel = m.installation_custom_id ? `Об'єкт #${m.installation_custom_id} ${instName ? `(${instName})` : ''}` : '';
-
-                                    let routeStr = '';
-                                    if (m.movement_type === 'issue') routeStr = `${warehouses.find(w=>w.id===m.warehouse_from_id)?.name || 'Склад'} → ${instLabel}`;
-                                    else if (m.movement_type === 'return') routeStr = `${instLabel} → ${warehouses.find(w=>w.id===m.warehouse_to_id)?.name || 'Склад'}`;
-                                    else if (m.movement_type === 'transfer') routeStr = `${warehouses.find(w=>w.id===m.warehouse_from_id)?.name || 'Склад'} → ${warehouses.find(w=>w.id===m.warehouse_to_id)?.name || 'Склад'}`;
-                                    else routeStr = 'Списання / Втрата';
-
-                                    return (
-                                        <tr key={m.id} className="hover:bg-slate-50/70 transition-colors">
-                                            <td className="px-6 py-4 w-32 align-top border-r border-slate-50">
-                                                <div className="font-bold text-slate-800 text-[13px]">{d.toLocaleDateString('uk-UA')}</div>
-                                                <div className="text-[11px] text-slate-400 font-medium mt-1">{d.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}</div>
-                                            </td>
-                                            <td className="px-6 py-4 min-w-[250px] align-top">
-                                                <div className="font-bold text-slate-800 text-sm leading-tight line-clamp-2 max-w-sm">{tool?.nomenclature?.fullName || 'Невідомо'}</div>
-                                                <div className="text-[11px] font-mono text-slate-500 mt-1 uppercase tracking-widest bg-slate-100 px-1.5 py-0.5 rounded w-fit">INV: {tool?.inventory_number}</div>
-                                            </td>
-                                            <td className="px-6 py-4 align-top">
-                                                <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider border shadow-sm ${opConf.color}`}>
-                                                    <OpIcon size={10} /> {opConf.label}
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4 align-top">
-                                                <div className="text-xs font-bold text-slate-600 bg-slate-50 px-3 py-1.5 inline-block rounded-lg border border-slate-100">{routeStr}</div>
-                                                {m.notes && <div className="text-[10px] text-slate-500 italic mt-2 p-1.5 bg-slate-50 rounded border border-slate-100 line-clamp-2"><span className="font-bold">Деталі:</span> {m.notes}</div>}
-                                            </td>
-                                            <td className="px-6 py-4 text-right align-top border-l border-slate-50">
-                                                <div className="inline-flex items-center justify-end gap-2 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-100 w-full">
-                                                    <span className="font-bold text-slate-600 text-xs truncate" title={employeesDict[m.performed_by] || 'Система'}>{employeesDict[m.performed_by] || 'Система'}</span>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    )
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
+            {/* ---------- ЖУРНАЛ РУХІВ ---------- */}
+            {tab === 'movements' && (
+                <div className={`${T.card} flex-1 flex flex-col overflow-hidden min-h-0`}>
+                    {loading ? <Skeleton rows={8} /> : filteredMovements.length === 0 ? (
+                        <EmptyState icon={FaHistory} title="Переміщень немає"
+                            hint="Тут з'являться видачі, повернення та списання інструменту." />
+                    ) : (
+                        <div className="flex-1 overflow-auto custom-scrollbar divide-y divide-slate-100">
+                            {filteredMovements.map(m => {
+                                const cfg = MOVE[m.movement_type] || { label: m.movement_type, tone: 'neutral', icon: FaInfoCircle };
+                                const d = new Date(m.movement_date || m.created_at);
+                                const from = whName(m.warehouse_from_id)
+                                    || (m.installation_custom_id && m.movement_type === 'return'
+                                        ? `#${m.installation_custom_id} ${instName(m.installation_custom_id) || ''}` : null);
+                                const to = whName(m.warehouse_to_id)
+                                    || (m.installation_custom_id && m.movement_type === 'issue'
+                                        ? `#${m.installation_custom_id} ${instName(m.installation_custom_id) || ''}` : null);
+                                return (
+                                    <div key={m.id} className="px-3 py-2.5 hover:bg-slate-50 transition-colors">
+                                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                                            <Chip tone={cfg.tone} icon={cfg.icon}>{cfg.label}</Chip>
+                                            <span className="text-[10.5px] text-slate-400 tabular-nums">
+                                                {d.toLocaleDateString('uk-UA')} {d.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}
+                                            </span>
+                                            {m.expected_return_date && (
+                                                <Chip tone="warn" icon={FaClock}>
+                                                    до {new Date(m.expected_return_date).toLocaleDateString('uk-UA')}
+                                                </Chip>
+                                            )}
+                                            <span className="ml-auto text-[11px] text-slate-500">{empDict[m.performed_by] || 'Система'}</span>
+                                        </div>
+                                        <div className="text-[13px] font-semibold text-slate-900">
+                                            {m.tool?.nomenclature?.fullName || 'Інструмент'}
+                                            {m.tool && <span className={`${T.mono} ml-2`}>{m.tool.inventory_number}</span>}
+                                        </div>
+                                        <div className="text-[11.5px] text-slate-500 mt-0.5">
+                                            {from || '—'} <span className="text-slate-300">→</span> {to || 'списано'}
+                                            {m.notes && <span className="italic"> · {m.notes}</span>}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                 </div>
             )}
 
-            {/* --- МОДАЛКА: СТВОРЕННЯ ІНСТРУМЕНТУ --- */}
-            <AnimatePresence>
-                {isAddModalOpen && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-white rounded-2xl w-full max-w-xl shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-                            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-indigo-50 rounded-t-2xl">
-                                <div>
-                                    <h2 className="text-xl font-bold text-indigo-900 flex items-center gap-2"><FaPlus/> Зареєструвати новий інструмент</h2>
+            {/* ---------- ШУХЛЯДА ІНСТРУМЕНТА (телефон) ---------- */}
+            <Modal
+                isOpen={!!sheetTool}
+                onClose={() => setSheetTool(null)}
+                title={sheetTool?.nomenclature?.fullName || ''}
+                subtitle={sheetTool ? `Інв. № ${sheetTool.inventory_number}` : ''}
+                size="sm"
+            >
+                {sheetTool && (
+                    <div className="space-y-3">
+                        <div className={`${T.inset} px-3 py-2.5 space-y-2`}>
+                            <div className="flex items-center justify-between">
+                                <span className="text-[11.5px] text-slate-500">Стан</span>
+                                <StatusChip status={sheetTool.status} />
+                            </div>
+                            <div className="flex items-start justify-between gap-3">
+                                <span className="text-[11.5px] text-slate-500 flex-shrink-0">Локація</span>
+                                <span className="text-right"><Location tool={sheetTool} /></span>
+                            </div>
+                            {sheetTool.serial_number && (
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[11.5px] text-slate-500">Серійний номер</span>
+                                    <span className={T.mono}>{sheetTool.serial_number}</span>
                                 </div>
-                                <button onClick={() => setIsAddModalOpen(false)} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm"><FaTimes/></button>
-                            </div>
-                            <div className="p-6">
-                                <form id="add-tool-form" onSubmit={handleSaveTool} className="space-y-5">
-                                    <div className="z-20 relative">
-                                        <label className="block text-xs font-bold text-slate-600 mb-1.5">Модель (з довідника номенклатури) <span className="text-red-500">*</span></label>
-                                        <SearchableSelect 
-                                            options={nomOptions} value={addForm.nomenclature_id} 
-                                            onChange={v => setAddForm({...addForm, nomenclature_id: v})}
-                                            placeholder="Оберіть інструмент..." icon={FaWrench}
-                                        />
-                                    </div>
-                                    
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Інвентарний номер <span className="text-red-500">*</span></label>
-                                            <div className="flex gap-2">
-                                                <input required type="text" value={addForm.inventory_number} onChange={e => setAddForm({...addForm, inventory_number: e.target.value})} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 font-mono uppercase" placeholder="INV-0001" />
-                                                <button type="button" onClick={handleGenerateInvNumber} className="px-3 bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 font-bold text-xs transition-colors" title="Згенерувати">AUTO</button>
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Серійний номер (Опц.)</label>
-                                            <input type="text" value={addForm.serial_number} onChange={e => setAddForm({...addForm, serial_number: e.target.value})} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-mono text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="SN..." />
-                                        </div>
-                                    </div>
-
-                                    <div className="z-10 relative">
-                                        <label className="block text-xs font-bold text-slate-600 mb-1.5">Початковий склад <span className="text-red-500">*</span></label>
-                                        <SearchableSelect 
-                                            options={whOptions} value={addForm.warehouse_id} 
-                                            onChange={v => setAddForm({...addForm, warehouse_id: v})}
-                                            placeholder="Де зараз лежить?" icon={FaWarehouse}
-                                        />
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-xs font-bold text-slate-600 mb-1.5">Стан / Комплектація (Опц.)</label>
-                                        <textarea rows="2" value={addForm.notes} onChange={e => setAddForm({...addForm, notes: e.target.value})} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 resize-none" placeholder="Новий в коробці, без акумулятора і т.д."></textarea>
-                                    </div>
-                                </form>
-                            </div>
-                            <div className="p-4 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 rounded-b-2xl">
-                                <button type="button" onClick={() => setIsAddModalOpen(false)} className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
-                                <button form="add-tool-form" type="submit" disabled={isSubmitting} className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-md transition-colors text-sm">
-                                    {isSubmitting ? 'Обробка...' : 'Зареєструвати'}
-                                </button>
-                            </div>
-                        </motion.div>
-                    </motion.div>
+                            )}
+                            {sheetTool.notes && (
+                                <div className="pt-1.5 border-t border-slate-200 text-[12px] text-slate-600 italic">
+                                    {sheetTool.notes}
+                                </div>
+                            )}
+                        </div>
+                        <ToolActions tool={sheetTool} full />
+                    </div>
                 )}
-            </AnimatePresence>
+            </Modal>
 
-            {/* --- МОДАЛКА: ДІЯ (ВИДАЧА / ПОВЕРНЕННЯ / РЕМОНТ) --- */}
-            <AnimatePresence>
-                {isActionModalOpen && selectedTool && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-white rounded-2xl w-full max-w-lg shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-                            <div className={`p-6 border-b border-slate-100 flex justify-between items-center rounded-t-2xl ${actionForm.type === 'issue' ? 'bg-blue-50' : actionForm.type === 'return' ? 'bg-emerald-50' : actionForm.type === 'repair' || actionForm.type === 'writeoff' ? 'bg-rose-50' : 'bg-indigo-50'}`}>
-                                <div>
-                                    <h2 className={`text-xl font-bold flex items-center gap-2 ${actionForm.type === 'issue' ? 'text-blue-800' : actionForm.type === 'return' ? 'text-emerald-800' : actionForm.type === 'repair' || actionForm.type === 'writeoff' ? 'text-rose-800' : 'text-indigo-800'}`}>
-                                        {actionForm.type === 'issue' ? <><FaArrowUp/> Видача на об'єкт</> : actionForm.type === 'return' ? <><FaArrowDown/> Повернення на склад</> : actionForm.type === 'transfer' ? <><FaExchangeAlt/> Переміщення</> : <><FaWrench/> Зміна стану</>}
-                                    </h2>
-                                </div>
-                                <button onClick={() => setIsActionModalOpen(false)} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm"><FaTimes/></button>
-                            </div>
-                            <div className="p-6">
-                                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 mb-5">
-                                    <div className="font-bold text-slate-800 text-sm leading-tight">{selectedTool.nomenclature?.fullName}</div>
-                                    <div className="text-[11px] font-mono text-slate-500 mt-1.5 uppercase tracking-widest bg-slate-100 px-1.5 py-0.5 rounded w-fit">INV: {selectedTool.inventory_number}</div>
-                                </div>
+            {/* ---------- ДОДАВАННЯ ІНСТРУМЕНТА ---------- */}
+            <Modal
+                isOpen={addModal}
+                onClose={() => setAddModal(false)}
+                title="Новий інструмент"
+                subtitle="Одна фізична одиниця з власним інвентарним номером"
+                size="sm"
+                footer={<>
+                    <Btn variant="outline" onClick={() => setAddModal(false)}>Скасувати</Btn>
+                    <Btn variant="accent" onClick={saveTool} disabled={busy}>{busy ? 'Зберігаємо…' : 'Додати'}</Btn>
+                </>}
+            >
+                <div className="space-y-3">
+                    <Field label="Позиція номенклатури" required
+                        hint={nomOptions.length ? undefined : 'У номенклатурі ще немає позицій типу «Інструмент»'}>
+                        <Picker
+                            options={nomOptions} value={addForm.nomenclature_id}
+                            onChange={v => setAddForm(f => ({ ...f, nomenclature_id: v }))}
+                            placeholder="Оберіть інструмент…" icon={FaBoxOpen}
+                            searchPlaceholder="Назва або SKU…"
+                        />
+                    </Field>
 
-                                <form id="action-tool-form" onSubmit={handleExecuteAction} className="space-y-4">
-                                    
-                                    {actionForm.type === 'issue' && (
-                                        <>
-                                            <div className="z-30 relative">
-                                                <label className="block text-xs font-bold text-slate-600 mb-1.5 flex justify-between">
-                                                    <span>Об'єкт / Локація <span className="text-red-500">*</span></span>
-                                                </label>
-                                                <SearchableSelectWithAdd 
-                                                    options={instOptions} 
-                                                    value={actionForm.installation_id} 
-                                                    onChange={v => setActionForm({...actionForm, installation_id: v})} 
-                                                    onAddNew={handleQuickAddInstallation}
-                                                    placeholder="Оберіть об'єкт..." 
-                                                    icon={FaHardHat} 
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-bold text-slate-600 mb-1.5">Очікувана дата повернення (Опц.)</label>
-                                                <input type="date" value={actionForm.expected_date} onChange={e => setActionForm({...actionForm, expected_date: e.target.value})} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500" />
-                                            </div>
-                                        </>
-                                    )}
+                    <Field label="Інвентарний номер" required>
+                        <div className="flex gap-2">
+                            <input className={T.input} placeholder="INV-1234" value={addForm.inventory_number}
+                                onChange={e => setAddForm(f => ({ ...f, inventory_number: e.target.value }))} />
+                            <IconBtn variant="soft" icon={FaMagic} label="Згенерувати номер" onClick={genInvNumber} />
+                        </div>
+                    </Field>
 
-                                    {(actionForm.type === 'return' || actionForm.type === 'transfer') && (
-                                        <div className="z-30 relative">
-                                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Склад <span className="text-red-500">*</span></label>
-                                            <SearchableSelect options={whOptions} value={actionForm.warehouse_id} onChange={v => setActionForm({...actionForm, warehouse_id: v})} placeholder="На який склад?" icon={FaWarehouse} />
-                                        </div>
-                                    )}
+                    <Field label="Серійний номер">
+                        <input className={T.input} placeholder="Необов’язково" value={addForm.serial_number}
+                            onChange={e => setAddForm(f => ({ ...f, serial_number: e.target.value }))} />
+                    </Field>
 
-                                    {actionForm.type === 'writeoff' && (
-                                        <div className="bg-rose-50 p-3 rounded-xl border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2 mb-2">
-                                            <FaExclamationTriangle size={16}/> Увага: Інструмент буде повністю списано або позначено як втрачений.
-                                        </div>
-                                    )}
+                    <Field label="Склад зберігання" required>
+                        <Picker options={whOptions} value={addForm.warehouse_id}
+                            onChange={v => setAddForm(f => ({ ...f, warehouse_id: v }))}
+                            placeholder="Оберіть склад…" icon={FaWarehouse} />
+                    </Field>
 
-                                    <div>
-                                        <label className="block text-xs font-bold text-slate-600 mb-1.5">Деталі / Стан / Коментар</label>
-                                        <textarea rows="2" value={actionForm.notes} onChange={e => setActionForm({...actionForm, notes: e.target.value})} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 resize-none" placeholder={actionForm.type === 'issue' ? "Напр: В багажнику у Василя" : "Напр: Зламався патрон, повернуто без кабелю..."}></textarea>
-                                    </div>
-                                </form>
-                            </div>
-                            <div className="p-4 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 rounded-b-2xl">
-                                <button type="button" onClick={() => setIsActionModalOpen(false)} className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm">Скасувати</button>
-                                <button form="action-tool-form" type="submit" disabled={isSubmitting} className={`px-6 py-2.5 text-white rounded-xl font-bold shadow-md transition-colors text-sm ${actionForm.type === 'issue' ? 'bg-blue-600 hover:bg-blue-700' : actionForm.type === 'return' ? 'bg-emerald-600 hover:bg-emerald-700' : actionForm.type === 'repair' || actionForm.type === 'writeoff' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
-                                    {isSubmitting ? 'Обробка...' : 'Підтвердити'}
-                                </button>
-                            </div>
-                        </motion.div>
-                    </motion.div>
+                    <Field label="Примітка">
+                        <input className={T.input} placeholder="Стан, комплектність…" value={addForm.notes}
+                            onChange={e => setAddForm(f => ({ ...f, notes: e.target.value }))} />
+                    </Field>
+                </div>
+            </Modal>
+
+            {/* ---------- ОПЕРАЦІЯ НАД ІНСТРУМЕНТОМ ---------- */}
+            <Modal
+                isOpen={!!action}
+                onClose={() => setAction(null)}
+                title={action ? ACTIONS[action.type].title : ''}
+                subtitle={action ? `${action.tool.nomenclature?.fullName || ''} · ${action.tool.inventory_number}` : ''}
+                tone={action && ['writeoff', 'lost'].includes(action.type) ? 'danger'
+                    : action?.type === 'return' ? 'ok' : 'accent'}
+                size="sm"
+                footer={<>
+                    <Btn variant="outline" onClick={() => setAction(null)}>Скасувати</Btn>
+                    <Btn
+                        variant={action && ['writeoff', 'lost'].includes(action.type) ? 'danger' : 'accent'}
+                        onClick={runAction} disabled={busy}
+                    >
+                        {busy ? 'Проводимо…' : action ? ACTIONS[action.type].label : ''}
+                    </Btn>
+                </>}
+            >
+                {action && (
+                    <div className="space-y-3">
+                        {needsInstallation && (
+                            <>
+                                <Field label="Об'єкт" required
+                                    hint="Якщо потрібного об'єкта немає — почніть вводити назву і створіть його прямо тут">
+                                    <Picker
+                                        options={instOptions} value={action.installation_id}
+                                        onChange={v => setAction(a => ({ ...a, installation_id: v }))}
+                                        onAddNew={quickAddInstallation}
+                                        addLabel="Створити об'єкт"
+                                        placeholder="Оберіть об'єкт…" icon={FaHardHat}
+                                        searchPlaceholder="Назва або номер…"
+                                    />
+                                </Field>
+                                <Field label="Очікуване повернення"
+                                    hint="Прострочені видачі позначаються в списку червоним">
+                                    <input type="date" className={T.input} value={action.expected_date}
+                                        onChange={e => setAction(a => ({ ...a, expected_date: e.target.value }))} />
+                                </Field>
+                            </>
+                        )}
+
+                        {needsWarehouse && (
+                            <Field label={action.type === 'return' ? 'Склад повернення' : 'Куди переміщуємо'} required>
+                                <Picker
+                                    options={action.type === 'transfer'
+                                        ? whOptions.filter(w => String(w.id) !== String(action.tool.current_warehouse_id))
+                                        : whOptions}
+                                    value={action.warehouse_id}
+                                    onChange={v => setAction(a => ({ ...a, warehouse_id: v }))}
+                                    placeholder="Оберіть склад…" icon={FaWarehouse}
+                                />
+                            </Field>
+                        )}
+
+                        <Field
+                            label={['writeoff', 'lost'].includes(action.type) ? 'Причина' : 'Коментар'}
+                            required={['writeoff', 'lost'].includes(action.type)}
+                        >
+                            <input className={T.input}
+                                placeholder={['writeoff', 'lost'].includes(action.type)
+                                    ? 'Напр. згорів двигун' : 'Необов’язково'}
+                                value={action.notes}
+                                onChange={e => setAction(a => ({ ...a, notes: e.target.value }))} />
+                        </Field>
+                    </div>
                 )}
-            </AnimatePresence>
-
+            </Modal>
         </div>
     );
 }

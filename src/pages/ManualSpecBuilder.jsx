@@ -1,366 +1,615 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+// =====================================================================
+//  Комплектація вручну — план матеріалів на об'єкт.
+//
+//  Це саме ПЛАН: скільки чого потрібно. Факт (резерв і видача) живе
+//  поруч довідково, і саме він не дає випадково зменшити план нижче
+//  того, що вже фізично поїхало на об'єкт.
+//
+//  Збереження створює НОВУ версію специфікації, а попередню архівує.
+//  Раніше це відбувалось мовчки; тепер перед збереженням видно, що
+//  саме зміниться, і скільки буде версія.
+// =====================================================================
+
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-    FaTimes, FaPlus, FaTrash, FaChevronDown, FaClipboardList,
-    FaSpinner, FaLayerGroup, FaCheck, FaSearch, FaExclamationTriangle,
-    FaMinus, FaBoxOpen
+    FaPlus, FaTrash, FaClipboardList, FaLayerGroup, FaSearch,
+    FaExclamationTriangle, FaMinus, FaBoxOpen, FaExchangeAlt, FaTimes,
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
 import { NomenclatureModal } from './NomenclatureModal';
+import {
+    T, TONE, Btn, IconBtn, Chip, Picker, Modal, EmptyState,
+    Skeleton, useToast, useConfirm, humanError, num,
+} from '../ui';
 
-// --- Пошуковий пікер для ДОДАВАННЯ позиції (показує лише ще не додані) ---
-const AddPicker = ({ options, onPick, onCreateNew }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [search, setSearch] = useState('');
-    const wrapperRef = useRef(null);
+const newKey = () => Math.random().toString(36).slice(2, 10);
 
-    useEffect(() => {
-        const handleClickOutside = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setIsOpen(false); };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    const filtered = options.filter(o =>
-        o.fullName.toLowerCase().includes(search.toLowerCase()) || (o.sku && o.sku.toLowerCase().includes(search.toLowerCase()))
-    );
-
-    return (
-        <div className="relative w-full" ref={wrapperRef}>
-            <div
-                className="w-full px-4 py-3 bg-indigo-600 text-white rounded-xl flex justify-between items-center cursor-pointer text-sm font-bold shadow-md hover:bg-indigo-700 transition-colors"
-                onClick={() => setIsOpen(o => !o)}
-            >
-                <span className="flex items-center gap-2"><FaPlus size={12}/> Додати позицію з бази</span>
-                <FaChevronDown className={`text-white/80 text-xs transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-            </div>
-            <AnimatePresence>
-                {isOpen && (
-                    <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} className="absolute z-[95] w-full left-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-72 flex flex-col overflow-hidden">
-                        <div className="p-2 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
-                            <FaSearch className="text-slate-400 ml-1.5" />
-                            <input autoFocus type="text" className="w-full px-2 py-2 bg-transparent text-sm outline-none" placeholder="Пошук по назві або SKU..." value={search} onChange={e => setSearch(e.target.value)} />
-                        </div>
-                        <div className="overflow-y-auto custom-scrollbar flex-1 p-1">
-                            {filtered.length > 0 ? filtered.slice(0, 60).map(o => (
-                                <div key={o.id} className="px-3 py-2.5 cursor-pointer text-sm rounded-lg mb-0.5 hover:bg-indigo-50 border border-transparent hover:border-indigo-100 transition-colors" onClick={() => { onPick(o.id); setSearch(''); }}>
-                                    <div className="font-bold text-slate-800 leading-tight">{o.fullName}</div>
-                                    <div className="flex items-center gap-2 mt-1">
-                                        {o.rootCategoryName && <span className="text-[10px] text-indigo-500 uppercase font-bold tracking-wider bg-indigo-50 px-1.5 rounded">{o.rootCategoryName}</span>}
-                                        {o.sku && <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 rounded">SKU: {o.sku}</span>}
-                                    </div>
-                                </div>
-                            )) : <div className="px-4 py-6 text-sm text-slate-400 text-center">Нічого не знайдено (або все вже додано)</div>}
-                        </div>
-                        {onCreateNew && (
-                            <div className="p-2 border-t border-slate-100 bg-slate-50 flex-shrink-0">
-                                <button
-                                    type="button"
-                                    onClick={() => { onCreateNew(search.trim()); setIsOpen(false); setSearch(''); }}
-                                    className="w-full py-2.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-lg text-sm font-bold transition-colors flex items-center justify-center gap-2"
-                                >
-                                    <FaPlus size={11} /> {search.trim() ? `Створити нову позицію «${search.trim()}»` : 'Створити нову позицію'}
-                                </button>
-                            </div>
-                        )}
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
-    );
-};
-
-/**
- * Ручне внесення / редагування комплектації (специфікації).
- * Показує ПЛАН (кількість, що редагується) vs ФАКТ (резерв / видано з v_object_material_needs).
- *
- * props: isOpen, onClose, onSuccess, installationId (required),
- *        taskId (specifications.notes namespace), title, showToast
- */
-export default function ManualSpecBuilder({ isOpen, onClose, onSuccess, installationId, taskId = null, title, showToast }) {
+export default function ManualSpecBuilder({
+    isOpen, onClose, onSuccess, installationId, taskId = null, title,
+}) {
     const { employee } = useAuth();
-    const notify = typeof showToast === 'function' ? showToast : (m, t) => { if (t === 'error') alert(m); else console.warn('[ManualSpecBuilder]', m); };
+    const toast = useToast();
+    const confirm = useConfirm();
 
     const [nomenclatures, setNomenclatures] = useState([]);
     const [cats, setCats] = useState([]);
-    const [rows, setRows] = useState([]);          // { key, nomenclature_id, quantity }
-    const [factByNom, setFactByNom] = useState({}); // nomId -> { reserved, issued }
+    const [rows, setRows] = useState([]);              // { key, nomenclature_id, quantity }
+    const [baseline, setBaseline] = useState(new Map()); // що було в чинній версії
+    const [fact, setFact] = useState({});              // nomId → { reserved, issued }
+    const [version, setVersion] = useState(1);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
-    // Швидке створення номенклатури прямо з пікера
-    const [quickAdd, setQuickAdd] = useState({ open: false, name: '' });
+    const [search, setSearch] = useState('');
+    const [quickAdd, setQuickAdd] = useState(null);    // { name }
+    const [base, setBase] = useState(null);            // чинна специфікація, яку правимо
+    const [replacingKey, setReplacingKey] = useState(null); // рядок, який зараз замінюємо — інлайн, без другої модалки
 
-    const newKey = () => Math.random().toString(36).slice(2, 10);
+    /* ---------------- ЗАВАНТАЖЕННЯ ---------------- */
 
     const loadData = useCallback(async () => {
         setLoading(true);
+        setReplacingKey(null);
         try {
-            const [nomRes, catRes, needsRes] = await Promise.all([
+            const [nomRes, catRes, needsRes, verRes] = await Promise.all([
                 supabase.from('nomenclature').select('id, name, sku, category_id, unit:units(name)').eq('is_active', true),
                 supabase.from('categories').select('id, name, parent_id'),
-                supabase.from('v_object_material_needs').select('nomenclature_id, reserved_quantity, issued_quantity').eq('installation_custom_id', installationId)
+                supabase.from('v_object_material_needs')
+                    .select('nomenclature_id, reserved_quantity, issued_quantity')
+                    .eq('installation_custom_id', installationId),
+                supabase.from('specifications').select('version').eq('installation_custom_id', installationId),
             ]);
-            const cats = catRes.data || [];
-            setCats(cats);
-            const processedNom = (nomRes.data || []).map(item => {
-                let path = [];
-                let rootName = '';
-                let currentId = item.category_id;
-                while (currentId) {
-                    const cat = cats.find(c => c.id === currentId);
-                    if (cat) { path.unshift(cat.name); rootName = cat.name; currentId = cat.parent_id; } else break;
-                }
-                return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim(), rootCategoryName: rootName };
-            });
-            setNomenclatures(processedNom);
 
-            // Факт (резерв/видано) по номенклатурі
-            const fact = {};
+            const catList = catRes.data || [];
+            setCats(catList);
+            const catById = new Map(catList.map(c => [c.id, c]));
+
+            setNomenclatures((nomRes.data || []).map(item => {
+                const path = [];
+                let rootName = '', id = item.category_id, guard = 0;
+                while (id && guard++ < 20) {
+                    const c = catById.get(id);
+                    if (!c) break;
+                    path.unshift(c.name);
+                    rootName = c.name;
+                    id = c.parent_id;
+                }
+                return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim(), rootCategoryName: rootName || 'Інше' };
+            }).sort((a, b) => a.fullName.localeCompare(b.fullName, 'uk')));
+
+            const f = {};
             (needsRes.data || []).forEach(n => {
-                const cur = fact[n.nomenclature_id] || { reserved: 0, issued: 0 };
+                const cur = f[n.nomenclature_id] || { reserved: 0, issued: 0 };
                 cur.reserved += parseFloat(n.reserved_quantity) || 0;
                 cur.issued += parseFloat(n.issued_quantity) || 0;
-                fact[n.nomenclature_id] = cur;
+                f[n.nomenclature_id] = cur;
             });
-            setFactByNom(fact);
+            setFact(f);
 
-            // Стартові рядки з активної специфікації цього типу
-            let specQuery = supabase.from('specifications')
-                .select('id, version, status, notes, items:specification_items(nomenclature_id, quantity)')
+            const versions = (verRes.data || []).map(v => v.version);
+            setVersion(versions.length ? Math.max(...versions) + 1 : 1);
+
+            // Чинні специфікації об'єкта. Спершу шукаємо потрібного типу,
+            // але якщо такої немає — беремо будь-яку, а не відкриваємось
+            // порожніми. Інакше людина додає одну позицію й ненавмисно
+            // замінює нею всю комплектацію.
+            const { data: specs } = await supabase.from('specifications')
+                .select('id, version, name, notes, items:specification_items(id, nomenclature_id, quantity)')
                 .eq('installation_custom_id', installationId)
                 .eq('status', 'confirmed')
-                .order('version', { ascending: false })
-                .limit(1);
-            if (taskId) specQuery = specQuery.eq('notes', taskId);
-            const { data: specData } = await specQuery.maybeSingle();
+                .order('version', { ascending: false });
 
-            if (specData?.items?.length) {
-                setRows(specData.items.map(it => ({ key: newKey(), nomenclature_id: it.nomenclature_id, quantity: it.quantity })));
-            } else {
-                setRows([]);
-            }
-        } catch (err) {
-            notify(err.message, 'error');
-        } finally {
-            setLoading(false);
-        }
-    }, [installationId, taskId]); // eslint-disable-line react-hooks/exhaustive-deps
+            const list = specs || [];
+            const exact = taskId ? list.find(s => s.notes === taskId) : null;
+            const spec = exact || list[0] || null;
+
+            setBase(spec ? {
+                id: spec.id,
+                version: spec.version,
+                name: spec.name,
+                notes: spec.notes,
+                // Редагуємо специфікацію іншого типу — про це треба сказати вголос
+                otherType: !!taskId && spec.notes !== taskId,
+                itemIdByNom: new Map((spec.items || []).map(it => [it.nomenclature_id, it.id])),
+            } : null);
+
+            const items = spec?.items || [];
+            setRows(items.map(it => ({
+                key: newKey(), nomenclature_id: it.nomenclature_id, quantity: String(it.quantity),
+            })));
+            setBaseline(new Map(items.map(it => [it.nomenclature_id, parseFloat(it.quantity)])));
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setLoading(false); }
+    }, [installationId, taskId, toast]);
 
     useEffect(() => { if (isOpen && installationId) loadData(); }, [isOpen, installationId, loadData]);
 
-    const nomById = (id) => nomenclatures.find(n => n.id === id);
+    /* ---------------- РЯДКИ ---------------- */
+
+    const nomById = useCallback(
+        (id) => nomenclatures.find(n => n.id === id), [nomenclatures]
+    );
 
     const addRow = (nomId) => {
-        setRows(r => {
-            if (r.some(x => x.nomenclature_id === nomId)) return r; // без дублів
-            return [...r, { key: newKey(), nomenclature_id: nomId, quantity: 1 }];
-        });
+        if (!nomId) return;
+        setRows(r => r.some(x => x.nomenclature_id === nomId)
+            ? r
+            : [...r, { key: newKey(), nomenclature_id: nomId, quantity: '1' }]);
+        setSearch('');
     };
+
     const removeRow = (key) => setRows(r => r.filter(x => x.key !== key));
     const setQty = (key, q) => setRows(r => r.map(x => x.key === key ? { ...x, quantity: q } : x));
-    const bumpQty = (key, delta) => setRows(r => r.map(x => {
+    const bump = (key, d) => setRows(r => r.map(x => {
         if (x.key !== key) return x;
         const cur = parseFloat(x.quantity) || 0;
-        return { ...x, quantity: Math.max(0, +(cur + delta).toFixed(2)) };
+        return { ...x, quantity: String(Math.max(0, Math.round((cur + d) * 100) / 100)) };
     }));
 
-    const addedIds = new Set(rows.map(r => r.nomenclature_id));
-    const availableToAdd = nomenclatures.filter(n => !addedIds.has(n.id));
+    const addedIds = useMemo(() => new Set(rows.map(r => r.nomenclature_id)), [rows]);
 
-    // Нову позицію, створену через NomenclatureModal, одразу додаємо в список і в специфікацію
-    const handleQuickAddSuccess = (savedItem) => {
-        if (!savedItem) return;
-        let path = [];
-        let rootName = '';
-        let currentId = savedItem.category_id;
-        while (currentId) {
-            const cat = cats.find(c => c.id === currentId);
-            if (cat) { path.unshift(cat.name); rootName = cat.name; currentId = cat.parent_id; } else break;
-        }
-        const processed = { ...savedItem, fullName: `${path.join(' ')} ${savedItem.name}`.trim(), rootCategoryName: rootName };
-        setNomenclatures(prev => [...prev.filter(n => n.id !== processed.id), processed]);
-        addRow(processed.id);
-    };
+    const addOptions = useMemo(() => nomenclatures
+        .filter(n => !addedIds.has(n.id))
+        .map(n => ({ id: n.id, label: `${n.fullName}${n.sku ? ` · ${n.sku}` : ''}` })),
+        [nomenclatures, addedIds]);
 
-    // Групування за кореневою категорією
-    const grouped = (() => {
+    /* Пошук усередині вже доданих — коли позицій за сотню */
+    const visibleRows = useMemo(() => {
+        const term = search.trim().toLowerCase();
+        if (!term) return rows;
+        return rows.filter(r => {
+            const n = nomById(r.nomenclature_id);
+            return (n?.fullName || '').toLowerCase().includes(term)
+                || (n?.sku || '').toLowerCase().includes(term);
+        });
+    }, [rows, search, nomById]);
+
+    const grouped = useMemo(() => {
         const map = new Map();
-        rows.forEach(row => {
-            const nom = nomById(row.nomenclature_id);
-            const g = nom?.rootCategoryName || 'Інше';
+        visibleRows.forEach(row => {
+            const g = nomById(row.nomenclature_id)?.rootCategoryName || 'Інше';
             if (!map.has(g)) map.set(g, []);
             map.get(g).push(row);
         });
-        return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-    })();
+        return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0], 'uk'));
+    }, [visibleRows, nomById]);
 
-    const totalValid = rows.filter(r => r.nomenclature_id && parseFloat(r.quantity) > 0).length;
+    /* ---------------- ЩО ЗМІНИТЬСЯ ---------------- */
 
-    const handleSave = async () => {
+    const diff = useMemo(() => {
+        const added = [], changed = [], removed = [];
+        const current = new Map();
+        rows.forEach(r => {
+            const q = parseFloat(r.quantity);
+            if (r.nomenclature_id && q > 0) current.set(r.nomenclature_id, q);
+        });
+
+        current.forEach((q, id) => {
+            if (!baseline.has(id)) added.push(id);
+            else if (Math.abs(baseline.get(id) - q) > 0.0001) changed.push(id);
+        });
+        baseline.forEach((_, id) => { if (!current.has(id)) removed.push(id); });
+
+        return { added, changed, removed, total: current.size, dirty: added.length + changed.length + removed.length };
+    }, [rows, baseline]);
+
+    /* Позиції, де план опустили нижче вже виданого — це заборонено по суті */
+    const conflicts = useMemo(() => rows.filter(r => {
+        const issued = fact[r.nomenclature_id]?.issued || 0;
+        const plan = parseFloat(r.quantity) || 0;
+        return issued > 0 && plan < issued;
+    }), [rows, fact]);
+
+    /* ---------------- ЗБЕРЕЖЕННЯ ----------------
+       Два різні наміри, які раніше були одним:
+
+       «Оновити чинну»  — правки лягають у ту саму специфікацію.
+                          Додав одну позицію — додалась одна позиція.
+       «Нова версія»    — чинна архівується, створюється наступна
+                          з поточним списком. Для перегляду плану.
+    */
+
+    const validate = () => {
         const clean = rows.filter(r => r.nomenclature_id && parseFloat(r.quantity) > 0);
-        if (clean.length === 0) return notify('Додайте хоча б одну позицію з кількістю', 'warning');
+        if (!clean.length) { toast('Додайте хоча б одну позицію з кількістю', 'warning'); return null; }
+
+        if (conflicts.length) {
+            const first = nomById(conflicts[0].nomenclature_id);
+            toast(`«${first?.fullName || 'Позиція'}»: план менший за вже видане. Спершу проведіть повернення.`, 'error');
+            return null;
+        }
+        return clean;
+    };
+
+    const changeSummary = (clean) => [
+        `Позицій у плані: ${clean.length}`,
+        ...(diff.added.length ? [`Додається: ${diff.added.length}`] : []),
+        ...(diff.changed.length ? [`Змінюється кількість: ${diff.changed.length}`] : []),
+        ...(diff.removed.length ? [`Прибирається: ${diff.removed.length}`] : []),
+    ];
+
+    /** Правки в чинну специфікацію, без нової версії */
+    const updateCurrent = async () => {
+        const clean = validate();
+        if (!clean) return;
+        if (!base) return toast('Чинної специфікації немає — збережіть як нову', 'warning');
+        if (!diff.dirty) return toast('Немає що зберігати — список не змінювався', 'info');
+
+        const ok = await confirm({
+            title: 'Оновити чинну специфікацію?',
+            tone: 'accent', confirmLabel: `Оновити V.${base.version}`,
+            message: base.name || title || 'Специфікація',
+            details: [...changeSummary(clean), 'Версія не змінюється, історія не створюється.'],
+        });
+        if (!ok) return;
 
         setSaving(true);
         try {
-            // Версія наскрізна по ВСІХ специфікаціях об'єкта (у БД унікальний ключ installation+version,
-            // без типу) — інакше "матеріали" і "ел. захист" конфліктують за version=1
-            const { data: existingAll } = await supabase.from('specifications')
-                .select('version')
-                .eq('installation_custom_id', installationId);
-            const nextVersion = existingAll && existingAll.length > 0 ? Math.max(...existingAll.map(s => s.version)) + 1 : 1;
+            const current = new Map(clean.map(r => [r.nomenclature_id, parseFloat(r.quantity)]));
 
-            // Архівуємо лише специфікації ЦЬОГО типу (notes = taskId)
-            let archQuery = supabase.from('specifications').update({ status: 'archived' }).eq('installation_custom_id', installationId);
-            if (taskId) archQuery = archQuery.eq('notes', taskId);
-            const { error: archErr } = await archQuery;
-            if (archErr) throw archErr;
+            // Прибрані
+            const removedIds = [...base.itemIdByNom.entries()]
+                .filter(([nomId]) => !current.has(nomId))
+                .map(([, itemId]) => itemId);
+            if (removedIds.length) {
+                const { error } = await supabase.from('specification_items').delete().in('id', removedIds);
+                if (error) throw error;
+            }
 
-            const { data: newSpec, error: hErr } = await supabase.from('specifications').insert([{
+            // Змінені
+            for (const nomId of diff.changed) {
+                const itemId = base.itemIdByNom.get(nomId);
+                if (!itemId) continue;
+                const { error } = await supabase.from('specification_items')
+                    .update({ quantity: current.get(nomId), updated_at: new Date().toISOString() })
+                    .eq('id', itemId);
+                if (error) throw error;
+            }
+
+            // Нові
+            const fresh = clean.filter(r => !base.itemIdByNom.has(r.nomenclature_id));
+            if (fresh.length) {
+                const { error } = await supabase.from('specification_items').insert(
+                    fresh.map(r => ({
+                        specification_id: base.id,
+                        nomenclature_id: r.nomenclature_id,
+                        quantity: parseFloat(r.quantity),
+                        created_by: employee?.id,
+                    }))
+                );
+                if (error) throw error;
+            }
+
+            toast(`Специфікацію оновлено · ${clean.length} позицій`);
+            onSuccess?.();
+            onClose();
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setSaving(false); }
+    };
+
+    /** Нова версія: чинна архівується */
+    const saveAsVersion = async () => {
+        const clean = validate();
+        if (!clean) return;
+
+        const ok = await confirm({
+            title: base ? 'Створити нову версію?' : 'Створити специфікацію?',
+            tone: 'accent', confirmLabel: `Зберегти V.${version}`,
+            message: title || 'Специфікація',
+            details: [
+                ...changeSummary(clean),
+                base
+                    ? `Чинна V.${base.version} стане архівною, нова буде V.${version}.`
+                    : `Це буде перша версія об'єкта.`,
+            ],
+        });
+        if (!ok) return;
+
+        setSaving(true);
+        try {
+            // Версія наскрізна по ВСІХ специфікаціях об'єкта: у БД унікальність
+            // по (installation, version) без урахування типу
+            const { data: all } = await supabase.from('specifications')
+                .select('version').eq('installation_custom_id', installationId);
+            const next = all?.length ? Math.max(...all.map(s => s.version)) + 1 : 1;
+
+            // Архівуємо саме ту специфікацію, яку правили
+            if (base) {
+                const { error } = await supabase.from('specifications')
+                    .update({ status: 'archived' }).eq('id', base.id);
+                if (error) throw error;
+            }
+
+            const { data: spec, error: hErr } = await supabase.from('specifications').insert([{
                 installation_custom_id: installationId,
-                version: nextVersion,
+                version: next,
                 status: 'confirmed',
-                name: `${title || 'Специфікація'} V.${nextVersion} (вручну)`,
-                notes: taskId,
+                name: `${title || 'Специфікація'} V.${next} (вручну)`,
+                notes: base?.notes ?? taskId,
                 confirmed_at: new Date().toISOString(),
-                created_by: employee?.id
+                created_by: employee?.id,
             }]).select().single();
             if (hErr) throw hErr;
 
-            const itemsPayload = clean.map(r => ({
-                specification_id: newSpec.id,
-                nomenclature_id: r.nomenclature_id,
-                quantity: parseFloat(r.quantity),
-                created_by: employee?.id
-            }));
-            const { error: iErr } = await supabase.from('specification_items').insert(itemsPayload);
+            const { error: iErr } = await supabase.from('specification_items').insert(
+                clean.map(r => ({
+                    specification_id: spec.id,
+                    nomenclature_id: r.nomenclature_id,
+                    quantity: parseFloat(r.quantity),
+                    created_by: employee?.id,
+                }))
+            );
             if (iErr) throw iErr;
 
-            notify('Комплектацію збережено!', 'success');
-            if (onSuccess) onSuccess();
+            toast(`Збережено як версію ${next} · ${clean.length} позицій`);
+            onSuccess?.();
             onClose();
-        } catch (err) {
-            notify(err.message, 'error');
-        } finally {
-            setSaving(false);
-        }
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setSaving(false); }
     };
 
-    if (!isOpen) return null;
+    /* Нову позицію з довідника одразу кладемо в список */
+    const onNomCreated = (saved) => {
+        if (!saved) return;
+        const catById = new Map(cats.map(c => [c.id, c]));
+        const path = [];
+        let rootName = '', id = saved.category_id, guard = 0;
+        while (id && guard++ < 20) {
+            const c = catById.get(id);
+            if (!c) break;
+            path.unshift(c.name);
+            rootName = c.name;
+            id = c.parent_id;
+        }
+        const processed = {
+            ...saved,
+            fullName: `${path.join(' ')} ${saved.name}`.trim(),
+            rootCategoryName: rootName || 'Інше',
+        };
+        setNomenclatures(prev => [...prev.filter(n => n.id !== processed.id), processed]);
+        addRow(processed.id);
+        setQuickAdd(null);
+    };
+
+    /* ---------------- РЕНДЕР ---------------- */
+
+    const rowState = (row) => {
+        const id = row.nomenclature_id;
+        const q = parseFloat(row.quantity) || 0;
+        if (!baseline.has(id)) return { key: 'new', label: 'нова', tone: 'ok' };
+        if (Math.abs(baseline.get(id) - q) > 0.0001) {
+            return { key: 'changed', label: `було ${num(baseline.get(id))}`, tone: 'warn' };
+        }
+        return null;
+    };
 
     return (
-        <AnimatePresence>
-            {/* Клік по фону НЕ закриває модалку (лише X / Скасувати / успіх) */}
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[90]">
-                <motion.div initial={{ scale: 0.98, opacity: 0, y: 30 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0, y: 30 }} className="bg-white w-full sm:max-w-3xl shadow-2xl flex flex-col max-h-[95vh] sm:max-h-[92vh] rounded-t-2xl sm:rounded-2xl overflow-hidden">
-
-                    {/* HEADER */}
-                    <div className="p-4 sm:p-5 border-b border-slate-100 flex justify-between items-center bg-indigo-50 flex-shrink-0">
-                        <div className="min-w-0">
-                            <h2 className="text-lg sm:text-xl font-bold text-indigo-900 flex items-center gap-2 truncate"><FaClipboardList className="text-indigo-500 flex-shrink-0" /> <span className="truncate">{title || 'Комплектація'}</span></h2>
-                            <p className="text-[11px] sm:text-xs text-indigo-700/70 mt-0.5 font-medium">Об'єкт #{installationId} • План vs факт • редагування</p>
+        <>
+            <Modal
+                isOpen={isOpen}
+                onClose={onClose}
+                title={title || 'Комплектація вручну'}
+                subtitle={`Об'єкт #${installationId} · план матеріалів`}
+                size="lg"
+                onSubmit={base ? updateCurrent : saveAsVersion}
+                submitHint={base ? 'оновити чинну' : 'створити специфікацію'}
+                toolbar={
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                            <Picker
+                                className="flex-1"
+                                options={addOptions}
+                                value=""
+                                onChange={addRow}
+                                onAddNew={(name) => setQuickAdd({ name })}
+                                addLabel="Створити позицію"
+                                placeholder="Додати позицію з довідника…"
+                                icon={FaPlus}
+                                searchPlaceholder="Назва або SKU…"
+                                keepOpen
+                            />
                         </div>
-                        <button onClick={onClose} className="p-2 bg-white hover:bg-slate-100 text-slate-400 rounded-full transition-colors shadow-sm flex-shrink-0 ml-2"><FaTimes /></button>
-                    </div>
 
-                    {/* ADD BAR (sticky) */}
-                    <div className="p-4 sm:p-5 pb-3 border-b border-slate-100 flex-shrink-0 bg-white">
-                        <AddPicker options={availableToAdd} onPick={addRow} onCreateNew={(name) => setQuickAdd({ open: true, name })} />
-                        <div className="flex items-center gap-3 mt-2.5 text-[10px] text-slate-400 font-bold uppercase tracking-wider flex-wrap">
-                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-indigo-500 inline-block"></span> План (редагується)</span>
-                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span> Резерв</span>
-                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400 inline-block"></span> Видано</span>
-                        </div>
-                    </div>
-
-                    {/* BODY */}
-                    <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50/50 p-3 sm:p-5">
-                        {loading ? (
-                            <div className="flex justify-center py-16"><FaSpinner className="animate-spin text-3xl text-indigo-500" /></div>
-                        ) : rows.length === 0 ? (
-                            <div className="text-center py-14 flex flex-col items-center">
-                                <FaBoxOpen className="text-5xl text-slate-200 mb-3" />
-                                <h3 className="font-bold text-slate-500 text-sm">Позицій ще немає</h3>
-                                <p className="text-xs text-slate-400 mt-1 max-w-xs">Натисніть «Додати позицію з бази» вгорі, щоб зібрати комплектацію.</p>
+                        {rows.length > 6 && (
+                            <div className="relative">
+                                <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={11} />
+                                <input className={`${T.input} pl-8 h-9`} value={search}
+                                    placeholder="Знайти серед доданих…"
+                                    onChange={e => setSearch(e.target.value)} />
                             </div>
-                        ) : (
-                            <div className="space-y-4">
-                                {grouped.map(([groupName, groupRows]) => (
-                                    <div key={groupName} className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-                                        <div className="px-3 sm:px-4 py-2.5 bg-slate-100/70 border-b border-slate-200 flex items-center gap-2">
-                                            <FaLayerGroup className="text-slate-400 text-xs" />
-                                            <span className="text-[11px] font-black text-slate-600 uppercase tracking-widest truncate">{groupName}</span>
-                                            <span className="text-[10px] text-slate-400 font-bold ml-auto">{groupRows.length}</span>
-                                        </div>
-                                        <div className="divide-y divide-slate-100">
-                                            {groupRows.map(row => {
-                                                const nom = nomById(row.nomenclature_id);
-                                                const fact = factByNom[row.nomenclature_id] || { reserved: 0, issued: 0 };
-                                                const plan = parseFloat(row.quantity) || 0;
-                                                const belowIssued = fact.issued > 0 && plan < fact.issued;
-                                                return (
-                                                    <div key={row.key} className="p-3 sm:p-4">
-                                                        <div className="flex items-start justify-between gap-3">
-                                                            <div className="min-w-0 flex-1">
-                                                                <div className="font-bold text-slate-800 text-sm leading-snug">{nom?.fullName || 'Невідома позиція'}</div>
-                                                                {nom?.sku && <div className="text-[10px] text-slate-400 font-mono mt-0.5 tracking-wider uppercase">SKU: {nom.sku}</div>}
-                                                                {/* ФАКТ chips */}
-                                                                {(fact.reserved > 0 || fact.issued > 0) && (
-                                                                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                                                                        {fact.reserved > 0 && <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded">резерв: {fact.reserved}</span>}
-                                                                        {fact.issued > 0 && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">видано: {fact.issued}</span>}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                            <button onClick={() => removeRow(row.key)} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0" title="Видалити"><FaTrash size={14} /></button>
-                                                        </div>
-                                                        {/* PLAN qty stepper */}
-                                                        <div className="flex items-center gap-2 mt-2.5">
-                                                            <span className="text-[10px] font-black text-indigo-400 uppercase tracking-wider w-10">План</span>
-                                                            <button type="button" onClick={() => bumpQty(row.key, -1)} className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-colors flex-shrink-0"><FaMinus size={11}/></button>
-                                                            <input
-                                                                type="number" min="0" step="any" inputMode="decimal"
-                                                                value={row.quantity}
-                                                                onChange={e => setQty(row.key, e.target.value)}
-                                                                className={`w-20 h-9 text-center text-base font-black rounded-lg border-2 outline-none transition-colors ${belowIssued ? 'text-red-600 border-red-300 bg-red-50' : 'text-indigo-700 border-indigo-200 focus:border-indigo-500'}`}
-                                                            />
-                                                            <button type="button" onClick={() => bumpQty(row.key, +1)} className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-colors flex-shrink-0"><FaPlus size={11}/></button>
-                                                            <span className="text-xs font-bold text-slate-400 uppercase ml-0.5">{nom?.unit?.name || 'шт'}</span>
-                                                        </div>
-                                                        {belowIssued && (
-                                                            <div className="text-[10px] text-red-600 font-bold mt-1.5 flex items-center gap-1"><FaExclamationTriangle size={10}/> План менший за вже видане ({fact.issued})</div>
-                                                        )}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                ))}
+                        )}
+
+                        {/* Що саме ми зараз правимо — щоб не вийшло,
+                            що одна додана позиція замінила всю комплектацію */}
+                        <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                            {loading ? null : base ? (
+                                <span className="text-slate-500">
+                                    Правимо <b className="text-slate-900">{base.name || `V.${base.version}`}</b>
+                                    {' · '}<b className="text-slate-900 tabular-nums">{diff.total}</b> позицій
+                                </span>
+                            ) : (
+                                <Chip tone="warn">чинної специфікації немає — буде перша</Chip>
+                            )}
+                            {diff.added.length > 0 && <Chip tone="ok">+{diff.added.length}</Chip>}
+                            {diff.changed.length > 0 && <Chip tone="warn">{diff.changed.length} змінено</Chip>}
+                            {diff.removed.length > 0 && <Chip tone="danger">−{diff.removed.length}</Chip>}
+                            {diff.dirty === 0 && !loading && <span className="text-slate-400">без змін</span>}
+                        </div>
+
+                        {base?.otherType && (
+                            <div className={`${TONE.warn.chip} border rounded-lg px-2.5 py-1.5 text-[11px] leading-snug`}>
+                                Специфікації типу «{title}» немає. Відкрито чинну «{base.name || `V.${base.version}`}» —
+                                правки підуть саме в неї.
                             </div>
                         )}
                     </div>
+                }
+                footer={<>
+                    {conflicts.length > 0 && (
+                        <span className="mr-auto text-[11.5px] font-bold text-rose-700">
+                            {conflicts.length} поз. нижче виданого
+                        </span>
+                    )}
+                    <Btn variant="outline" onClick={onClose}>Скасувати</Btn>
+                    <Btn variant="soft" onClick={saveAsVersion} disabled={saving || loading || diff.total === 0}
+                        title="Чинна стане архівною, створиться наступна версія">
+                        {base ? `Нова версія V.${version}` : `Створити V.${version}`}
+                    </Btn>
+                    {base && (
+                        <Btn variant="ok" onClick={updateCurrent} disabled={saving || loading || !diff.dirty}
+                            title="Правки лягають у чинну специфікацію, версія не змінюється">
+                            {saving ? 'Зберігаємо…' : 'Оновити чинну'}
+                        </Btn>
+                    )}
+                </>}
+            >
+                {loading ? <Skeleton rows={6} /> : rows.length === 0 ? (
+                    <EmptyState
+                        icon={FaBoxOpen}
+                        title="План порожній"
+                        hint="Додайте позиції з довідника вгорі — почніть вводити назву або SKU."
+                    />
+                ) : visibleRows.length === 0 ? (
+                    <EmptyState icon={FaSearch} title="Нічого не знайдено"
+                        hint={`Серед доданих позицій немає «${search}».`}>
+                        <Btn variant="soft" onClick={() => setSearch('')}>Скинути пошук</Btn>
+                    </EmptyState>
+                ) : (
+                    <div className="space-y-3">
+                        {grouped.map(([groupName, groupRows]) => (
+                            <div key={groupName}>
+                                <div className="flex items-center gap-2 mb-1.5">
+                                    <FaLayerGroup className="text-slate-400" size={10} />
+                                    <span className={T.label}>{groupName}</span>
+                                    <span className="text-[10px] font-bold text-slate-400">{groupRows.length}</span>
+                                    <span className="flex-1 h-px bg-slate-200 ml-1" />
+                                </div>
 
-                    {/* FOOTER (sticky) */}
-                    <div className="p-4 sm:p-5 border-t border-slate-100 flex items-center justify-between gap-3 bg-white flex-shrink-0 pb-safe">
-                        <div className="text-xs font-bold text-slate-500 whitespace-nowrap">Позицій: <span className="text-slate-800">{totalValid}</span></div>
-                        <div className="flex gap-2 sm:gap-3">
-                            <button onClick={onClose} className="px-4 sm:px-6 py-3 bg-slate-100 border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-colors text-sm">Скасувати</button>
-                            <button onClick={handleSave} disabled={saving || loading || totalValid === 0} className="px-5 sm:px-8 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all text-sm flex items-center gap-2 disabled:opacity-50 active:scale-95 whitespace-nowrap">
-                                {saving ? <><FaSpinner className="animate-spin" /> Збереження...</> : <><FaCheck /> Затвердити</>}
-                            </button>
+                                <div className="space-y-1.5">
+                                    {groupRows.map(row => {
+                                        const nom = nomById(row.nomenclature_id);
+                                        const f = fact[row.nomenclature_id] || { reserved: 0, issued: 0 };
+                                        const plan = parseFloat(row.quantity) || 0;
+                                        const below = f.issued > 0 && plan < f.issued;
+                                        const st = rowState(row);
+
+                                        const replacing = replacingKey === row.key;
+
+                                        return (
+                                            <div key={row.key}
+                                                className={`${T.cardFlat} px-2.5 py-2 transition-colors
+                                                    ${replacing ? 'border-indigo-300 bg-indigo-50/40' : below ? 'border-rose-300 bg-rose-50/40' : ''}`}>
+
+                                                {replacing ? (
+                                                    /* Заміна — прямо на місці рядка, без другого вікна поверх
+                                                       першого: людина не втрачає з очей ані що саме змінюється,
+                                                       ані решту списку. Список одразу розкритий — досить набирати. */
+                                                    <div className="flex items-start gap-2">
+                                                        <FaExchangeAlt className="text-indigo-500 mt-2.5 flex-shrink-0" size={12} />
+                                                        <div className="min-w-0 flex-1">
+                                                            <div className="text-[11px] text-slate-500 mb-1 leading-snug">
+                                                                Чим замінити «<b className="text-slate-700">{nom?.fullName}</b>»
+                                                                {' '}— кількість <b className="text-slate-700 tabular-nums">{num(plan)} {nom?.unit?.name || 'шт'}</b> залишиться тією самою
+                                                            </div>
+                                                            <Picker
+                                                                options={addOptions}
+                                                                value=""
+                                                                onChange={(newId) => {
+                                                                    setRows(r => r.map(x => x.key === row.key
+                                                                        ? { ...x, nomenclature_id: newId } : x));
+                                                                    setReplacingKey(null);
+                                                                    toast('Позицію замінено');
+                                                                }}
+                                                                onCancel={() => setReplacingKey(null)}
+                                                                autoOpen
+                                                                placeholder="Почніть вводити назву або SKU…"
+                                                                icon={FaSearch}
+                                                                searchPlaceholder="Назва або SKU…"
+                                                            />
+                                                            {(f.reserved > 0 || f.issued > 0) && (
+                                                                <div className="text-[10.5px] text-amber-700 mt-1 leading-snug">
+                                                                    Резерв і видача за старою позицією самі не зникнуть — за потреби проведіть повернення.
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <IconBtn variant="ghost" icon={FaTimes} label="Скасувати заміну"
+                                                            onClick={() => setReplacingKey(null)} />
+                                                    </div>
+                                                ) : (
+                                                    <>
+                                                        <div className="flex items-start gap-2">
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="text-[12.5px] font-semibold text-slate-900 leading-snug">
+                                                                    {nom?.fullName || 'Невідома позиція'}
+                                                                </div>
+                                                                <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                                                    {nom?.sku && <span className={T.mono}>{nom.sku}</span>}
+                                                                    {st && <Chip tone={st.tone}>{st.label}</Chip>}
+                                                                    {f.reserved > 0 && <Chip tone="accent">резерв {num(f.reserved)}</Chip>}
+                                                                    {f.issued > 0 && <Chip tone="info">видано {num(f.issued)}</Chip>}
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="flex items-center gap-1 flex-shrink-0">
+                                                                <IconBtn variant="soft" icon={FaMinus} label="Менше"
+                                                                    onClick={() => bump(row.key, -1)} />
+                                                                <input
+                                                                    type="number" min="0" step="any" inputMode="decimal"
+                                                                    value={row.quantity}
+                                                                    onChange={e => setQty(row.key, e.target.value)}
+                                                                    className={`w-16 h-9 text-center rounded-lg border-2 text-[14px] font-black tabular-nums outline-none transition-colors
+                                                                        ${below ? 'border-rose-400 bg-rose-50 text-rose-700'
+                                                                            : 'border-slate-300 text-slate-900 focus:border-indigo-500'}`}
+                                                                />
+                                                                <IconBtn variant="soft" icon={FaPlus} label="Більше"
+                                                                    onClick={() => bump(row.key, +1)} />
+                                                                <span className="text-[10px] font-bold text-slate-400 w-7">
+                                                                    {nom?.unit?.name || 'шт'}
+                                                                </span>
+                                                                <IconBtn variant="ghost" icon={FaExchangeAlt}
+                                                                    label="Замінити на іншу позицію, зберігши кількість"
+                                                                    onClick={() => setReplacingKey(row.key)} />
+                                                                <IconBtn variant="ghost" icon={FaTrash} label="Прибрати"
+                                                                    onClick={() => removeRow(row.key)} />
+                                                            </div>
+                                                        </div>
+
+                                                        {below && (
+                                                            <div className="text-[11px] font-bold text-rose-700 mt-1.5 flex items-center gap-1.5">
+                                                                <FaExclamationTriangle size={10} />
+                                                                План менший за видане ({num(f.issued)}). Спершу проведіть повернення.
+                                                            </div>
+                                                        )}
+                                                    </>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        ))}
+
+                        <div className={`${TONE.neutral.chip} border rounded-lg px-3 py-2 text-[11.5px] leading-relaxed`}>
+                            <FaClipboardList className="inline mr-1.5" size={10} />
+                            <b>Оновити чинну</b> — правки лягають у ту саму специфікацію,
+                            версія не змінюється. <b>Нова версія</b> — чинна стає архівною,
+                            а поточний список зберігається як V.{version}. Резерви й видачі
+                            в обох випадках лишаються: вони прив'язані до об'єкта, а не до версії.
                         </div>
                     </div>
-                </motion.div>
-            </motion.div>
+                )}
+            </Modal>
 
-            {/* Швидке створення позиції номенклатури, якої немає в базі */}
             <NomenclatureModal
-                isOpen={quickAdd.open}
-                onClose={() => setQuickAdd({ open: false, name: '' })}
-                onSuccess={handleQuickAddSuccess}
-                showToast={notify}
-                initialName={quickAdd.name}
+                isOpen={!!quickAdd}
+                onClose={() => setQuickAdd(null)}
+                onSuccess={onNomCreated}
+                initialName={quickAdd?.name}
             />
-        </AnimatePresence>
+        </>
     );
 }
