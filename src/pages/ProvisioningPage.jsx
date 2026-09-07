@@ -13,16 +13,18 @@
 //  возили, це не брак матеріалу, а незавершена видача.
 // =====================================================================
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
     FaSearch, FaChevronLeft, FaExclamationTriangle, FaHardHat, FaBoxOpen,
     FaLock, FaUnlock, FaArrowUp, FaUndo, FaClipboardList, FaShoppingCart,
-    FaTrash, FaEllipsisH, FaTruck, FaLayerGroup,
+    FaTrash, FaEllipsisH, FaTruck, FaLayerGroup, FaBoxes, FaFileInvoiceDollar,
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import Layout from '../Layout';
 import { useAuth } from '../AuthProvider';
 import ManualSpecBuilder from './ManualSpecBuilder';
+import EquipmentDemand from './EquipmentDemand';
 import {
     T, TONE, Btn, IconBtn, Chip, Card, Field, Bar, EmptyState,
     Skeleton, Modal, useToast, useConfirm, humanError, num, useAutoFocus,
@@ -66,6 +68,9 @@ export default function ProvisioningPage() {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
+    // objects — звичний зріз «чи можна виїжджати на об'єкт»
+    // equipment — зріз від позиції: «чого купити і на які об'єкти воно піде»
+    const [mode, setMode] = useState('objects');
 
     const [selected, setSelected] = useState(null);
     const [needs, setNeeds] = useState([]);
@@ -75,6 +80,9 @@ export default function ProvisioningPage() {
     const [offSpec, setOffSpec] = useState([]);
     const [requests, setRequests] = useState([]);
     const [detailLoading, setDetailLoading] = useState(false);
+    // Обладнання з чинної КП об'єкта + стан цієї потреби
+    const [offerEquip, setOfferEquip] = useState([]);
+    const [offerNeed, setOfferNeed] = useState(null);
 
     const [sheet, setSheet] = useState(null);
     const [op, setOp] = useState(null);
@@ -156,6 +164,10 @@ export default function ProvisioningPage() {
 
     useEffect(() => { if (!authLoading) loadDashboard(); }, [authLoading, loadDashboard]);
 
+    // Прямий перехід із картки об'єкта: /provisioning?obj=123 одразу відкриває деталі.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const deepLinkHandled = useRef(false);
+
     /* ---------------- ДЕТАЛІ ОБ'ЄКТА ---------------- */
 
     const openObject = useCallback(async (inst) => {
@@ -192,6 +204,18 @@ export default function ProvisioningPage() {
             setNeeds(needsData || []);
             setReservations(resRes.data || []);
             setRequests(reqRes.data || []);
+
+            // Обладнання з КП. Помилку не піднімаємо: до міграції
+            // db/2026-09_offer_to_need.sql цих в'юх просто немає, і це
+            // не привід ламати екран забезпечення.
+            const [offEqRes, offNeedRes] = await Promise.all([
+                supabase.from('v_object_offer_equipment').select('*')
+                    .eq('installation_custom_id', inst.custom_id).order('sort_order'),
+                supabase.from('v_object_offer_need').select('*')
+                    .eq('installation_custom_id', inst.custom_id).maybeSingle(),
+            ]);
+            setOfferEquip(offEqRes.data || []);
+            setOfferNeed(offNeedRes.data || null);
 
             const inc = {};
             (incRes.data || []).forEach(r => { inc[r.nomenclature_id] = parseFloat(r.incoming_quantity); });
@@ -241,6 +265,18 @@ export default function ProvisioningPage() {
             toast(humanError(e), 'error');
         } finally { setDetailLoading(false); }
     }, [toast]);
+
+    useEffect(() => {
+        if (deepLinkHandled.current || loading) return;
+        const objParam = searchParams.get('obj');
+        if (!objParam) return;
+        const found = installations.find(i => String(i.custom_id) === objParam);
+        if (found) {
+            deepLinkHandled.current = true;
+            openObject(found);
+            setSearchParams({}, { replace: true });
+        }
+    }, [searchParams, installations, loading, openObject, setSearchParams]);
 
     const refresh = useCallback(async () => {
         if (selected) await openObject(selected);
@@ -691,6 +727,29 @@ export default function ProvisioningPage() {
                             </p>
                         </div>
 
+                        {/* Два погляди на те саме: від об'єкта і від позиції */}
+                        <div className="flex items-center gap-1.5">
+                            {[
+                                { key: 'objects', label: "Об'єкти", icon: FaHardHat },
+                                { key: 'equipment', label: 'Обладнання', icon: FaBoxes },
+                            ].map(m => (
+                                <button key={m.key} onClick={() => setMode(m.key)}
+                                    className={`px-3 h-9 rounded-lg text-[12.5px] font-bold border transition-colors inline-flex items-center gap-1.5
+                                        ${mode === m.key
+                                            ? 'bg-indigo-600 text-white border-indigo-600'
+                                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}>
+                                    <m.icon size={11} /> {m.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        {mode === 'equipment' ? (
+                            <EquipmentDemand onOpenObject={(id) => {
+                                const found = installations.find(i => i.custom_id === id);
+                                if (found) openObject(found);
+                            }} />
+                        ) : (
+                        <>
                         <Card pad="p-2.5" className="space-y-2.5">
                             <div className="relative">
                                 <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
@@ -754,6 +813,8 @@ export default function ProvisioningPage() {
                                 </div>
                             )}
                         </div>
+                        </>
+                        )}
                     </>
                 ) : (
                     <>
@@ -798,6 +859,63 @@ export default function ProvisioningPage() {
                                     </Card>
                                 ) : (
                                     <div className="space-y-1.5">{needs.map(renderPosition)}</div>
+                                )}
+
+                                {/* Обладнання з КП: показуємо завжди, бо це відповідь на питання
+                                    «звідки взялась ця позиція в потребі і що саме продали
+                                    клієнту». Коли потреба ще не зайшла в забезпечення —
+                                    тут же видно, чому. */}
+                                {offerEquip.length > 0 && (
+                                    <Card pad="p-0" className="border-indigo-200 overflow-hidden">
+                                        <div className="px-3 py-2 bg-indigo-50 border-b border-indigo-100 flex items-center gap-2 flex-wrap">
+                                            <FaFileInvoiceDollar className="text-indigo-500" size={12} />
+                                            <span className="text-[12.5px] font-bold text-indigo-900">Обладнання з КП</span>
+                                            <Chip tone="accent">{offerEquip.length}</Chip>
+                                            {offerNeed?.need_status === 'confirmed' && (
+                                                <Chip tone="ok">у потребі об'єкта</Chip>
+                                            )}
+                                            {offerNeed?.need_status === 'superseded' && (
+                                                <Chip tone="neutral">замінено комплектацією</Chip>
+                                            )}
+                                            {!['confirmed', 'superseded'].includes(offerNeed?.need_status) && (
+                                                <Chip tone="warn">не в потребі</Chip>
+                                            )}
+                                        </div>
+                                        <div className="divide-y divide-slate-100">
+                                            {offerEquip.map(o => (
+                                                <div key={o.offer_item_id} className="px-3 py-2 flex items-start gap-2">
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="text-[12.5px] font-semibold text-slate-900 leading-snug">
+                                                            {o.nomenclature_name || (
+                                                                <span className="text-rose-600">не впізнано складом</span>
+                                                            )}
+                                                        </div>
+                                                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                                            <span className="text-[11px] text-slate-500">
+                                                                {o.category_label}
+                                                                {o.offer_name ? ` · ${o.offer_name}` : ''}
+                                                            </span>
+                                                            {o.match_source === 'fuzzy' && <Chip tone="warn">за схожістю</Chip>}
+                                                            {o.sku && <span className={T.mono}>{o.sku}</span>}
+                                                        </div>
+                                                    </div>
+                                                    <span className="text-[13px] font-black tabular-nums text-slate-900 flex-shrink-0">
+                                                        {num(o.quantity)}
+                                                        <span className="text-[9px] text-slate-400 ml-0.5">
+                                                            {o.unit_code || o.unit || ''}
+                                                        </span>
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="px-3 py-2 bg-slate-50 text-[11px] text-slate-500 leading-snug">
+                                            {offerNeed?.need_status === 'confirmed'
+                                                ? 'Ці позиції вже входять у потребу об\'єкта — вони є в списку вище зі смугами покриття. Конструкція, захист і заземлення сюди не входять: їх дає лише комплектація.'
+                                                : offerNeed?.need_status === 'superseded'
+                                                    ? 'Об\'єкт має затверджену комплектацію — потреба рахується за нею, а КП лишається для звірки, що саме продали клієнту.'
+                                                    : 'У потребу ці позиції ще не зайшли. Найчастіше тому, що жодна не впізналась складом — прив\'язку можна поправити у вкладці «КП» картки об\'єкта.'}
+                                        </div>
+                                    </Card>
                                 )}
 
                                 {requests.length > 0 && (

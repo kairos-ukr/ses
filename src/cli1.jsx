@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback, memo } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaUsers, FaMapMarkerAlt, FaPhone, FaPlus, FaSearch, FaFilter, FaBuilding, FaUserTie,
   FaEdit, FaHandshake, FaIndustry, FaTimes, FaCheck, FaChevronLeft, FaChevronRight,
-  FaSignOutAlt
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
@@ -44,7 +44,7 @@ const NotificationSystem = memo(({ notifications, removeNotification }) => (
 ));
 
 // 2. ОНОВЛЮЄМО CLIENT CARD: приймаємо проп canEdit
-const ClientCard = memo(({ client, onEdit, canEdit }) => {
+const ClientCard = memo(({ client, onEdit, canEdit, onOpen }) => {
   const typeMap = {
     'Приватний будинок': { icon: FaBuilding, color: 'text-blue-600 bg-blue-50', label: 'Приватний' },
     'Промислове підприємство': { icon: FaIndustry, color: 'text-purple-600 bg-purple-50', label: 'Промисловість' },
@@ -52,11 +52,12 @@ const ClientCard = memo(({ client, onEdit, canEdit }) => {
     'Комерційний об\'єкт': { icon: FaHandshake, color: 'text-orange-600 bg-orange-50', label: 'Комерція' }
   };
   const { icon: ObjectIcon, color, label } = typeMap[client.object_type] || { icon: FaBuilding, color: 'text-gray-600 bg-gray-50', label: client.object_type || 'Інше' };
-  
+
   const formatDate = (dateString) => dateString ? new Date(dateString).toLocaleDateString('uk-UA') : 'N/A';
 
   return (
-    <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 hover:shadow-md transition-shadow flex flex-col h-full">
+    <div onClick={() => onOpen(client)}
+      className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 hover:shadow-md hover:border-indigo-200 transition-shadow flex flex-col h-full cursor-pointer">
       <div className="flex-grow">
         <div className="flex justify-between items-start mb-3">
           <div className="flex-1 min-w-0 pr-2">
@@ -80,7 +81,7 @@ const ClientCard = memo(({ client, onEdit, canEdit }) => {
           </div>
           <div className="flex items-center gap-2 text-slate-600">
               <FaPhone className="text-slate-400 flex-shrink-0 text-xs"/> 
-              <a href={`tel:${client.phone}`} className="hover:text-indigo-600 truncate text-xs sm:text-sm font-medium">{client.phone || '---'}</a>
+              <a href={`tel:${client.phone}`} onClick={(e) => e.stopPropagation()} className="hover:text-indigo-600 truncate text-xs sm:text-sm font-medium">{client.phone || '---'}</a>
           </div>
         </div>
       </div>
@@ -90,7 +91,7 @@ const ClientCard = memo(({ client, onEdit, canEdit }) => {
         
         {/* 3. УМОВА ВІДОБРАЖЕННЯ КНОПКИ РЕДАГУВАННЯ */}
         {canEdit && (
-          <button onClick={() => onEdit(client)} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 rounded-lg text-xs font-bold transition-colors border border-slate-200 hover:border-indigo-200">
+          <button onClick={(e) => { e.stopPropagation(); onEdit(client); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 rounded-lg text-xs font-bold transition-colors border border-slate-200 hover:border-indigo-200">
             <FaEdit/> Редагувати
           </button>
         )}
@@ -113,6 +114,8 @@ const Pagination = memo(({ currentPage, totalPages, onPageChange }) => {
 export default function ClientsPage() {
   // 4. ОТРИМУЄМО РОЛЬ КОРИСТУВАЧА
   const { role } = useAuth();
+  const navigate = useNavigate();
+  const openClient = (client) => navigate(`/clients/${client.custom_id}`);
   
   // 5. ВИЗНАЧАЄМО ПРАВА ДОСТУПУ
   // Create доступно всім (згідно з таблицею), тому canCreate окремо не потрібен, кнопка просто відображається.
@@ -364,10 +367,11 @@ export default function ClientsPage() {
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                     {clients.map(client => (
-                        <ClientCard 
-                            key={client.custom_id} 
-                            client={client} 
+                        <ClientCard
+                            key={client.custom_id}
+                            client={client}
                             onEdit={handleEditClient}
+                            onOpen={openClient}
                             canEdit={canEdit} // 6. ПЕРЕДАЄМО ПРАВА В КАРТКУ
                         />
                     ))}

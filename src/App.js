@@ -8,6 +8,7 @@ import AuthPage from "./AuthPage";
 // import HomePage from "./homep"; // Вже не потрібен, можеш видалити файл
 import ProjectPage from "./inst2";
 import ClientsPage from "./cli1";
+import ClientDetailsPage from './ClientDetailsPage';
 import EmployeesPage from "./MainEmployeesPage";
 import MicrotasksPage from "./microtask";
 import Reports from "./rep";
@@ -47,6 +48,7 @@ export default function App() {
           
           <Route path="/installations" element={<ProjectPage />} />
           <Route path="/clients" element={<ClientsPage />} />
+          <Route path="/clients/:id" element={<ClientDetailsPage />} />
           <Route path="/employees" element={<EmployeesPage />} />
           <Route path="/tasks" element={<MicrotasksPage />} />
           <Route path="/reports" element={<Reports />} />

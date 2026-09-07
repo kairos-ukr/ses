@@ -1,40 +1,59 @@
-import React, { useState, useEffect, useCallback, memo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaProjectDiagram, FaPlus,
   FaBolt, FaSearch, FaFilter, FaTools, FaMoneyBillWave,
-  FaClock, FaCheckCircle, FaExclamationTriangle, FaPause, FaTimes,
-  FaChevronLeft, FaChevronRight, FaCheck, FaInfoCircle, FaTrash, FaHardHat,
+  FaClock, FaCheckCircle, FaExclamationTriangle, FaPause,
+  FaChevronLeft, FaChevronRight, FaTrash, FaHardHat,
   FaUserFriends, FaUserTie,
-  FaUserEdit, FaRegEye,
-  FaMapMarkerAlt, FaDraftingCompass, FaFileInvoiceDollar, FaTruckLoading, FaSolarPanel, FaBroadcastTower, FaBoxOpen, FaFileSignature
+  FaUserEdit, FaExternalLinkAlt,
+  FaMapMarkerAlt, FaDraftingCompass, FaFileInvoiceDollar, FaTruckLoading, FaSolarPanel, FaBroadcastTower, FaBoxOpen, FaFileSignature,
+  FaInfoCircle, FaBoxes, FaTimes,
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
-import { useAuth } from "./AuthProvider"; 
+import { useAuth } from "./AuthProvider";
+import {
+  T, Btn, IconBtn, Chip, Card, Field, Bar, EmptyState, Skeleton,
+  Drawer, Picker, useToast, useConfirm, humanError, num,
+} from "./ui";
 
 // --- CONSTANTS ---
 const PROJECTS_PER_PAGE = 6;
 const ALLOWED_COMPANIES = ['Кайрос', 'Розумне збереження енергії'];
 
 const WORKFLOW_STAGES = [
-    { value: 'tech_review', label: 'Заміри', icon: FaMapMarkerAlt, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
-    { value: 'project', label: 'Проект', icon: FaDraftingCompass, color: 'bg-orange-50 text-orange-700 border-orange-200' },
-    { value: 'proposal', label: 'КП', icon: FaFileInvoiceDollar, color: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' },
-    { value: 'equipment', label: 'Обладнання', icon: FaTruckLoading, color: 'bg-amber-50 text-amber-700 border-amber-200' },
-    { value: 'complectation', label: 'Комплектація', icon: FaBoxOpen, color: 'bg-blue-50 text-blue-700 border-blue-200' },
-    { value: 'installation', label: 'Монтаж', icon: FaSolarPanel, color: 'bg-blue-100 text-blue-800 border-blue-300' },
-    { value: 'grid_connection', label: 'Мережа', icon: FaFileSignature, color: 'bg-purple-100 text-purple-800 border-purple-300' },
-    { value: 'monitoring_setup', label: 'Запуск', icon: FaBroadcastTower, color: 'bg-cyan-50 text-cyan-800 border-cyan-300' },
+    { value: 'tech_review', label: 'Заміри', icon: FaMapMarkerAlt, tone: 'info' },
+    { value: 'project', label: 'Проект', icon: FaDraftingCompass, tone: 'accent' },
+    { value: 'proposal', label: 'КП', icon: FaFileInvoiceDollar, tone: 'warn' },
+    { value: 'equipment', label: 'Обладнання', icon: FaTruckLoading, tone: 'neutral' },
+    { value: 'complectation', label: 'Комплектація', icon: FaBoxOpen, tone: 'info' },
+    { value: 'installation', label: 'Монтаж', icon: FaSolarPanel, tone: 'accent' },
+    { value: 'grid_connection', label: 'Мережа', icon: FaFileSignature, tone: 'warn' },
+    { value: 'monitoring_setup', label: 'Запуск', icon: FaBroadcastTower, tone: 'ok' },
 ];
 
 const STAGE_ALIASES = {
     'project_design': 'project',
     'commercial_proposal': 'proposal',
-    'advance_payment': 'proposal', 
+    'advance_payment': 'proposal',
     'tech_measurements': 'tech_review',
     'mon_launch_station': 'monitoring_setup'
+};
+
+const STATUS_INFO = {
+    planning: { label: 'Планування', tone: 'info', icon: FaClock },
+    in_progress: { label: 'Виконується', tone: 'accent', icon: FaTools },
+    on_hold: { label: 'Призупинено', tone: 'warn', icon: FaPause },
+    completed: { label: 'Завершено', tone: 'ok', icon: FaCheckCircle },
+    cancelled: { label: 'Скасовано', tone: 'danger', icon: FaExclamationTriangle },
+};
+
+const PAYMENT_INFO = {
+    pending: { label: 'Очікує оплати', tone: 'warn' },
+    partial: { label: 'Часткова оплата', tone: 'info' },
+    paid: { label: 'Оплачено', tone: 'ok' },
+    overdue: { label: 'Прострочено', tone: 'danger' },
 };
 
 const useDebounce = (value, delay) => {
@@ -46,83 +65,35 @@ const useDebounce = (value, delay) => {
   return debouncedValue;
 };
 
-// --- COMPONENTS ---
-
-const Toast = memo(({ message, type = 'success', isVisible, onClose }) => {
-  useEffect(() => {
-    if (isVisible) {
-      const timer = setTimeout(onClose, 4000);
-      return () => clearTimeout(timer);
-    }
-  }, [isVisible, onClose]);
-  const styles = { success: 'bg-green-600 text-white', error: 'bg-red-600 text-white', info: 'bg-blue-600 text-white' };
-  const icons = { success: <FaCheck />, error: <FaExclamationTriangle />, info: <FaInfoCircle /> };
-  return (
-    <AnimatePresence>
-      {isVisible && (
-        <motion.div initial={{ opacity: 0, x: 300, scale: 0.8 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={{ opacity: 0, x: 300, scale: 0.8 }} className="fixed top-20 right-4 z-[100] max-w-[90vw]">
-          <div className={`${styles[type] || styles.info} rounded-lg shadow-lg p-4 min-w-[280px] border border-white/10`}>
-            <div className="flex items-center space-x-3">{icons[type] || icons.info}<span className="font-medium text-sm">{message}</span><button onClick={onClose} className="ml-auto text-white/80 hover:text-white transition-colors"><FaTimes className="text-sm" /></button></div>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-});
-
-const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => {
-    return (
-        <AnimatePresence>
-            {isOpen && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={onClose}>
-                    <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-white rounded-xl w-full max-w-md shadow-2xl p-6" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-start gap-4">
-                            <div className="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100"><FaExclamationTriangle className="h-6 w-6 text-red-600" /></div>
-                            <div className="mt-0 text-left"><h3 className="text-lg leading-6 font-bold text-gray-900">{title}</h3><div className="mt-2"><p className="text-sm text-gray-500">{message}</p></div></div>
-                        </div>
-                        <div className="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse gap-3">
-                            <button type="button" className="w-full inline-flex justify-center rounded-lg shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 sm:ml-3 sm:w-auto sm:text-sm" onClick={() => { onConfirm(); onClose(); }}>Підтвердити</button>
-                            <button type="button" className="mt-3 w-full inline-flex justify-center rounded-lg border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm" onClick={onClose}>Скасувати</button>
-                        </div>
-                    </motion.div>
-                </motion.div>
-            )}
-        </AnimatePresence>
-    );
-};
-
 // --- MAIN PAGE ---
 export default function ProjectsPage() {
     const { role } = useAuth();
     const canDelete = role === 'admin' || role === 'super_admin' || role === 'office';
+    const toast = useToast();
+    const confirm = useConfirm();
 
     const [projects, setProjects] = useState([]);
+    const [readiness, setReadiness] = useState({});   // custom_id → % забезпечення (null, якщо специфікації немає)
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
     const debouncedSearchTerm = useDebounce(searchTerm, 400);
-    
-    const [statusFilter, setStatusFilter] = useState("active"); 
+
+    const [statusFilter, setStatusFilter] = useState("active");
     const [paymentStatusFilter, setPaymentStatusFilter] = useState("all");
     const [companyFilter, setCompanyFilter] = useState("all");
     const [showFilters, setShowFilters] = useState(false);
 
-    const [myEmployeeId, setMyEmployeeId] = useState(null); 
+    const [myEmployeeId, setMyEmployeeId] = useState(null);
     const [onlyMyProjects, setOnlyMyProjects] = useState(false);
 
     const [showProjectForm, setShowProjectForm] = useState(false);
     const [editingProject, setEditingProject] = useState(null);
-    
+
     const [showInlineClientForm, setShowInlineClientForm] = useState(false);
     const [inlineClient, setInlineClient] = useState({ name: '', company_name: '', phone: '' });
 
-    const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
-
     const [clients, setClients] = useState([]);
     const [employees, setEmployees] = useState([]);
-    const [clientSearch, setClientSearch] = useState("");
-    const [employeeSearch, setEmployeeSearch] = useState("");
-
-    const navigate = useNavigate();
 
     const initialFormData = {
         name: '', working_company: '', bank: '', client_id: '', gps_link: '',
@@ -144,11 +115,6 @@ export default function ProjectsPage() {
     });
     const [totalCount, setTotalCount] = useState(0);
 
-    const [toast, setToast] = useState({ isVisible: false, message: '', type: 'success' });
-
-    const showToast = useCallback((message, type = 'success') => setToast({ isVisible: true, message, type }), []);
-    const hideToast = useCallback(() => setToast(prev => ({ ...prev, isVisible: false })), []);
-
     // --- Helpers ---
     const updatePaymentStatus = (totalCost, paidAmount) => {
         const cost = parseFloat(totalCost);
@@ -163,29 +129,9 @@ export default function ProjectsPage() {
 
     const getStageConfig = (val) => {
         const normalizedKey = STAGE_ALIASES[val] || val;
-        const config = WORKFLOW_STAGES.find(s => s.value === normalizedKey);
-        
-        return config || { 
-            label: val || 'Не визначено', 
-            color: 'bg-gray-50 text-gray-500 border border-gray-200', 
-            icon: FaInfoCircle 
-        };
+        return WORKFLOW_STAGES.find(s => s.value === normalizedKey)
+            || { label: val || 'Не визначено', tone: 'neutral', icon: FaInfoCircle };
     };
-
-    const getStatusInfo = (status) => ({
-        'planning': { label: 'Планування', color: 'bg-blue-500', icon: FaClock },
-        'in_progress': { label: 'Виконується', color: 'bg-yellow-500', icon: FaTools },
-        'on_hold': { label: 'Призупинено', color: 'bg-orange-500', icon: FaPause },
-        'completed': { label: 'Завершено', color: 'bg-green-500', icon: FaCheckCircle },
-        'cancelled': { label: 'Скасовано', color: 'bg-red-500', icon: FaExclamationTriangle }
-    }[status] || { label: 'Невідомо', color: 'bg-gray-500', icon: FaInfoCircle });
-
-    const getPaymentStatusInfo = (paymentStatus) => ({
-        'pending': { label: 'Очікує оплати', color: 'text-orange-600 bg-orange-50 border-orange-100' },
-        'partial': { label: 'Часткова оплата', color: 'text-blue-600 bg-blue-50 border-blue-100' },
-        'paid': { label: 'Оплачено', color: 'text-green-600 bg-green-50 border-green-100' },
-        'overdue': { label: 'Прострочено', color: 'text-red-600 bg-red-50 border-red-100' }
-    }[paymentStatus] || { label: 'Невідомо', color: 'text-gray-600 bg-gray-50 border-gray-100' });
 
     // --- IDENTIFY EMPLOYEE ---
     useEffect(() => {
@@ -210,11 +156,11 @@ export default function ProjectsPage() {
                 setClients(clientsRes.data || []);
                 setEmployees(employeesRes.data || []);
             } catch (error) {
-                showToast('Помилка завантаження довідників', 'error');
+                toast('Помилка завантаження довідників', 'error');
             }
         };
         loadStaticData();
-    }, [showToast]);
+    }, [toast]);
 
     // --- LOAD PROJECTS ---
     const loadProjects = useCallback(async () => {
@@ -246,7 +192,7 @@ export default function ProjectsPage() {
                 } else if (statusFilter !== 'all') {
                     query = query.eq('status', statusFilter);
                 }
-                
+
                 if (paymentStatusFilter !== 'all') query = query.eq('payment_status', paymentStatusFilter);
                 if (companyFilter !== 'all') query = query.eq('working_company', companyFilter);
             }
@@ -256,21 +202,50 @@ export default function ProjectsPage() {
             if (error) throw error;
             setProjects(data || []);
             setTotalCount(count || 0);
+
+            // Забезпечення по кожному об'єкту цієї сторінки — той самий розрахунок,
+            // що й у "Забезпеченні об'єктів": частка покриття по кожній позиції специфікації.
+            const ids = (data || []).map(p => p.custom_id);
+            if (ids.length) {
+                const { data: needs } = await supabase.from('v_object_material_needs')
+                    .select('installation_custom_id, required_quantity, reserved_quantity, issued_quantity')
+                    .in('installation_custom_id', ids);
+                const byObj = new Map();
+                (needs || []).forEach(n => {
+                    const k = n.installation_custom_id;
+                    if (!byObj.has(k)) byObj.set(k, []);
+                    byObj.get(k).push(n);
+                });
+                const map = {};
+                ids.forEach(id => {
+                    const list = byObj.get(id) || [];
+                    if (!list.length) { map[id] = null; return; }
+                    let sum = 0;
+                    list.forEach(n => {
+                        const req = parseFloat(n.required_quantity) || 1;
+                        const got = (parseFloat(n.reserved_quantity) || 0) + (parseFloat(n.issued_quantity) || 0);
+                        sum += Math.min(100, (got / req) * 100);
+                    });
+                    map[id] = Math.round(sum / list.length);
+                });
+                setReadiness(map);
+            } else {
+                setReadiness({});
+            }
         } catch (error) {
-            showToast(`Помилка: ${error.message}`, 'error');
+            toast(`Помилка: ${error.message}`, 'error');
         } finally {
             setLoading(false);
         }
-    }, [currentPage, statusFilter, paymentStatusFilter, companyFilter, debouncedSearchTerm, showToast, onlyMyProjects, myEmployeeId]);
+    }, [currentPage, statusFilter, paymentStatusFilter, companyFilter, debouncedSearchTerm, toast, onlyMyProjects, myEmployeeId]);
 
     useEffect(() => { loadProjects(); }, [loadProjects]);
-    
+
     useEffect(() => {
         localStorage.setItem('projectsPage', currentPage.toString());
     }, [currentPage]);
 
-    // --- ВИПРАВЛЕНА ЛОГІКА СКИДАННЯ СТОРІНКИ ---
-    // Зберігаємо попередні значення фільтрів для порівняння
+    // --- Скидання сторінки при зміні фільтрів ---
     const prevFilters = useRef({
         term: debouncedSearchTerm,
         status: statusFilter,
@@ -281,8 +256,7 @@ export default function ProjectsPage() {
 
     useEffect(() => {
         const p = prevFilters.current;
-        // Перевіряємо, чи ДІЙСНО змінилися фільтри
-        const changed = 
+        const changed =
             p.term !== debouncedSearchTerm ||
             p.status !== statusFilter ||
             p.payment !== paymentStatusFilter ||
@@ -291,7 +265,6 @@ export default function ProjectsPage() {
 
         if (changed) {
             setCurrentPage(1);
-            // Оновлюємо реф новими значеннями
             prevFilters.current = {
                 term: debouncedSearchTerm,
                 status: statusFilter,
@@ -301,15 +274,29 @@ export default function ProjectsPage() {
             };
         }
     }, [debouncedSearchTerm, statusFilter, paymentStatusFilter, companyFilter, onlyMyProjects]);
-    // ------------------------------------------
 
     // --- Handlers ---
-    const handleDetailsClick = (project) => navigate(`/project/${project.custom_id}`); 
     const handleAddProject = () => {
         setFormData(initialFormData);
         setEditingProject(null);
-        setClientSearch('');
-        setEmployeeSearch('');
+        setFormErrors({});
+        setShowInlineClientForm(false);
+        setInlineClient({ name: '', company_name: '', phone: '' });
+        setShowProjectForm(true);
+    };
+    const handleEditProject = (project) => {
+        setFormData({
+            name: project.name || '', working_company: project.working_company || '', bank: project.bank || '',
+            client_id: project.client_id || '', gps_link: project.gps_link || '',
+            mount_type: project.mount_type || '', station_type: project.station_type || '',
+            capacity_kw: project.capacity_kw ?? '', responsible_emp_id: project.responsible_emp_id || '',
+            total_cost: project.total_cost ?? '', payment_status: project.payment_status || 'pending',
+            paid_amount: project.paid_amount ?? '', status: project.status || 'planning',
+            workflow_stage: project.workflow_stage || 'tech_review', quant_phase: project.quant_phase || '',
+            notes: project.notes || '', creator_email: project.creator_email || '',
+            custom_id: project.custom_id,
+        });
+        setEditingProject(project);
         setFormErrors({});
         setShowInlineClientForm(false);
         setInlineClient({ name: '', company_name: '', phone: '' });
@@ -319,32 +306,29 @@ export default function ProjectsPage() {
         setShowProjectForm(false);
         setEditingProject(null);
         setFormData(initialFormData);
-        setClientSearch('');
-        setEmployeeSearch('');
         setFormErrors({});
         setShowInlineClientForm(false);
         setInlineClient({ name: '', company_name: '', phone: '' });
     };
     const handleInputChange = (field, value) => { setFormData(prev => ({ ...prev, [field]: value })); };
-    const handleClientSelect = (client) => { setFormData(prev => ({ ...prev, client_id: client.custom_id })); setClientSearch(`${client.company_name || client.name} (ID: ${client.custom_id})`); };
-    const handleEmployeeSelect = (employee) => { setFormData(prev => ({ ...prev, responsible_emp_id: employee.custom_id })); setEmployeeSearch(`${employee.name} (ID: ${employee.custom_id})`); };
 
-    const handleDelete = (projectId, projectName) => {
+    const handleDelete = async (projectId, projectName) => {
         if (!canDelete) {
-            showToast("У вас немає прав на видалення", "error");
+            toast("У вас немає прав на видалення", "error");
             return;
         }
-
-        setConfirmModal({
-            isOpen: true,
-            title: "Підтвердити видалення",
-            message: `Видалити проект "${projectName}"?`,
-            onConfirm: async () => {
-                const { error } = await supabase.from('installations').delete().eq('custom_id', projectId);
-                if (!error) { showToast('Видалено', 'success'); loadProjects(); }
-            }
+        const ok = await confirm({
+            title: 'Видалити проект?',
+            tone: 'danger', confirmLabel: 'Видалити',
+            message: `«${projectName}»`,
+            details: ['Дію не можна скасувати.'],
         });
-    }
+        if (!ok) return;
+        const { error } = await supabase.from('installations').delete().eq('custom_id', projectId);
+        if (error) { toast(humanError(error), 'error'); return; }
+        toast('Видалено', 'success');
+        loadProjects();
+    };
 
     const handleSubmit = async () => {
         setFormErrors({});
@@ -354,7 +338,7 @@ export default function ProjectsPage() {
             if (!clientIdToUse) {
                 const name = (inlineClient.name || '').trim();
                 if (!name) {
-                    setFormErrors({ client_id: 'Оберіть клієнта або додайте нового через "+"' });
+                    setFormErrors({ client_id: 'Оберіть клієнта або додайте нового' });
                     setSubmitting(false);
                     return;
                 }
@@ -378,10 +362,9 @@ export default function ProjectsPage() {
                     const exists = prev.some(c => c.custom_id === created.custom_id);
                     return exists ? prev : [created, ...prev];
                 });
-                setClientSearch(`${created.company_name || created.name} (ID: ${created.custom_id})`);
             }
 
-            const { client, responsible_employee, ...projectData } = formData;
+            const { client, responsible_employee, custom_id, ...projectData } = formData;
             const sanitized = {
                 ...projectData,
                 client_id: clientIdToUse,
@@ -390,30 +373,27 @@ export default function ProjectsPage() {
             for (let key in sanitized) if (sanitized[key] === '') sanitized[key] = null;
 
             if (editingProject) {
-                await supabase.from('installations').update(sanitized).eq('custom_id', editingProject.custom_id);
+                const { error } = await supabase.from('installations').update(sanitized).eq('custom_id', editingProject.custom_id);
+                if (error) throw error;
             } else {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (user) sanitized.creator_email = user.email;
-                await supabase.from('installations').insert([sanitized]);
+                const { error } = await supabase.from('installations').insert([sanitized]);
+                if (error) throw error;
             }
 
-            showToast('Збережено', 'success');
+            toast('Збережено', 'success');
             handleCloseForm();
             loadProjects();
         } catch (e) {
-            showToast(e.message || 'Помилка збереження', 'error');
+            toast(humanError(e), 'error');
         } finally {
             setSubmitting(false);
         }
     };
 
-    const filteredClients = clientSearch
-        ? clients.filter(c => {
-            const t = clientSearch.toLowerCase();
-            return (c.name || '').toLowerCase().includes(t) || (c.company_name || '').toLowerCase().includes(t);
-        })
-        : [];
-    const filteredEmployees = employeeSearch ? employees.filter(e => e.name?.toLowerCase().includes(employeeSearch.toLowerCase())) : [];
+    const clientOptions = clients.map(c => ({ id: c.custom_id, label: `${c.company_name || c.name} · ID ${c.custom_id}` }));
+    const employeeOptions = employees.map(e => ({ id: e.custom_id, label: `${e.name} · ID ${e.custom_id}` }));
 
     const Pagination = ({ currentPage, totalCount, projectsPerPage, onPageChange }) => {
         const totalPages = Math.ceil(totalCount / projectsPerPage);
@@ -437,172 +417,222 @@ export default function ProjectsPage() {
             return pages;
         };
 
-        const handleInputKeyDown = (e) => {
-            if (e.key === 'Enter') {
-                const num = parseInt(inputValue, 10);
-                if (!isNaN(num) && num >= 1 && num <= totalPages) {
-                    onPageChange(num);
-                    setInputValue('');
-                }
-            }
-        };
-
-        const handleInputGo = () => {
+        const goToInput = () => {
             const num = parseInt(inputValue, 10);
-            if (!isNaN(num) && num >= 1 && num <= totalPages) {
-                onPageChange(num);
-                setInputValue('');
-            }
+            if (!isNaN(num) && num >= 1 && num <= totalPages) { onPageChange(num); setInputValue(''); }
         };
 
         const from = (currentPage - 1) * projectsPerPage + 1;
         const to = Math.min(currentPage * projectsPerPage, totalCount);
 
         return (
-            <div className="flex flex-col items-center gap-3 py-4">
-                <p className="text-xs text-slate-400 font-medium">
-                    Показано <span className="text-slate-600 font-bold">{from}–{to}</span> з <span className="text-slate-600 font-bold">{totalCount}</span> проектів
+            <div className="flex flex-col items-center gap-3 py-2">
+                <p className={T.dim}>
+                    Показано <b className="text-slate-700">{from}–{to}</b> із <b className="text-slate-700">{totalCount}</b>
                 </p>
-
                 <div className="flex flex-wrap items-center justify-center gap-1.5">
-                    <button
-                        onClick={() => onPageChange(currentPage - 1)}
-                        disabled={currentPage === 1}
-                        className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
-                        aria-label="Попередня сторінка"
-                    >
-                        <FaChevronLeft className="text-xs" />
-                    </button>
-
+                    <IconBtn variant="outline" icon={FaChevronLeft} label="Попередня"
+                        disabled={currentPage === 1} onClick={() => onPageChange(currentPage - 1)} />
                     {getPageNumbers().map((page, idx) =>
                         page === '...'
-                            ? <span key={`ellipsis-${idx}`} className="w-9 h-9 flex items-center justify-center text-slate-400 text-sm select-none">…</span>
-                            : <button
-                                key={page}
-                                onClick={() => onPageChange(page)}
-                                className={`w-9 h-9 flex items-center justify-center rounded-lg text-sm font-bold transition-all shadow-sm border ${
-                                    currentPage === page
-                                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-105'
-                                        : 'bg-white text-slate-600 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200'
-                                }`}
-                            >
+                            ? <span key={`e-${idx}`} className="w-8 text-center text-slate-400 text-sm select-none">…</span>
+                            : <button key={page} onClick={() => onPageChange(page)}
+                                className={`w-8 h-8 flex items-center justify-center rounded-lg text-[12.5px] font-bold transition-all border
+                                    ${currentPage === page ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>
                                 {page}
                             </button>
                     )}
-
-                    <button
-                        onClick={() => onPageChange(currentPage + 1)}
-                        disabled={currentPage === totalPages}
-                        className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
-                        aria-label="Наступна сторінка"
-                    >
-                        <FaChevronRight className="text-xs" />
-                    </button>
+                    <IconBtn variant="outline" icon={FaChevronRight} label="Наступна"
+                        disabled={currentPage === totalPages} onClick={() => onPageChange(currentPage + 1)} />
                 </div>
-
-                <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xs text-slate-400">Перейти на:</span>
-                    <input
-                        type="number"
-                        min="1"
-                        max={totalPages}
-                        value={inputValue}
+                <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-slate-400">Перейти на:</span>
+                    <input type="number" min="1" max={totalPages} value={inputValue}
                         onChange={(e) => setInputValue(e.target.value)}
-                        onKeyDown={handleInputKeyDown}
-                        placeholder="№"
-                        className="w-16 h-8 text-center text-sm border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 bg-white shadow-sm transition"
-                    />
-                    <button
-                        onClick={handleInputGo}
-                        className="h-8 px-3 text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-all"
-                    >
-                        OK
-                    </button>
+                        onKeyDown={(e) => e.key === 'Enter' && goToInput()}
+                        placeholder="№" className={`${T.input} w-16 h-8 text-center`} />
+                    <Btn size="sm" variant="soft" onClick={goToInput}>OK</Btn>
                 </div>
             </div>
         );
     };
 
+    /* ---------------- КАРТКА ОБ'ЄКТА ---------------- */
+
+    const ProjectCard = ({ project }) => {
+        const statusInfo = STATUS_INFO[project.status] || { label: project.status || 'Невідомо', tone: 'neutral', icon: FaInfoCircle };
+        const paymentInfo = PAYMENT_INFO[project.payment_status] || { label: 'Невідомо', tone: 'neutral' };
+        const stageInfo = getStageConfig(project.workflow_stage);
+        const StatusIcon = statusInfo.icon;
+        const StageIcon = stageInfo.icon || FaInfoCircle;
+        const creator = employees.find(e => e.email === project.creator_email);
+
+        const cost = parseFloat(project.total_cost) || 0;
+        const paid = parseFloat(project.paid_amount) || 0;
+        const debt = Math.max(0, cost - paid);
+        const paidPct = cost > 0 ? Math.min(100, (paid / cost) * 100) : 0;
+
+        const readinessPct = readiness[project.custom_id];
+
+        return (
+            <Card className="flex flex-col justify-between hover:shadow-md hover:-translate-y-0.5 transition-all">
+                <div>
+                    <div className="flex justify-between items-start gap-3 mb-3">
+                        <div className="pr-1 flex-1 min-w-0">
+                            <h3 className="text-[14.5px] font-bold text-slate-800 leading-tight line-clamp-2" title={project.name}>
+                                {project.name || project.client?.company_name || 'Без назви'}
+                            </h3>
+                            <span className={`${T.mono} mt-1 inline-block`}>СЕС-{project.custom_id}</span>
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                            <Chip tone={statusInfo.tone} icon={StatusIcon}>{statusInfo.label}</Chip>
+                            <Chip tone={stageInfo.tone} icon={StageIcon}>{stageInfo.label}</Chip>
+                        </div>
+                    </div>
+
+                    <div className="space-y-2 mb-3">
+                        <div className="flex items-center gap-2.5 text-[12.5px] text-slate-600">
+                            <FaUserFriends className="text-slate-400 flex-shrink-0" size={13} />
+                            <span className="font-medium truncate">{project.client?.name || 'Без клієнта'}</span>
+                        </div>
+                        <div className="flex items-center gap-2.5 text-[12.5px] text-slate-600">
+                            <FaBolt className="text-amber-500 flex-shrink-0" size={13} />
+                            <span>Потужність: <b className="text-slate-800">{project.capacity_kw ? `${project.capacity_kw} кВт` : '—'}</b></span>
+                        </div>
+                        <div className="flex items-center gap-2.5 text-[12.5px] text-slate-600">
+                            <FaHardHat className="text-indigo-500 flex-shrink-0" size={13} />
+                            <span className="truncate">Відповідальний: <b className="text-slate-800">{project.responsible_employee?.name || 'Не призначено'}</b></span>
+                        </div>
+                        {creator && (
+                            <div className="flex items-center gap-2.5 text-[11px] text-slate-400 pt-1.5 mt-1.5 border-t border-slate-100">
+                                <FaUserEdit size={12} /><span>Додав: {creator.name}</span>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Фінанси */}
+                    <div className={`${T.inset} px-2.5 py-2 mb-2 space-y-1.5`}>
+                        <div className="flex items-center justify-between">
+                            <span className={T.label}>Оплата</span>
+                            <Chip tone={paymentInfo.tone}>{paymentInfo.label}</Chip>
+                        </div>
+                        {cost > 0 ? (
+                            <>
+                                <Bar segments={[{ pct: paidPct, tone: paymentInfo.tone === 'danger' ? 'danger' : 'ok' }]} />
+                                <div className="flex items-center justify-between text-[11px] tabular-nums">
+                                    <span className="text-slate-500">сплачено <b className="text-slate-800">${num(paid)}</b> з ${num(cost)}</span>
+                                    {debt > 0 && <span className="font-bold text-rose-600">борг ${num(debt)}</span>}
+                                </div>
+                            </>
+                        ) : <span className="text-[11px] text-slate-400">Вартість не вказана</span>}
+                    </div>
+
+                    {/* Забезпечення матеріалами */}
+                    {readinessPct !== null && readinessPct !== undefined && (
+                        <div className={`${T.inset} px-2.5 py-2 mb-1 space-y-1.5`}>
+                            <div className="flex items-center justify-between">
+                                <span className={`${T.label} inline-flex items-center gap-1.5`}><FaBoxes size={10} /> Забезпечення</span>
+                                <span className="text-[11px] font-black tabular-nums text-slate-700">{readinessPct}%</span>
+                            </div>
+                            <Bar segments={[{ pct: readinessPct, tone: readinessPct >= 100 ? 'ok' : readinessPct >= 50 ? 'info' : 'warn' }]} />
+                        </div>
+                    )}
+                </div>
+
+                <div className="border-t border-slate-100 mt-3 pt-3 flex justify-between items-center">
+                    <Btn size="sm" variant="soft" icon={FaUserEdit} onClick={() => handleEditProject(project)}>
+                        Редагувати
+                    </Btn>
+                    <div className="flex items-center gap-1">
+                        <a href={`#/project/${project.custom_id}`} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[11px] font-bold border bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 transition-colors">
+                            <FaExternalLinkAlt size={10} /> Деталі
+                        </a>
+                        {canDelete && (
+                            <IconBtn variant="softDanger" icon={FaTrash} label="Видалити"
+                                onClick={() => handleDelete(project.custom_id, project.name)} />
+                        )}
+                    </div>
+                </div>
+            </Card>
+        );
+    };
+
     return (
         <Layout>
-            <div className="p-4 sm:p-8 space-y-6 max-w-[1600px] mx-auto pb-safe min-h-[calc(100vh-80px)] flex flex-col text-slate-800">
-                <Toast message={toast.message} type={toast.type} isVisible={toast.isVisible} onClose={hideToast} />
-                <ConfirmationModal {...confirmModal} onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })} />
-                
+            <div className="p-4 sm:p-6 space-y-4 max-w-[1600px] mx-auto pb-safe min-h-[calc(100vh-80px)] flex flex-col text-slate-800">
+
                 {/* --- HEADER --- */}
-                <div className="flex flex-col gap-4 flex-none">
-                    <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                <div className="flex flex-col gap-3 flex-none">
+                    <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
                         <div>
-                            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Проекти</h1>
-                            <p className="text-slate-500 text-sm mt-1">Управління об'єктами СЕС</p>
+                            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Об'єкти</h1>
+                            <p className="text-slate-500 text-[13px] mt-0.5">Управління об'єктами СЕС</p>
                         </div>
-                        <button onClick={handleAddProject} className="flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all w-full sm:w-auto">
-                            <FaPlus/> <span>Новий проект</span>
-                        </button>
+                        <Btn variant="accent" size="lg" icon={FaPlus} onClick={handleAddProject} className="w-full sm:w-auto">
+                            Новий об'єкт
+                        </Btn>
                     </div>
 
                     {/* SEARCH & FILTERS ROW */}
-                    <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-2.5">
                         <div className="relative w-full">
-                            <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
-                            <input 
-                                type="text" 
-                                placeholder="Пошук (Назва або ID)..." 
-                                value={searchTerm} 
-                                onChange={(e) => setSearchTerm(e.target.value)} 
-                                className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 transition shadow-sm text-sm outline-none"
+                            <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={13} />
+                            <input
+                                type="text"
+                                placeholder="Пошук (назва або ID)…"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className={`${T.input} h-12 pl-11 text-[14px] shadow-sm`}
                             />
                         </div>
 
-                        <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center justify-between gap-2.5">
                             {myEmployeeId ? (
                                 <div className="bg-white p-1 rounded-xl border border-slate-200 flex items-center shadow-sm flex-1 sm:flex-none">
-                                    <button onClick={() => setOnlyMyProjects(false)} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-bold transition-all ${!onlyMyProjects ? 'bg-indigo-100 text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Всі</button>
-                                    <button onClick={() => setOnlyMyProjects(true)} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${onlyMyProjects ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}>
-                                        <FaUserTie className={onlyMyProjects ? "text-white" : "text-slate-400"} />
+                                    <button onClick={() => setOnlyMyProjects(false)} className={`flex-1 sm:flex-none px-4 h-9 rounded-lg text-[12.5px] font-bold transition-all ${!onlyMyProjects ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:text-slate-700'}`}>Всі</button>
+                                    <button onClick={() => setOnlyMyProjects(true)} className={`flex-1 sm:flex-none px-4 h-9 rounded-lg text-[12.5px] font-bold transition-all flex items-center justify-center gap-2 ${onlyMyProjects ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-700'}`}>
+                                        <FaUserTie className={onlyMyProjects ? "text-white" : "text-slate-400"} size={12} />
                                         <span>Мої</span>
                                     </button>
                                 </div>
                             ) : <div></div>}
 
-                            <button 
-                                onClick={() => setShowFilters(!showFilters)} 
-                                className={`flex-shrink-0 flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-semibold transition shadow-sm border ${showFilters ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'}`}
-                            >
-                                <FaFilter/> <span>Фільтри</span>
-                            </button>
+                            <Btn variant={showFilters ? 'primary' : 'outline'} icon={FaFilter} onClick={() => setShowFilters(!showFilters)} className="flex-shrink-0">
+                                Фільтри
+                            </Btn>
                         </div>
                     </div>
 
                     <AnimatePresence>
                         {showFilters && (
                             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-                                <div className="bg-white p-4 rounded-xl border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4 shadow-sm">
+                                <Card className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <div>
-                                        <span className="text-xs font-bold text-slate-400 uppercase mb-2 block">Статус</span>
-                                        <div className="flex flex-wrap gap-2">
+                                        <span className={T.label}>Статус</span>
+                                        <div className="flex flex-wrap gap-1.5 mt-1.5">
                                             {[{ v: 'active', l: 'Активні' }, { v: 'all', l: 'Всі' }, { v: 'planning', l: 'План' }, { v: 'in_progress', l: 'Робота' }, { v: 'on_hold', l: 'Пауза' }, { v: 'completed', l: 'Фініш' }, { v: 'cancelled', l: 'Відміна' }].map((s) => (
-                                                <button key={s.v} onClick={() => setStatusFilter(s.v)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${statusFilter === s.v ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{s.l}</button>
+                                                <button key={s.v} onClick={() => setStatusFilter(s.v)} className={`px-2.5 h-7 rounded-lg text-[11px] font-bold transition-colors ${statusFilter === s.v ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{s.l}</button>
                                             ))}
                                         </div>
                                     </div>
                                     <div>
-                                        <span className="text-xs font-bold text-slate-400 uppercase mb-2 block">Оплата</span>
-                                        <div className="flex flex-wrap gap-2">
+                                        <span className={T.label}>Оплата</span>
+                                        <div className="flex flex-wrap gap-1.5 mt-1.5">
                                             {[{ v: 'all', l: 'Всі' }, { v: 'pending', l: 'Очікує' }, { v: 'partial', l: 'Частково' }, { v: 'paid', l: 'Сплачено' }, { v: 'overdue', l: 'Борг' }].map((s) => (
-                                                <button key={s.v} onClick={() => setPaymentStatusFilter(s.v)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${paymentStatusFilter === s.v ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{s.l}</button>
+                                                <button key={s.v} onClick={() => setPaymentStatusFilter(s.v)} className={`px-2.5 h-7 rounded-lg text-[11px] font-bold transition-colors ${paymentStatusFilter === s.v ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{s.l}</button>
                                             ))}
                                         </div>
                                     </div>
                                     <div>
-                                        <span className="text-xs font-bold text-slate-400 uppercase mb-2 block">Компанія</span>
-                                        <div className="flex flex-wrap gap-2">
+                                        <span className={T.label}>Компанія</span>
+                                        <div className="flex flex-wrap gap-1.5 mt-1.5">
                                             {[{ v: 'all', l: 'Всі' }, ...ALLOWED_COMPANIES.map(c => ({v: c, l: c}))].map((c) => (
-                                                <button key={c.v} onClick={() => setCompanyFilter(c.v)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${companyFilter === c.v ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{c.l}</button>
+                                                <button key={c.v} onClick={() => setCompanyFilter(c.v)} className={`px-2.5 h-7 rounded-lg text-[11px] font-bold transition-colors ${companyFilter === c.v ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{c.l}</button>
                                             ))}
                                         </div>
                                     </div>
-                                </div>
+                                </Card>
                             </motion.div>
                         )}
                     </AnimatePresence>
@@ -611,276 +641,191 @@ export default function ProjectsPage() {
                 {/* --- GRID --- */}
                 <div className="flex-1 min-h-[300px]">
                     {loading ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-64 bg-white rounded-xl animate-pulse shadow-sm border border-slate-100"></div>)}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} rows={6} />)}
                         </div>
                     ) : projects.length === 0 ? (
-                        <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-slate-300">
-                            <FaProjectDiagram className="mx-auto text-4xl text-slate-300 mb-3"/>
-                            <h3 className="text-lg font-bold text-slate-600">Проектів не знайдено</h3>
-                            <p className="text-slate-400 text-sm">Спробуйте змінити фільтри</p>
-                        </div>
+                        <Card>
+                            <EmptyState icon={FaProjectDiagram} title="Об'єктів не знайдено" hint="Спробуйте змінити фільтри або пошуковий запит." />
+                        </Card>
                     ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {projects.map((project) => {
-                                const statusInfo = getStatusInfo(project.status);
-                                const paymentInfo = getPaymentStatusInfo(project.payment_status);
-                                
-                                const workflowInfo = getStageConfig(project.workflow_stage);
-                                
-                                const StatusIcon = statusInfo.icon;
-                                const WorkflowIcon = workflowInfo.icon || FaInfoCircle;
-                                const creator = employees.find(e => e.email === project.creator_email);
-                                const creatorName = creator ? creator.name : project.creator_email;
-
-                                return (
-                                    <motion.div
-                                        key={project.custom_id}
-                                        layout
-                                        initial={{ opacity: 0, y: 10 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -10 }}
-                                        className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-col justify-between hover:shadow-md transition-all hover:-translate-y-1"
-                                    >
-                                        <div>
-                                            <div className="flex justify-between items-start gap-3 mb-4">
-                                                <div className="pr-1 flex-1 min-w-0">
-                                                    <h3 className="text-lg font-bold text-slate-800 leading-tight line-clamp-2" title={project.name}>{project.name || project.client?.company_name || 'Без назви'}</h3>
-                                                    <span className="text-xs font-mono font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded mt-1 inline-block">#{project.custom_id}</span>
-                                                </div>
-                                                
-                                                <div className="flex flex-col items-end gap-2 min-w-[140px] flex-shrink-0">
-                                                    <div title={statusInfo.label} className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold text-white shadow-sm ${statusInfo.color}`}>
-                                                        <StatusIcon className="text-[10px]"/><span>{statusInfo.label}</span>
-                                                    </div>
-                                                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border shadow-sm ${workflowInfo.color}`}>
-                                                        <WorkflowIcon className="text-[10px]" /> 
-                                                        <span className="truncate max-w-[130px]">{workflowInfo.label}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="space-y-3 mb-6">
-                                                <div className="flex items-center gap-3 text-sm text-slate-600">
-                                                    <div className="w-5 flex justify-center text-slate-400"><FaUserFriends size={16}/></div>
-                                                    <span className="font-medium truncate">{project.client?.name || 'Без клієнта'}</span>
-                                                </div>
-                                                <div className="flex items-center gap-3 text-sm text-slate-600">
-                                                    <div className="w-5 flex justify-center text-amber-500"><FaBolt size={16}/></div>
-                                                    <span>Потужність: <span className="font-bold text-slate-800">{project.capacity_kw ? `${project.capacity_kw} кВт` : 'N/A'}</span></span>
-                                                </div>
-                                                <div className="flex items-center gap-3 text-sm text-slate-600">
-                                                    <div className="w-5 flex justify-center text-indigo-500"><FaHardHat size={16}/></div>
-                                                    <span>Відповідальний: <span className="font-bold text-slate-800">{project.responsible_employee?.name || 'Не призначено'}</span></span>
-                                                </div>
-                                                
-                                                {project.creator_email && (
-                                                    <div className="flex items-center gap-3 text-xs text-slate-400 mt-2 pt-2 border-t border-slate-100">
-                                                        <div className="w-5 flex justify-center"><FaUserEdit size={14}/></div>
-                                                        <span>Додав: {creatorName}</span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                        <div className="border-t border-slate-100 pt-4 flex justify-between items-center">
-                                            <div className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${paymentInfo.color}`}>{paymentInfo.label}</div>
-                                            <div className="flex items-center gap-1">
-                                                <button onClick={() => handleDetailsClick(project)} className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-500 hover:text-blue-600 transition-colors"><FaRegEye size={18}/></button>
-                                                
-                                                {canDelete && (
-                                                    <button onClick={() => handleDelete(project.custom_id, project.name)} className="w-9 h-9 flex items-center justify-center hover:bg-red-50 rounded-lg text-red-500 transition-colors">
-                                                        <FaTrash/>
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </div>
-                                    </motion.div>
-                                );
-                            })}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {projects.map((project) => <ProjectCard key={project.custom_id} project={project} />)}
                         </div>
                     )}
                 </div>
 
-                {/* PAGINATION BOTTOM */}
-                <div className="relative pt-4 border-t border-slate-200">
+                <div className="relative pt-2 border-t border-slate-200">
                     <Pagination currentPage={currentPage} totalCount={totalCount} projectsPerPage={PROJECTS_PER_PAGE} onPageChange={setCurrentPage} />
                 </div>
 
-                {/* FORM MODAL */}
-                <AnimatePresence>
-                    {showProjectForm && (
-                        <motion.div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={handleCloseForm}>
-                            <motion.div className="bg-white rounded-2xl p-4 sm:p-8 w-full max-w-lg md:max-w-4xl shadow-2xl border border-gray-200 my-8 max-h-[90vh] flex flex-col" initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} onClick={(e) => e.stopPropagation()}>
-                                <div className="mb-6"><h2 className="text-2xl sm:text-3xl font-bold text-slate-800">{editingProject ? 'Редагувати' : 'Новий проект'}</h2></div>
-                                
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 overflow-y-auto pr-2 flex-grow">
-                                    <div className="md:col-span-2 relative">
-                                        <div className="flex items-center justify-between mb-2">
-                                            <label className="block text-sm font-medium text-gray-700">Клієнт <span className="text-red-500">*</span></label>
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowInlineClientForm(v => !v)}
-                                                className="flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
-                                                title="Додати клієнта швидко"
-                                            >
-                                                <FaPlus className="text-[10px]" />
-                                                <span>Додати клієнта</span>
-                                            </button>
-                                        </div>
+                {/* --- ФОРМА: ВИСУВНА ПАНЕЛЬ --- */}
+                <Drawer
+                    isOpen={showProjectForm} onClose={handleCloseForm}
+                    title={editingProject ? 'Редагувати об\'єкт' : 'Новий об\'єкт'}
+                    subtitle={editingProject ? `СЕС-${editingProject.custom_id}` : "Заповніть основні дані — решту можна додати пізніше"}
+                    size="lg"
+                    onSubmit={() => { if (!submitting) handleSubmit(); }}
+                    submitHint="зберегти"
+                    footer={<>
+                        <Btn variant="outline" onClick={handleCloseForm}>Скасувати</Btn>
+                        <Btn variant="accent" onClick={handleSubmit} disabled={submitting}>
+                            {submitting ? 'Збереження…' : 'Зберегти'}
+                        </Btn>
+                    </>}
+                >
+                    <div className="space-y-5">
 
-                                        <input
-                                            type="text"
-                                            value={clientSearch}
-                                            onChange={(e) => {
-                                                setClientSearch(e.target.value);
-                                                if (formData.client_id) handleInputChange('client_id', '');
-                                            }}
-                                            placeholder="Пошук..."
-                                            className={`w-full border rounded-xl px-4 py-3 ${formErrors.client_id ? 'border-red-500' : 'border-gray-300'}`}
-                                        />
-                                        {formErrors.client_id && (
-                                            <div className="mt-1 text-xs font-bold text-red-600">{formErrors.client_id}</div>
-                                        )}
-                                        {clientSearch && filteredClients.length > 0 && !formData.client_id && (
-                                            <div className="absolute z-20 w-full bg-white border border-gray-300 rounded-lg mt-1 shadow-lg max-h-60 overflow-y-auto">
-                                                {filteredClients.map(client => (
-                                                    <button key={client.custom_id} type="button" onClick={() => handleClientSelect(client)} className="w-full px-4 py-3 text-left hover:bg-gray-50 border-b last:border-b-0">
-                                                        <div className="font-medium">{client.company_name || client.name}</div>
-                                                        <div className="text-xs text-gray-500">ID: {client.custom_id}</div>
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        )}
-                                        {showInlineClientForm && !editingProject && (
-                                            <div className="mt-3 bg-slate-50 border border-slate-200 rounded-xl p-4">
-                                                <div className="flex items-center justify-between mb-3">
-                                                    <div className="text-sm font-bold text-slate-800">Швидке створення клієнта</div>
-                                                    <button type="button" onClick={() => setShowInlineClientForm(false)} className="text-slate-400 hover:text-slate-600"><FaTimes /></button>
-                                                </div>
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                    <div className="md:col-span-2">
-                                                        <label className="block text-xs font-bold text-slate-500 mb-1">Ім'я / Назва клієнта <span className="text-red-500">*</span></label>
-                                                        <input
-                                                            type="text"
-                                                            value={inlineClient.name}
-                                                            onChange={(e) => setInlineClient(prev => ({ ...prev, name: e.target.value }))}
-                                                            placeholder="Напр. Петро Іванов або ТОВ 'Ромашка'"
-                                                            className="w-full border border-slate-300 rounded-xl px-4 py-3 bg-white"
-                                                        />
-                                                        <p className="mt-1 text-xs text-slate-400">Клієнт буде створений автоматично при натисканні “Зберегти”.</p>
-                                                    </div>
-                                                    <div>
-                                                        <label className="block text-xs font-bold text-slate-500 mb-1">Компанія</label>
-                                                        <input
-                                                            type="text"
-                                                            value={inlineClient.company_name}
-                                                            onChange={(e) => setInlineClient(prev => ({ ...prev, company_name: e.target.value }))}
-                                                            placeholder="(необов'язково)"
-                                                            className="w-full border border-slate-300 rounded-xl px-4 py-3 bg-white"
-                                                        />
-                                                    </div>
-                                                    <div>
-                                                        <label className="block text-xs font-bold text-slate-500 mb-1">Телефон</label>
-                                                        <input
-                                                            type="tel"
-                                                            value={inlineClient.phone}
-                                                            onChange={(e) => setInlineClient(prev => ({ ...prev, phone: e.target.value }))}
-                                                            placeholder="+380... (необов'язково)"
-                                                            className="w-full border border-slate-300 rounded-xl px-4 py-3 bg-white"
-                                                        />
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="md:col-span-2"><label className="block text-sm font-medium text-gray-700 mb-2">Назва</label><input type="text" value={formData.name || ''} onChange={(e) => handleInputChange('name', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
-                                    
-                                    {editingProject && (
-                                        <div className="md:col-span-2 bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
-                                                <select value={formData.status || ''} onChange={(e) => handleInputChange('status', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white">
-                                                    <option value="planning">Планування</option>
-                                                    <option value="in_progress">Виконується</option>
-                                                    <option value="on_hold">Призупинено</option>
-                                                    <option value="completed">Завершено</option>
-                                                    <option value="cancelled">Скасовано</option>
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-2">Етап</label>
-                                                <select value={formData.workflow_stage || 'tech_review'} onChange={(e) => handleInputChange('workflow_stage', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white text-indigo-900 font-medium">
-                                                    {WORKFLOW_STAGES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                                                </select>
-                                            </div>
-                                        </div>
-                                    )}
+                        {/* Клієнт */}
+                        <div className="space-y-2">
+                            <span className={T.label}>Клієнт <span className="text-rose-500">*</span></span>
+                            <Picker
+                                options={clientOptions}
+                                value={formData.client_id}
+                                onChange={(v) => { handleInputChange('client_id', v); setFormErrors(p => ({ ...p, client_id: '' })); }}
+                                placeholder="Оберіть клієнта…"
+                                searchPlaceholder="Пошук клієнта…"
+                                icon={FaUserFriends}
+                                onAddNew={(q) => { setInlineClient(c => ({ ...c, name: q })); setShowInlineClientForm(true); }}
+                                addLabel="Створити клієнта"
+                            />
+                            {formErrors.client_id && <div className="text-[11px] font-bold text-rose-600">{formErrors.client_id}</div>}
 
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">Компанія</label><select value={formData.working_company || ''} onChange={(e) => handleInputChange('working_company', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white"><option value="">Виберіть...</option>{ALLOWED_COMPANIES.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">Банк?</label><select value={formData.bank || ''} onChange={(e) => handleInputChange('bank', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white"><option value="">Виберіть...</option><option value="Так">Так</option><option value="Ні">Ні</option></select></div>
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">GPS</label><input type="url" value={formData.gps_link || ''} onChange={(e) => handleInputChange('gps_link', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">К-сть фаз</label>
-                                        <select value={formData.quant_phase || ''} onChange={(e) => handleInputChange('quant_phase', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white">
-                                            <option value="">Виберіть...</option>
-                                            <option value="1">1</option>
-                                            <option value="2">2</option>
-                                            <option value="3">3</option>
-                                        </select>
+                            {showInlineClientForm && !editingProject && (
+                                <div className={`${T.inset} p-3 space-y-2.5`}>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[12px] font-bold text-slate-700">Новий клієнт</span>
+                                        <IconBtn variant="ghost" icon={FaTimes} label="Прибрати" onClick={() => setShowInlineClientForm(false)} />
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Тип монтажу</label>
-                                        <select value={formData.mount_type || ''} onChange={(e) => handleInputChange('mount_type', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white">
-                                            <option value="">Виберіть...</option>
-                                            <option value="Дахове кріплення (Скатний дах)">Дахове кріплення (Скатний дах)</option>
-                                            <option value="Дахове кріплення (Плоский дах)">Дахове кріплення (Плоский дах)</option>
-                                            <option value="Наземне кріплення">Наземне кріплення</option>
-                                            <option value="Трекерна система">Трекерна система</option>
-                                            <option value="Дах/Земля">Дах/Земля</option>
-                                            <option value="Електромонтаж">Електромонтаж</option>
-                                            <option value="Інше">Інше</option>
-                                        </select>
+                                    <Field label="Ім'я / назва клієнта" required>
+                                        <input className={T.input} value={inlineClient.name}
+                                            placeholder="Напр. Петро Іванов або ТОВ «Ромашка»"
+                                            onChange={(e) => setInlineClient(p => ({ ...p, name: e.target.value }))} />
+                                    </Field>
+                                    <div className="grid grid-cols-2 gap-2.5">
+                                        <Field label="Компанія">
+                                            <input className={T.input} value={inlineClient.company_name}
+                                                placeholder="Необов'язково"
+                                                onChange={(e) => setInlineClient(p => ({ ...p, company_name: e.target.value }))} />
+                                        </Field>
+                                        <Field label="Телефон">
+                                            <input className={T.input} value={inlineClient.phone}
+                                                placeholder="+380…"
+                                                onChange={(e) => setInlineClient(p => ({ ...p, phone: e.target.value }))} />
+                                        </Field>
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Тип станції</label>
-                                        <select value={formData.station_type || ''} onChange={(e) => handleInputChange('station_type', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white">
-                                            <option value="">Виберіть...</option>
-                                            <option value="Мережева">Мережева</option>
-                                            <option value="Автономна">Автономна</option>
-                                            <option value="Гібридна">Гібридна</option>
-                                            <option value="Інвертор + АКБ">Інвертор + АКБ</option>
-                                        </select>
-                                    </div>
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">Потужність (кВт)</label><input type="number" step="0.1" min="0" value={formData.capacity_kw || ''} onChange={(e) => handleInputChange('capacity_kw', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
-                                    <div className="relative md:col-span-2">
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Відповідальний</label>
-                                        <input type="text" value={employeeSearch} onChange={(e) => {setEmployeeSearch(e.target.value); if(formData.responsible_emp_id) handleInputChange('responsible_emp_id', '');}} placeholder="Пошук..." className="w-full border border-gray-300 rounded-xl px-4 py-3" />
-                                        {employeeSearch && filteredEmployees.length > 0 && !formData.responsible_emp_id && (
-                                            <div className="absolute z-10 w-full bg-white border rounded-lg mt-1 shadow-lg max-h-60 overflow-y-auto">
-                                                {filteredEmployees.map(emp => (
-                                                    <button key={emp.custom_id} type="button" onClick={() => handleEmployeeSelect(emp)} className="w-full px-4 py-3 text-left hover:bg-gray-50 border-b">
-                                                        <div className="font-medium">{emp.name}</div>
-                                                        <div className="text-xs text-gray-500">ID: {emp.custom_id}</div>
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">Вартість (USD)</label><input type="number" min="0" step="0.01" value={formData.total_cost || ''} onChange={(e) => handleInputChange('total_cost', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
-                                    <div><label className="block text-sm font-medium text-gray-700 mb-2">Сплачено (USD)</label><input type="number" min="0" step="0.01" value={formData.paid_amount || ''} onChange={(e) => handleInputChange('paid_amount', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3" /></div>
-                                    <div className="md:col-span-2"><label className="block text-sm font-medium text-gray-700 mb-2">Примітки</label><textarea rows="3" value={formData.notes || ''} onChange={(e) => handleInputChange('notes', e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-3 resize-none"></textarea></div>
                                 </div>
-                                <div className="flex justify-end gap-3 pt-6 border-t border-gray-200 mt-6 flex-shrink-0">
-                                    <button type="button" onClick={handleCloseForm} disabled={submitting} className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition">Скасувати</button>
-                                    <button type="button" onClick={handleSubmit} disabled={submitting} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-medium transition hover:bg-indigo-700 flex items-center space-x-2">
-                                        {submitting ? <span>Збереження...</span> : <span>Зберегти</span>}
-                                    </button>
-                                </div>
-                            </motion.div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                            )}
+                        </div>
+
+                        <Field label="Назва об'єкта">
+                            <input className={T.input} value={formData.name || ''}
+                                onChange={(e) => handleInputChange('name', e.target.value)} />
+                        </Field>
+
+                        {editingProject && (
+                            <div className={`${T.inset} p-3 grid grid-cols-1 sm:grid-cols-2 gap-3`}>
+                                <Field label="Статус виконання">
+                                    <select className={T.select} value={formData.status || ''} onChange={(e) => handleInputChange('status', e.target.value)}>
+                                        {Object.entries(STATUS_INFO).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                                    </select>
+                                </Field>
+                                <Field label="Етап">
+                                    <select className={T.select} value={formData.workflow_stage || 'tech_review'} onChange={(e) => handleInputChange('workflow_stage', e.target.value)}>
+                                        {WORKFLOW_STAGES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                                    </select>
+                                </Field>
+                            </div>
+                        )}
+
+                        {/* Параметри станції */}
+                        <div className="space-y-2.5">
+                            <span className={T.label}>Параметри станції</span>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <Field label="Тип монтажу">
+                                    <select className={T.select} value={formData.mount_type || ''} onChange={(e) => handleInputChange('mount_type', e.target.value)}>
+                                        <option value="">Виберіть…</option>
+                                        <option value="Дахове кріплення (Скатний дах)">Дахове кріплення (Скатний дах)</option>
+                                        <option value="Дахове кріплення (Плоский дах)">Дахове кріплення (Плоский дах)</option>
+                                        <option value="Наземне кріплення">Наземне кріплення</option>
+                                        <option value="Трекерна система">Трекерна система</option>
+                                        <option value="Дах/Земля">Дах/Земля</option>
+                                        <option value="Електромонтаж">Електромонтаж</option>
+                                        <option value="Інше">Інше</option>
+                                    </select>
+                                </Field>
+                                <Field label="Тип станції">
+                                    <select className={T.select} value={formData.station_type || ''} onChange={(e) => handleInputChange('station_type', e.target.value)}>
+                                        <option value="">Виберіть…</option>
+                                        <option value="Мережева">Мережева</option>
+                                        <option value="Автономна">Автономна</option>
+                                        <option value="Гібридна">Гібридна</option>
+                                        <option value="Інвертор + АКБ">Інвертор + АКБ</option>
+                                    </select>
+                                </Field>
+                                <Field label="Потужність (кВт)">
+                                    <input type="number" step="0.1" min="0" className={T.input} value={formData.capacity_kw || ''}
+                                        onChange={(e) => handleInputChange('capacity_kw', e.target.value)} />
+                                </Field>
+                                <Field label="К-сть фаз">
+                                    <select className={T.select} value={formData.quant_phase || ''} onChange={(e) => handleInputChange('quant_phase', e.target.value)}>
+                                        <option value="">Виберіть…</option>
+                                        <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                                    </select>
+                                </Field>
+                                <Field label="GPS-посилання" className="sm:col-span-2">
+                                    <input type="url" className={T.input} value={formData.gps_link || ''}
+                                        onChange={(e) => handleInputChange('gps_link', e.target.value)} />
+                                </Field>
+                            </div>
+                        </div>
+
+                        {/* Відповідальний і компанія */}
+                        <div className="space-y-2.5">
+                            <span className={T.label}>Відповідальний і компанія</span>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <Field label="Відповідальний" className="sm:col-span-2">
+                                    <Picker options={employeeOptions} value={formData.responsible_emp_id}
+                                        onChange={(v) => handleInputChange('responsible_emp_id', v)}
+                                        placeholder="Оберіть працівника…" searchPlaceholder="Пошук…" icon={FaHardHat} />
+                                </Field>
+                                <Field label="Компанія">
+                                    <select className={T.select} value={formData.working_company || ''} onChange={(e) => handleInputChange('working_company', e.target.value)}>
+                                        <option value="">Виберіть…</option>
+                                        {ALLOWED_COMPANIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                </Field>
+                                <Field label="Через банк?">
+                                    <select className={T.select} value={formData.bank || ''} onChange={(e) => handleInputChange('bank', e.target.value)}>
+                                        <option value="">Виберіть…</option>
+                                        <option value="Так">Так</option>
+                                        <option value="Ні">Ні</option>
+                                    </select>
+                                </Field>
+                            </div>
+                        </div>
+
+                        {/* Фінанси */}
+                        <div className="space-y-2.5">
+                            <span className={`${T.label} inline-flex items-center gap-1.5`}><FaMoneyBillWave size={10} /> Фінанси</span>
+                            <div className="grid grid-cols-2 gap-3">
+                                <Field label="Вартість (USD)">
+                                    <input type="number" min="0" step="0.01" className={T.input} value={formData.total_cost || ''}
+                                        onChange={(e) => handleInputChange('total_cost', e.target.value)} />
+                                </Field>
+                                <Field label="Сплачено (USD)">
+                                    <input type="number" min="0" step="0.01" className={T.input} value={formData.paid_amount || ''}
+                                        onChange={(e) => handleInputChange('paid_amount', e.target.value)} />
+                                </Field>
+                            </div>
+                        </div>
+
+                        <Field label="Примітки">
+                            <textarea rows="3" className={`${T.input} h-auto py-2 resize-none`} value={formData.notes || ''}
+                                onChange={(e) => handleInputChange('notes', e.target.value)} />
+                        </Field>
+                    </div>
+                </Drawer>
             </div>
         </Layout>
     );

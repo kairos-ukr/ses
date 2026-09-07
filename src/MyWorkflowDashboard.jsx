@@ -24,6 +24,8 @@ import {
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
+import { useToast } from "./ui";
+import { ingestOfferInBackground } from "./utils/commercialOffer";
 import Layout from "./Layout";
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
@@ -899,6 +901,7 @@ function QuickStageModal({
 export default function MyWorkflowDashboard() {
   const navigate = useNavigate();
   const { employee, user } = useAuth();
+  const showToast = useToast();
 
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
@@ -1191,6 +1194,18 @@ export default function MyWorkflowDashboard() {
         });
         uploadedLinks = up.links || [];
         uploadedFileIds = up.fileIds || [];
+
+        // КП оцифровується у фоні і з цього екрана теж: людині байдуже,
+        // звідки вона завантажила файл, результат має бути однаковий.
+        if (quickItem.stage_key === "commercial_proposal") {
+          ingestOfferInBackground({
+            files: payload.rawFiles,
+            installationId: quickItem.installation_custom_id,
+            employeeId: employee?.id || null,
+            driveFiles: uploadedFileIds.map((fileId, i) => ({ fileId, webViewLink: uploadedLinks[i] })),
+            notify: showToast,
+          });
+        }
       }
 
       const photos = [...uploadedLinks];

@@ -1,27 +1,44 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useParams } from "react-router-dom"; 
+import { useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
-    FaCloudUploadAlt, FaFilePdf, FaFileImage, FaFileAlt, 
-    FaEye, FaTimes, FaDownload, FaCheck, FaExclamationTriangle, 
-    FaTrash, FaRegFile, FaFilter, FaFileExcel, FaFileWord, 
+import {
+    FaCloudUploadAlt, FaFilePdf, FaFileImage, FaFileAlt,
+    FaEye, FaTimes, FaDownload, FaCheck, FaExclamationTriangle,
+    FaTrash, FaRegFile, FaFileExcel, FaFileWord,
     FaSpinner, FaImage, FaChevronDown, FaHdd
 } from "react-icons/fa";
+import { TONE } from "./ui";
+import { useAuth } from "./AuthProvider";
+import { ingestOfferInBackground } from "./utils/commercialOffer";
 
 // --- КОНФІГУРАЦІЯ ---
-const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev'; 
+const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev';
 
 const DOC_TYPES = [
-    "Комерційна пропозиція", 
-    "Технічний проєкт", 
-    "Фотозвіт", 
-    "Фото об'єкта",       
-    "3D-візуалізація",    
-    "Чек", 
-    "Накладна", 
-    "Акт", 
+    "Комерційна пропозиція",
+    "Технічний проєкт",
+    "Фотозвіт",
+    "Фото об'єкта",
+    "3D-візуалізація",
+    "Чек",
+    "Накладна",
+    "Акт",
     "Інше"
 ];
+
+// Колір по типу документа — швидше сканувати сітку й фільтри очима
+const DOC_TYPE_TONE = {
+    "Комерційна пропозиція": "accent",
+    "Технічний проєкт": "info",
+    "Фотозвіт": "ok",
+    "Фото об'єкта": "info",
+    "3D-візуалізація": "accent",
+    "Чек": "warn",
+    "Накладна": "warn",
+    "Акт": "neutral",
+    "Інше": "neutral",
+};
+const toneOf = (docType) => TONE[DOC_TYPE_TONE[docType] || "neutral"];
 
 // Хелпер для іконок
 const getFileIcon = (mimeType, fileName = "") => {
@@ -48,8 +65,9 @@ const formatBytes = (bytes, decimals = 2) => {
 };
 
 export default function ProjectDocumentsPage({ project: propProject }) {
-    const { id } = useParams(); 
+    const { id } = useParams();
     const projectId = propProject?.custom_id || id;
+    const { employee } = useAuth();
 
     const [documents, setDocuments] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -134,6 +152,10 @@ export default function ProjectDocumentsPage({ project: propProject }) {
         const finalDocType = docType === "Інше" ? customDocType.trim() : docType;
         if (!finalDocType) return showToast('error', "Вкажіть назву типу документа");
 
+        // Копія списку до того, як його очистить успішна відправка:
+        // оцифровка КП стартує вже після відповіді сервера.
+        const sentFiles = [...uploadFiles];
+
         setIsUploading(true);
         setUploadProgress(0);
 
@@ -159,7 +181,22 @@ export default function ProjectDocumentsPage({ project: propProject }) {
                     const result = JSON.parse(xhr.responseText);
                     if (result.status === 'success') {
                         showToast('success', `Завантажено файлів: ${result.count}`);
-                        setUploadFiles([]); 
+
+                        // КП іде на оцифровку у фоні: жодних вікон звірки,
+                        // менеджер уже вільний. Сам розбір дивиться
+                        // директор у вкладці «КП» картки проєкту.
+                        if (finalDocType === "Комерційна пропозиція") {
+                            ingestOfferInBackground({
+                                files: sentFiles,
+                                installationId: projectId,
+                                employeeId: employee?.id || null,
+                                driveFiles: result.files,
+                                // Тутешній showToast приймає (тип, текст) — навпаки
+                                notify: (msg, type) => showToast(type === 'error' ? 'error' : 'success', msg),
+                            });
+                        }
+
+                        setUploadFiles([]);
                         setCustomDocType("");
                         setDocType(""); 
                         setTypeError(false);
@@ -321,11 +358,14 @@ export default function ProjectDocumentsPage({ project: propProject }) {
                                         key={type}
                                         onClick={() => setActiveFilter(type)}
                                         className={`shrink-0 px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border
-                                            ${isActive 
-                                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-200/50' 
+                                            ${isActive
+                                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-200/50'
                                                 : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-indigo-600'}
                                         `}
                                     >
+                                        {type !== "Всі" && (
+                                            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? 'bg-white' : toneOf(type).bar}`} />
+                                        )}
                                         {type}
                                         <span className={`px-1.5 py-0.5 rounded-md text-[10px] ${isActive ? 'bg-white/20' : 'bg-white text-slate-400 border border-slate-200'}`}>
                                             {count}
@@ -413,6 +453,8 @@ export default function ProjectDocumentsPage({ project: propProject }) {
 const DocumentCard = ({ doc, onPreview }) => {
     const isImage = doc.mimeType?.includes('image');
     const thumbnail = isImage ? `${SERVER_URL}/thumb/${doc.id}` : null;
+    const [thumbFailed, setThumbFailed] = useState(false);
+    const tone = toneOf(doc.docType);
 
     return (
         <motion.div 
@@ -425,27 +467,18 @@ const DocumentCard = ({ doc, onPreview }) => {
         >
             {/* Preview Area */}
             <div className="flex-1 bg-slate-50 relative overflow-hidden flex items-center justify-center p-6">
-                {isImage && thumbnail ? (
-                    <img 
-                        src={thumbnail} 
-                        alt={doc.name} 
+                {isImage && thumbnail && !thumbFailed ? (
+                    <img
+                        src={thumbnail}
+                        alt={doc.name}
                         className="w-full h-full object-cover absolute inset-0 group-hover:scale-110 transition-transform duration-700 ease-in-out"
                         loading="lazy"
-                        onError={(e) => {
-                            e.target.style.display = 'none'; 
-                            e.target.parentNode.setAttribute('data-error', 'true');
-                        }}
+                        onError={() => setThumbFailed(true)}
                     />
                 ) : (
                     <div className="transform group-hover:scale-125 transition-transform duration-500 drop-shadow-md text-6xl">
                         {getFileIcon(doc.mimeType, doc.name)}
                     </div>
-                )}
-                
-                {isImage && thumbnail && (
-                   <div className="hidden [data-error='true'] & block absolute inset-0 flex items-center justify-center pointer-events-none bg-slate-50 text-5xl drop-shadow-sm">
-                        {getFileIcon(doc.mimeType, doc.name)}
-                   </div>
                 )}
 
                 {/* Overlay on Hover */}
@@ -473,9 +506,9 @@ const DocumentCard = ({ doc, onPreview }) => {
                         <p className="text-xs font-extrabold text-slate-800 truncate leading-tight group-hover:text-indigo-700 transition-colors" title={doc.name}>
                             {doc.name}
                         </p>
-                        <p className="text-[10px] font-medium text-slate-400 mt-1.5 truncate uppercase tracking-wide">
+                        <span className={`inline-block mt-1.5 px-1.5 py-0.5 rounded border text-[9px] font-black uppercase tracking-wide ${tone.chip}`}>
                             {doc.docType || 'Документ'}
-                        </p>
+                        </span>
                     </div>
                     {isImage ? (
                         <div className="w-6 h-6 rounded-full bg-blue-50 flex items-center justify-center shrink-0">

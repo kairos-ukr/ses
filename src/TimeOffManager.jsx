@@ -232,7 +232,7 @@ export default function TimeOffManager() {
         const endStr = formatDateToYYYYMMDD(limitDate);
 
         try {
-            const { data: empData } = await supabase.from('employees').select('custom_id, name').order('name');
+            const { data: empData } = await supabase.from('employees').select('custom_id, name, hidden_from_list').order('name');
             setEmployees(empData || []);
 
             const { data: attData } = await supabase
@@ -355,10 +355,23 @@ export default function TimeOffManager() {
         }
     };
 
-    const employeeOptions = useMemo(() => employees.map(e => ({ value: e.custom_id, label: e.name })), [employees]);
+    // На мобільному сторінку скролить не ця панель, а батьківський контейнер
+    // (MainEmployeesPage). Ловимо скрол у фазі capture, щоб акордеон форми
+    // так само згортався, коли гортають список іззовні.
+    useEffect(() => {
+        if (isDesktop || !isFormOpen) return;
+        const onScroll = () => setIsFormOpen(false);
+        window.addEventListener('scroll', onScroll, { passive: true, capture: true });
+        return () => window.removeEventListener('scroll', onScroll, true);
+    }, [isDesktop, isFormOpen]);
+
+    const employeeOptions = useMemo(() =>
+        employees.filter(e => !e.hidden_from_list).map(e => ({ value: e.custom_id, label: e.name })),
+        [employees]
+    );
 
     return (
-        <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row h-screen overflow-hidden">
+        <div className="bg-slate-100 flex flex-col md:flex-row md:h-full overflow-visible md:overflow-hidden">
             
             <DeleteConfirmModal 
                 isOpen={deleteModal.show} 
@@ -367,7 +380,7 @@ export default function TimeOffManager() {
             />
 
             {/* --- ЛІВА ПАНЕЛЬ (ГАРМОШКА) --- */}
-            <div className="bg-white border-b md:border-b-0 md:border-r border-gray-200 md:w-[400px] flex-shrink-0 z-20 shadow-md md:h-full transition-all overflow-y-auto custom-scrollbar relative">
+            <div className="bg-white border-b md:border-b-0 md:border-r border-gray-200 md:w-[400px] flex-shrink-0 z-20 shadow-md md:h-full transition-all overflow-visible md:overflow-y-auto custom-scrollbar relative">
                 <div 
                     onClick={() => !isDesktop && setIsFormOpen(!isFormOpen)}
                     className="p-6 flex justify-between items-center cursor-pointer md:cursor-default sticky top-0 bg-white z-10 border-b border-gray-50"
@@ -557,7 +570,7 @@ export default function TimeOffManager() {
 
             {/* --- ПРАВА ПАНЕЛЬ: СПИСОК (Timeline) --- */}
             <div 
-                className="flex-1 bg-slate-50 overflow-y-auto p-4 md:p-8"
+                className="flex-1 bg-slate-50 overflow-visible md:overflow-y-auto p-4 md:p-8"
                 onScroll={handleListInteraction}
                 onClick={handleListInteraction}
             >

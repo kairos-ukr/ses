@@ -48,3 +48,15 @@ export const hasLotTracking = () => hasColumn('nomenclature', 'tracking_mode');
  * Вмикається після міграції db/2026-09_issue_orders.sql.
  */
 export const hasIssueOrders = () => hasColumn('issue_orders', 'doc_number');
+
+/**
+ * Оцифрована комерційна пропозиція.
+ * Вмикається після міграції db/2026-09_commercial_offers.sql.
+ */
+export const hasCommercialOffers = () => hasColumn('commercial_offers', 'total_amount');
+
+/**
+ * Перенесення обладнання з КП у потребу об'єкта.
+ * Вмикається після міграції db/2026-09_offer_to_need.sql.
+ */
+export const hasOfferNeed = () => hasColumn('commercial_offer_items', 'need_role');

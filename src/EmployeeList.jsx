@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   FaSearch, FaPlus, FaEllipsisV, FaPhone, FaBirthdayCake,
   FaUserTie, FaHardHat, FaTruck, FaBuilding, FaUser, FaTimes,
-  FaCheck, FaSave, FaStickyNote, FaCalendarDay, FaCalendarCheck, FaTags
+  FaCheck, FaSave, FaStickyNote, FaCalendarDay, FaCalendarCheck, FaTags,
+  FaEyeSlash, FaEye, FaUserClock
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 // --- HELPER FUNCTIONS ---
@@ -51,19 +52,21 @@ const EmployeeCard = ({ employee, status, onClick }) => {
     const initials = getInitials(employee.name);
     const badgeColor = getDepartmentColor(employee.department);
     const isAvailable = status !== 'OFF' && status !== 'VACATION' && status !== 'SICK_LEAVE';
-    
-    const departmentStr = employee.department && employee.department.length > 0 
-        ? employee.department.join(", ") 
+    const isTemporary = employee.employment_type === 'temporary';
+    const isHidden = !!employee.hidden_from_list;
+
+    const departmentStr = employee.department && employee.department.length > 0
+        ? employee.department.join(", ")
         : "";
 
     return (
-        <motion.div 
+        <motion.div
             layout
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.15 }} 
+            transition={{ duration: 0.15 }}
             onClick={() => onClick(employee)}
-            className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 relative overflow-visible flex items-center gap-4 active:scale-[0.98] transition-transform cursor-pointer group"
+            className={`bg-white rounded-2xl p-4 shadow-sm border relative overflow-visible flex items-center gap-4 active:scale-[0.98] transition-transform cursor-pointer group ${isHidden ? 'border-dashed border-gray-300 opacity-70' : 'border-gray-100'}`}
         >
             <div className="relative">
                 <div className={`w-14 h-14 rounded-2xl ${badgeColor} flex items-center justify-center text-white font-bold text-xl shadow-sm flex-shrink-0`}>
@@ -75,16 +78,31 @@ const EmployeeCard = ({ employee, status, onClick }) => {
             <div className="flex-1 min-w-0">
                 <div className="flex justify-between items-start">
                     <h3 className="font-bold text-gray-800 truncate text-base pr-6">
-                        {employee.name} 
+                        {employee.name}
                         <span className="text-gray-400 font-normal ml-1 text-sm">#{employee.custom_id}</span>
                     </h3>
                 </div>
-                
+
                 <div className="text-xs text-gray-500 font-medium truncate mb-1">
                     {employee.position || 'Посада не вказана'}
                     {departmentStr && <span className="text-gray-400 mx-1">•</span>}
                     <span className="text-indigo-500">{departmentStr}</span>
                 </div>
+
+                {(isTemporary || isHidden) && (
+                    <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                        {isTemporary && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md flex items-center gap-1">
+                                <FaUserClock className="text-[9px]" /> Тимчасовий
+                            </span>
+                        )}
+                        {isHidden && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-md flex items-center gap-1">
+                                <FaEyeSlash className="text-[9px]" /> Прихований
+                            </span>
+                        )}
+                    </div>
+                )}
 
                 <div className="flex flex-wrap items-center gap-2 mt-1.5">
                     {employee.phone && (
@@ -113,7 +131,8 @@ const EmployeeCard = ({ employee, status, onClick }) => {
 // 2. МОДАЛКА
 const EmployeeModal = ({ isOpen, onClose, employee, onSave }) => {
     const [formData, setFormData] = useState({
-        name: "", phone: "+380", position: "", department: [], skills: [], date_birth: "", notes: ""
+        name: "", phone: "+380", position: "", department: [], skills: [], date_birth: "", notes: "",
+        employment_type: "staff", hidden_from_list: false
     });
     const [skillInput, setSkillInput] = useState("");
     const [saving, setSaving] = useState(false);
@@ -129,12 +148,26 @@ const EmployeeModal = ({ isOpen, onClose, employee, onSave }) => {
                 department: employee.department || [],
                 skills: employee.skills || [],
                 date_birth: employee.date_birth || "",
-                notes: employee.notes || ""
+                notes: employee.notes || "",
+                employment_type: employee.employment_type || "staff",
+                hidden_from_list: !!employee.hidden_from_list
             });
         } else {
-            setFormData({ name: "", phone: "+380", position: "", department: [], skills: [], date_birth: "", notes: "" });
+            setFormData({
+                name: "", phone: "+380", position: "", department: [], skills: [], date_birth: "", notes: "",
+                employment_type: "staff", hidden_from_list: false
+            });
         }
     }, [employee, isOpen]);
+
+    const setEmploymentType = (type) => {
+        setFormData(prev => ({
+            ...prev,
+            employment_type: type,
+            // Тимчасових за замовчуванням ховаємо зі списку команди, але дозволяємо передумати нижче
+            hidden_from_list: type === "temporary" ? true : prev.hidden_from_list
+        }));
+    };
 
     const handleSave = async () => {
         if (!formData.name.trim()) return;
@@ -250,8 +283,8 @@ const EmployeeModal = ({ isOpen, onClose, employee, onSave }) => {
                                 {DEPARTMENT_OPTIONS.map(dep => {
                                     const isActive = formData.department.includes(dep);
                                     return (
-                                        <button 
-                                            key={dep} 
+                                        <button
+                                            key={dep}
                                             onClick={() => toggleDepartment(dep)}
                                             className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all ${isActive ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300'}`}
                                         >
@@ -260,6 +293,39 @@ const EmployeeModal = ({ isOpen, onClose, employee, onSave }) => {
                                     );
                                 })}
                             </div>
+                        </div>
+
+                        {/* Тип працівника */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold text-gray-700">Тип працівника</label>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setEmploymentType("staff")}
+                                    className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all ${formData.employment_type === "staff" ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300'}`}
+                                >
+                                    Штатний
+                                </button>
+                                <button
+                                    onClick={() => setEmploymentType("temporary")}
+                                    className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all flex items-center justify-center gap-1.5 ${formData.employment_type === "temporary" ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'}`}
+                                >
+                                    <FaUserClock className="text-[11px]" /> Тимчасовий
+                                </button>
+                            </div>
+                            <label className="flex items-center gap-2.5 pt-1 cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={formData.hidden_from_list}
+                                    onChange={e => setFormData(prev => ({ ...prev, hidden_from_list: e.target.checked }))}
+                                    className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                />
+                                <span className="text-xs text-gray-600 flex items-center gap-1.5">
+                                    <FaEyeSlash className="text-gray-400" /> Приховати зі списку команди
+                                </span>
+                            </label>
+                            <p className="text-[11px] text-gray-400 pl-6 -mt-1">
+                                Не впливає на графік і виїзди — там працівник лишається доступним
+                            </p>
                         </div>
 
                         {/* Навички */}
@@ -320,7 +386,8 @@ export default function EmployeeList() {
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
     const [activeTab, setActiveTab] = useState("Всі");
-    const [statsDate, setStatsDate] = useState(new Date()); 
+    const [showHidden, setShowHidden] = useState(false);
+    const [statsDate, setStatsDate] = useState(new Date());
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingEmployee, setEditingEmployee] = useState(null);
 
@@ -357,7 +424,9 @@ export default function EmployeeList() {
                 department: data.department,
                 skills: data.skills,
                 date_birth: data.date_birth || null,
-                notes: data.notes
+                notes: data.notes,
+                employment_type: data.employment_type || "staff",
+                hidden_from_list: !!data.hidden_from_list
             };
 
             if (data.id) {
@@ -374,10 +443,17 @@ export default function EmployeeList() {
     const openAddModal = () => { setEditingEmployee(null); setIsModalOpen(true); };
     const openEditModal = (emp) => { setEditingEmployee(emp); setIsModalOpen(true); };
 
+    const hiddenCount = useMemo(
+        () => employees.filter(emp => emp.hidden_from_list).length,
+        [employees]
+    );
+
     const filteredEmployees = useMemo(() => {
         return employees.filter(emp => {
+            if (!showHidden && emp.hidden_from_list) return false;
+
             const searchLower = searchTerm.toLowerCase();
-            const matchesSearch = 
+            const matchesSearch =
                 emp.name.toLowerCase().includes(searchLower) ||
                 (emp.phone && emp.phone.includes(searchLower)) ||
                 (emp.position && emp.position.toLowerCase().includes(searchLower)) ||
@@ -390,7 +466,7 @@ export default function EmployeeList() {
             if (activeTab === "Інше") return empDeps.length === 0;
             return empDeps.includes(activeTab);
         });
-    }, [employees, searchTerm, activeTab]);
+    }, [employees, searchTerm, activeTab, showHidden]);
 
     const stats = useMemo(() => {
         const targetDateStr = formatDateToYYYYMMDD(statsDate);
@@ -441,7 +517,7 @@ export default function EmployeeList() {
     ];
 
     return (
-        <div className="min-h-screen bg-slate-50 pb-24">
+        <div className="min-h-full bg-slate-50 pb-24">
             <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-200/50 shadow-sm">
                 <div className="px-4 pt-4 pb-2">
                     <div className="flex justify-between items-center mb-4">
@@ -468,9 +544,9 @@ export default function EmployeeList() {
 
                     <div className="relative mb-2">
                         <FaSearch className="absolute left-3.5 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                        <input 
-                            type="text" 
-                            placeholder="Пошук (ім'я, ID, посада)..." 
+                        <input
+                            type="text"
+                            placeholder="Пошук (ім'я, ID, посада)..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                             className="w-full bg-slate-100 border-none rounded-xl pl-10 pr-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all shadow-inner"
@@ -481,6 +557,16 @@ export default function EmployeeList() {
                             </button>
                         )}
                     </div>
+
+                    {hiddenCount > 0 && (
+                        <button
+                            onClick={() => setShowHidden(v => !v)}
+                            className={`flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg border transition-colors mb-2 ${showHidden ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-500 border-gray-200 hover:border-slate-300'}`}
+                        >
+                            {showHidden ? <FaEye size={12} /> : <FaEyeSlash size={12} />}
+                            Приховані ({hiddenCount})
+                        </button>
+                    )}
                 </div>
 
                 {/* ВИПРАВЛЕНО: ТАБИ БЕЗ СКРОЛУ (FLEX-1) */}

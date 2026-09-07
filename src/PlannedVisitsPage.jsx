@@ -225,6 +225,7 @@ export default function PlannedVisitsPage({ embedded = false }) {
     const { data, error } = await supabase
       .from("employees")
       .select("id, custom_id, name, email")
+      .eq("hidden_from_list", false)
       .ilike("name", `%${s}%`)
       .order("name", { ascending: true })
       .limit(10);
@@ -349,6 +350,7 @@ export default function PlannedVisitsPage({ embedded = false }) {
         .from("employees")
         .select("id, name")
         .eq("role", "installer")
+        .eq("hidden_from_list", false)
         .order("name", { ascending: true });
 
       if (error) throw error;

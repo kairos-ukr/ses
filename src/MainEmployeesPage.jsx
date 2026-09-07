@@ -1,17 +1,19 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-    FaUsers, FaCalendarAlt, FaUmbrellaBeach, FaUserTie, FaArrowLeft, FaRoute
+    FaUsers, FaCalendarAlt, FaUmbrellaBeach, FaUserTie, FaArrowLeft, FaRoute, FaHistory
 } from "react-icons/fa";
 
 import EmployeeList from "./EmployeeList";
 import WorkCalendar from "./WorkCalendar";
 import TimeOffManager from "./TimeOffManager";
 import PlannedVisitsPage from "./PlannedVisitsPage";
+import EmployeeHistoryPage from "./EmployeeHistoryPage";
+import { useAuth } from "./AuthProvider";
 
 // Розділи сервісу «Персонал» — власне меню, окреме від CRM (як у складу)
-const SECTIONS = [
+const BASE_SECTIONS = [
     { id: "team", label: "Команда", icon: FaUsers, title: "Команда та персонал" },
     { id: "planning", label: "Календар", icon: FaCalendarAlt, title: "Робочий календар" },
     { id: "visits", label: "Виїзди", icon: FaRoute, title: "Планування виїздів" },
@@ -20,7 +22,15 @@ const SECTIONS = [
 
 export default function MainEmployeesPage() {
     const navigate = useNavigate();
+    const { role } = useAuth();
     const [activeTab, setActiveTab] = useState("team");
+
+    const SECTIONS = useMemo(() => ([
+        ...BASE_SECTIONS,
+        ...(role === 'super_admin'
+            ? [{ id: "history", label: "Історія", icon: FaHistory, title: "Історія виїздів" }]
+            : [])
+    ]), [role]);
 
     const current = SECTIONS.find(s => s.id === activeTab) || SECTIONS[0];
 
@@ -101,6 +111,7 @@ export default function MainEmployeesPage() {
                             {activeTab === "planning" && <WorkCalendar />}
                             {activeTab === "visits" && <PlannedVisitsPage embedded />}
                             {activeTab === "timeoff" && <TimeOffManager />}
+                            {activeTab === "history" && role === 'super_admin' && <EmployeeHistoryPage />}
                         </motion.div>
                     </AnimatePresence>
                 </main>

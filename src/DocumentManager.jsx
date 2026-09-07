@@ -9,9 +9,10 @@ import { useNavigate } from "react-router-dom";
 import Layout from "./Layout";
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
+import { ingestOfferInBackground } from "./utils/commercialOffer";
 
 // --- КОНФІГУРАЦІЯ ---
-const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev'; 
+const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev';
 
 const DOC_TYPES = [
     "Комерційна пропозиція",
@@ -173,7 +174,7 @@ const DocumentCard = memo(({ doc, onPreview, onDeleteClick, canDelete }) => {
 
 export default function DocumentsPage() {
     const fileInputRef = useRef(null);
-    const { role } = useAuth();
+    const { role, employee } = useAuth();
     
     // Права на видалення
     const canDelete = ['admin', 'super_admin', 'office'].includes(role);
@@ -274,11 +275,14 @@ export default function DocumentsPage() {
         const finalDocType = docType === "Інше" ? customDocType : docType;
         if (!finalDocType) return showToast("Вкажіть тип документа!", "error");
 
+        // Копія черги до того, як її очистить успішна відправка
+        const sentFiles = [...uploadFiles];
+
         setIsUploading(true);
         const formData = new FormData();
         formData.append('object_number', selectedObject.custom_id);
         formData.append('doc_type', finalDocType);
-        
+
         uploadFiles.forEach((file) => {
             formData.append('files', file);
         });
@@ -292,6 +296,18 @@ export default function DocumentsPage() {
 
             if (result.status === 'success') {
                 showToast(`Завантажено файлів: ${result.count}`, "success");
+
+                // КП оцифровується у фоні, звідки б її не завантажили
+                if (finalDocType === "Комерційна пропозиція") {
+                    ingestOfferInBackground({
+                        files: sentFiles,
+                        installationId: selectedObject.custom_id,
+                        employeeId: employee?.id || null,
+                        driveFiles: result.files,
+                        notify: showToast,
+                    });
+                }
+
                 setUploadFiles([]);
                 setCustomDocType("");
                 fetchDocuments(selectedObject.custom_id);

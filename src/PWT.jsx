@@ -16,6 +16,8 @@ import { useAuth } from "./AuthProvider";
 import ManualSpecBuilder from "./pages/ManualSpecBuilder";
 import { NomenclatureModal } from "./pages/NomenclatureModal";
 import { findBestNomenclatureMatch, normalizeName } from "./utils/nameMatching";
+import { ingestOfferInBackground } from "./utils/commercialOffer";
+import { T, Btn, IconBtn, Chip, Card, Modal, useToast } from "./ui";
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 const OCR_API_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev/parse-pdf';
@@ -135,6 +137,18 @@ const getStatusMeta = (stageGroupKey, statusKey, taskId = null) => {
   const item = config.find(i => i.key === statusKey);
   if (item) return item;
   return { label: ALL_STATUS_LABELS[statusKey] || statusKey, color: "bg-slate-100 text-slate-500 border-slate-200" };
+};
+
+// Мапить існуючий рядок кольору зі STATUS_CONFIG у tone-ключ спільного Chip —
+// сам STATUS_CONFIG не чіпаємо, лише як його показувати.
+const statusToneFor = (statusMeta) => {
+  const c = statusMeta?.color || "";
+  if (c.includes("emerald")) return "ok";
+  if (c.includes("amber")) return "warn";
+  if (c.includes("rose") || c.includes("red")) return "danger";
+  if (c.includes("indigo") || c.includes("purple")) return "accent";
+  if (c.includes("blue") || c.includes("sky") || c.includes("cyan")) return "info";
+  return "neutral";
 };
 
 const driveThumbUrl = (fileId, size = 400) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}-h${size}`;
@@ -903,7 +917,7 @@ function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpd
   const assignedName = getEmployeeNameStr(task.responsibleId, employees);
 
   return (
-    <div className={`bg-white rounded-2xl border transition-all duration-300 overflow-hidden ${isExpanded ? "border-indigo-300 shadow-lg shadow-indigo-100/50 my-5" : "border-slate-200 shadow-sm hover:border-indigo-200 mb-3 hover:shadow-md"}`}>
+    <div className={`${T.card} transition-all duration-300 overflow-hidden ${isExpanded ? "border-indigo-300 shadow-lg shadow-indigo-100/50 my-5" : "shadow-sm hover:border-indigo-200 mb-3 hover:shadow-md"}`}>
       <button onClick={onToggle} className="w-full flex items-center justify-between p-5 md:px-6 md:py-5 text-left focus:outline-none relative overflow-hidden group bg-white" type="button">
         {isDone && <FaCheckCircle className="absolute -right-8 -top-8 text-8xl text-emerald-500/5 pointer-events-none" />}
         <div className="flex-1 flex flex-col md:flex-row md:items-center gap-3 md:gap-8 relative z-10">
@@ -912,16 +926,12 @@ function TaskAccordionItem({ task, isExpanded, onToggle, stageGroupKey, onAddUpd
               {task.title}
             </h3>
             <div className="flex flex-wrap items-center gap-3 mt-2">
-                <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border ${statusMeta.color}`}>
-                  {statusMeta.label}
-                </span>
+                <Chip tone={statusToneFor(statusMeta)}>{statusMeta.label}</Chip>
                 {assignedName && (
-                  <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5 bg-slate-50 px-2 py-0.5 rounded border border-slate-100">
-                    <FaUserTie className="text-slate-400"/> {assignedName}
-                  </span>
+                  <Chip tone="neutral" icon={FaUserTie}>{assignedName}</Chip>
                 )}
                 {task.history && task.history.length > 0 && !isExpanded && (
-                  <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
+                  <span className={`${T.dim} flex items-center gap-1.5`}>
                     <FaHistory className="opacity-70"/> Оновлено: {task.history[0].date}
                   </span>
                 )}
@@ -992,18 +1002,17 @@ function StageNavigatorStepper({ activeStage, onSelect }) {
 }
 
 function ConfirmationModal({ isOpen, onClose, onConfirm, title, message }) {
-  if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 transform transition-all scale-100">
-        <div className="flex items-center gap-3 text-indigo-600 mb-4"><FaThumbtack size={24} /><h3 className="text-lg font-bold text-slate-900">{title}</h3></div>
-        <p className="text-slate-600 mb-6 text-sm leading-relaxed">{message}</p>
-        <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-3 px-4 rounded-xl font-bold text-sm text-slate-700 bg-slate-100 hover:bg-slate-200 transition" type="button">Скасувати</button>
-          <button onClick={onConfirm} className="flex-1 py-3 px-4 rounded-xl font-bold text-sm text-white bg-indigo-600 hover:bg-indigo-700 transition shadow-lg shadow-indigo-200" type="button">Підтвердити</button>
-        </div>
-      </div>
-    </div>
+    <Modal
+      isOpen={isOpen} onClose={onClose} title={title} tone="accent" size="sm"
+      onSubmit={onConfirm} submitHint="підтвердити"
+      footer={<>
+        <Btn variant="outline" onClick={onClose}>Скасувати</Btn>
+        <Btn variant="accent" icon={FaThumbtack} onClick={onConfirm}>Підтвердити</Btn>
+      </>}
+    >
+      <p className="text-slate-600 text-sm leading-relaxed">{message}</p>
+    </Modal>
   );
 }
 
@@ -1064,10 +1073,10 @@ function PhotoViewerModal({ isOpen, onClose, fileIds, startIndex = 0 }) {
           <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
             <div className="text-sm font-bold text-slate-500">Файл {idx + 1} з {fileIds.length}</div>
             <div className="flex items-center gap-2">
-              <button onClick={() => setIdx(Math.max(0, idx - 1))} disabled={idx === 0} className="px-4 py-2 rounded-xl border border-slate-200 font-bold text-xs bg-slate-50 hover:bg-slate-100 disabled:opacity-50 transition" type="button">Назад</button>
-              <button onClick={() => setIdx(Math.min(fileIds.length - 1, idx + 1))} disabled={idx === fileIds.length - 1} className="px-4 py-2 rounded-xl border border-slate-200 font-bold text-xs bg-slate-50 hover:bg-slate-100 disabled:opacity-50 transition" type="button">Далі</button>
+              <Btn size="sm" variant="soft" onClick={() => setIdx(Math.max(0, idx - 1))} disabled={idx === 0}>Назад</Btn>
+              <Btn size="sm" variant="soft" onClick={() => setIdx(Math.min(fileIds.length - 1, idx + 1))} disabled={idx === fileIds.length - 1}>Далі</Btn>
               <div className="w-px h-6 bg-slate-200 mx-2"></div>
-              <button onClick={onClose} className="p-2.5 bg-slate-100 hover:bg-red-50 hover:text-red-500 rounded-full transition" type="button"><FaTimes size={16}/></button>
+              <IconBtn variant="softDanger" icon={FaTimes} label="Закрити" onClick={onClose} />
             </div>
           </div>
           <div className="flex-1 bg-slate-100/50 relative flex items-center justify-center overflow-hidden p-4">
@@ -1121,9 +1130,9 @@ function HistoryTimeline({ logs, stageGroupKey, task, getEmployeeName }) {
                 </div>
                 {hasStatusChange && (
                   <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
-                    <span className={`px-2 py-1 rounded-md border ${oldMeta.color} opacity-60 line-through`}>{oldMeta.label}</span>
+                    <span className="opacity-60 line-through"><Chip tone={statusToneFor(oldMeta)}>{oldMeta.label}</Chip></span>
                     <FaArrowRight className="text-slate-300 text-[10px]" />
-                    <span className={`px-2 py-1 rounded-md border ${newMeta.color} font-bold shadow-sm`}>{newMeta.label}</span>
+                    <Chip tone={statusToneFor(newMeta)}>{newMeta.label}</Chip>
                   </div>
                 )}
                 {hasRespInfo && (
@@ -1171,6 +1180,7 @@ function HistoryTimeline({ logs, stageGroupKey, task, getEmployeeName }) {
 export default function FieldWorkflow({ project }) {
   const navigate = useNavigate();
   const { user, employee } = useAuth();
+  const showToast = useToast();
 
   const [activeStage, setActiveStage] = useState(project?.workflow_stage || "tech_review");
   const [tasks, setTasks] = useState([]);
@@ -1265,6 +1275,18 @@ export default function FieldWorkflow({ project }) {
       if (updateData?.rawFiles?.length) {
         const up = await uploadWorkflowFiles({ files: updateData.rawFiles, installationId, stageKey: taskId });
         uploadedLinks = up.links || []; uploadedFileIds = up.fileIds || [];
+
+        // КП оцифровується сама, у фоні. Менеджера не тримаємо і нічого
+        // в нього не питаємо: розбирати результат — робота директора.
+        if (taskId === "commercial_proposal") {
+          ingestOfferInBackground({
+            files: updateData.rawFiles,
+            installationId,
+            employeeId: employee?.id || null,
+            driveFiles: uploadedFileIds.map((fileId, i) => ({ fileId, webViewLink: uploadedLinks[i] })),
+            notify: showToast,
+          });
+        }
       }
       const photos = [...(Array.isArray(updateData.photos) ? updateData.photos : []), ...uploadedLinks];
       const photo_file_ids = [...(Array.isArray(updateData.photo_file_ids) ? updateData.photo_file_ids : []), ...uploadedFileIds];
@@ -1310,34 +1332,36 @@ export default function FieldWorkflow({ project }) {
       <div className="flex-1 p-4 md:p-8 overflow-y-auto">
         <div className="max-w-7xl mx-auto">
           
-          <div className="mb-8 flex flex-col sm:flex-row gap-4 items-center justify-between bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+          <Card className="mb-8 flex flex-col sm:flex-row gap-4 items-center justify-between">
             <div className="flex-1 flex items-center gap-4">
               <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 shadow-inner">
                   <FaThumbtack size={20} />
               </div>
               <div>
                   <h2 className="font-extrabold text-slate-800 text-base md:text-lg">Етап: {STAGE_GROUPS.find(s => s.key === activeStage)?.label}</h2>
-                  {project?.workflow_stage !== activeStage ? (
-                      <p className="text-xs font-medium text-slate-500 mt-1">Цей етап зараз не є активним для всього проекту.</p>
-                  ) : (
-                      <p className="text-xs text-emerald-600 font-bold flex items-center gap-1.5 mt-1"><FaCheckCircle/> Активний етап об'єкту</p>
-                  )}
+                  <div className="mt-1.5">
+                      {project?.workflow_stage !== activeStage ? (
+                          <Chip tone="neutral">не активний для об'єкта</Chip>
+                      ) : (
+                          <Chip tone="ok" icon={FaCheckCircle}>Активний етап об'єкту</Chip>
+                      )}
+                  </div>
               </div>
             </div>
-            
+
             <div className="flex gap-3 w-full sm:w-auto">
                 {project?.workflow_stage !== activeStage && (
-                  <button onClick={handleSetCurrentStage} className="flex-1 sm:flex-none text-sm font-bold text-white bg-slate-900 px-6 py-3.5 rounded-xl hover:bg-slate-800 transition shadow-lg shadow-slate-200 active:scale-95" type="button">
+                  <Btn variant="primary" size="lg" className="flex-1 sm:flex-none" onClick={handleSetCurrentStage}>
                     Зробити поточним
-                  </button>
+                  </Btn>
                 )}
                 {activeStage === "tech_review" && (
-                  <button onClick={openMeasurementTool} className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3.5 rounded-xl shadow-lg shadow-indigo-200 transition flex items-center justify-center gap-2 font-bold text-sm active:scale-95" type="button">
-                    <FaTools className="text-indigo-200" /> Відкрити заміри
-                  </button>
+                  <Btn variant="accent" size="lg" icon={FaTools} className="flex-1 sm:flex-none" onClick={openMeasurementTool}>
+                    Відкрити заміри
+                  </Btn>
                 )}
             </div>
-          </div>
+          </Card>
 
           {loading ? (
             <div className="flex justify-center py-32 text-indigo-400"><FaSpinner className="animate-spin text-5xl" /></div>

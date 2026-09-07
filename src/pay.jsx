@@ -9,6 +9,7 @@ import {
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
+import { useAuth } from "./AuthProvider";
 
 // --- Helpers ---
 const formatCurrency = (amount) => {
@@ -368,6 +369,7 @@ const Toast = ({ message, type, onClose }) => {
 // --- MAIN PAGE ---
 export default function PaymentsPage() {
   const navigate = useNavigate();
+  const { isOffice, loading: authLoading } = useAuth();
   const [payments, setPayments] = useState([]);
   const [installations, setInstallations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -401,7 +403,7 @@ export default function PaymentsPage() {
     }
   }, [showToast]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { if (!authLoading && isOffice) loadData(); }, [loadData, authLoading, isOffice]);
 
   // Filtering & Sorting
   const filteredPayments = useMemo(() => {
@@ -474,6 +476,22 @@ export default function PaymentsPage() {
   const handleSort = (key) => {
       setSortConfig(p => ({ key, direction: p.key === key && p.direction === 'ascending' ? 'descending' : 'ascending' }));
   };
+
+  if (!authLoading && !isOffice) {
+    return (
+      <Layout>
+        <div className="flex flex-col items-center justify-center h-full py-24 text-center px-6">
+          <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
+            <FaQuestionCircle className="text-2xl text-slate-400" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-700">Немає доступу</h2>
+          <p className="text-sm text-slate-400 mt-1 max-w-sm">
+            Розділ "Платежі" бачать офіс-менеджери та адміністратори.
+          </p>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>

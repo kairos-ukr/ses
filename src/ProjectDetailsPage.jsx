@@ -3,19 +3,23 @@ import { useParams, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaArrowLeft, FaSave, FaEdit, FaUsers, FaMapMarkerAlt,
-  FaBolt, FaCheckCircle, FaTimes, FaCheck,
-  FaCommentDots, FaPhone, FaHandshake, FaFileAlt, FaTools, 
-  FaExclamationTriangle, FaCalendarAlt, FaGlobe, FaChevronDown, FaChevronUp,
-  FaClock, FaUniversity, FaSearch
+  FaBolt, FaCheckCircle,
+  FaCommentDots, FaPhone, FaHandshake, FaFileAlt, FaTools,
+  FaCalendarAlt, FaGlobe, FaChevronDown, FaChevronUp,
+  FaClock, FaUniversity, FaSearch, FaMoneyBillWave, FaPlus, FaBoxes,
+  FaExternalLinkAlt, FaFileInvoiceDollar,
 } from "react-icons/fa";
 
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthProvider";
+import { T, Btn, Chip, Field, Modal, useToast, humanError, num } from "./ui";
 
 // Імпорт компонентів
 import AdditionalInfoModal from "./AdditionalInfoModal";
 import ProjectDocuments from "./ProjectDocumentsPage";
 import ProjectWorkflow from "./PWT"
+import CommercialOfferPanel from "./CommercialOfferPanel";
+import { hasCommercialOffers } from "./utils/features";
 
 const PROJECT_STATUS_LABELS = {
   planning: 'Планування',
@@ -25,43 +29,19 @@ const PROJECT_STATUS_LABELS = {
   cancelled: 'Скасовано'
 };
 
-const Toast = ({ message, type = 'success', isVisible, onClose }) => {
-  useEffect(() => {
-    if (isVisible) {
-      const duration = 4000;
-      const timer = setTimeout(onClose, duration);
-      return () => clearTimeout(timer);
-    }
-  }, [isVisible, onClose]);
+const STATUS_TONE = {
+  planning: 'info',
+  in_progress: 'accent',
+  on_hold: 'warn',
+  completed: 'ok',
+  cancelled: 'danger',
+};
 
-  const styles = {
-    success: 'bg-emerald-600 text-white',
-    error: 'bg-red-600 text-white',
-    info: 'bg-indigo-600 text-white',
-  };
-  
-  return (
-    <AnimatePresence>
-      {isVisible && (
-        <motion.div
-          initial={{ opacity: 0, y: -20, x: '-50%' }}
-          animate={{ opacity: 1, y: 0, x: '-50%' }}
-          exit={{ opacity: 0, y: -20, x: '-50%' }}
-          className="fixed top-6 left-1/2 z-[100] min-w-[300px]"
-        >
-          <div className={`${styles[type]} rounded-2xl shadow-2xl p-4 border border-white/10 flex items-center justify-between`}>
-            <div className="flex items-center space-x-3">
-              {type === 'success' ? <FaCheck /> : <FaExclamationTriangle />}
-              <span className="font-bold text-sm">{message}</span>
-            </div>
-            <button onClick={onClose} className="ml-4 text-white/80 hover:text-white transition-colors">
-              <FaTimes />
-            </button>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
+const PAYMENT_STATUS_INFO = {
+  pending: { label: 'Очікує оплати', tone: 'warn' },
+  partial: { label: 'Часткова оплата', tone: 'info' },
+  paid: { label: 'Оплачено', tone: 'ok' },
+  overdue: { label: 'Прострочено', tone: 'danger' },
 };
 
 export default function ProjectDetailPage() {
@@ -69,6 +49,12 @@ export default function ProjectDetailPage() {
   const navigate = useNavigate();
   const { role, tier } = useAuth();
   const canEdit = role === 'admin' || role === 'super_admin' || role === 'office' || (role === 'installer' && tier === 1);
+  // Оцифрована КП — розріз для директора. Менеджеру її не показуємо
+  // взагалі: він завантажує файл, а не звіряє розпізнавання.
+  // Вкладка з'являється лише після міграції db/2026-09_commercial_offers.sql.
+  const [offersReady, setOffersReady] = useState(false);
+  useEffect(() => { hasCommercialOffers().then(setOffersReady); }, []);
+  const canSeeOffer = role === 'super_admin' && offersReady;
 
   // States
   const [activeTab, setActiveTab] = useState('general');
@@ -79,19 +65,25 @@ export default function ProjectDetailPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   
   const [additionalInfoList, setAdditionalInfoList] = useState([]);
-  const [isInfoExpanded, setIsInfoExpanded] = useState(true); 
+  const [isInfoExpanded, setIsInfoExpanded] = useState(true);
+  const [isTechExpanded, setIsTechExpanded] = useState(false);
 
   const [currentUser, setCurrentUser] = useState(null);
   const [formData, setFormData] = useState({});
   const [employees, setEmployees] = useState([]);
   const [employeeSearch, setEmployeeSearch] = useState('');
-  
-  const [toast, setToast] = useState({ isVisible: false, message: '', type: 'success' });
 
-  const showToast = useCallback((message, type = 'success') => 
-    setToast({ isVisible: true, message, type }), []);
-  const hideToast = useCallback(() => 
-    setToast(prev => ({ ...prev, isVisible: false })), []);
+  const [payments, setPayments] = useState([]);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({
+    amount: '', paid_at: new Date().toISOString().split('T')[0],
+    payment_method: 'Безготівково', comment: '',
+  });
+  const [savingPayment, setSavingPayment] = useState(false);
+
+  const [readiness, setReadiness] = useState(null); // % забезпечення матеріалами, null — специфікації немає
+
+  const showToast = useToast();
 
   // === 1. IDENTIFY USER ===
   useEffect(() => {
@@ -145,7 +137,34 @@ export default function ProjectDetailPage() {
 
         if (infoError) console.error("Error loading additional info:", infoError);
         setAdditionalInfoList(infoData || []);
-        
+
+        const { data: paymentsData, error: paymentsError } = await supabase
+            .from('payment_history')
+            .select('*')
+            .eq('installation_custom_id', id)
+            .order('paid_at', { ascending: false });
+
+        if (paymentsError) console.error("Error loading payments:", paymentsError);
+        setPayments(paymentsData || []);
+
+        const { data: needsData, error: needsError } = await supabase
+            .from('v_object_material_needs')
+            .select('required_quantity, reserved_quantity, issued_quantity')
+            .eq('installation_custom_id', id);
+
+        if (needsError) console.error("Error loading material needs:", needsError);
+        if (needsData && needsData.length) {
+          let sum = 0;
+          needsData.forEach(n => {
+            const req = parseFloat(n.required_quantity) || 1;
+            const got = (parseFloat(n.reserved_quantity) || 0) + (parseFloat(n.issued_quantity) || 0);
+            sum += Math.min(100, (got / req) * 100);
+          });
+          setReadiness(Math.round(sum / needsData.length));
+        } else {
+          setReadiness(null);
+        }
+
       } catch (error) {
         console.error(error);
         showToast(`Помилка завантаження: ${error.message}`, 'error');
@@ -171,6 +190,42 @@ export default function ProjectDetailPage() {
             .eq('installation_custom_id', id)
             .order('created_at', { ascending: false });
       setAdditionalInfoList(data || []);
+  };
+
+  const refreshPayments = async () => {
+      const { data } = await supabase
+            .from('payment_history')
+            .select('*')
+            .eq('installation_custom_id', id)
+            .order('paid_at', { ascending: false });
+      setPayments(data || []);
+  };
+
+  const savePayment = async () => {
+      const amount = parseFloat(paymentForm.amount);
+      if (!amount || amount <= 0) {
+        showToast('Вкажіть суму більшу за 0', 'error');
+        return;
+      }
+      setSavingPayment(true);
+      try {
+        const { error } = await supabase.from('payment_history').insert([{
+          installation_custom_id: parseInt(id, 10),
+          amount,
+          paid_at: paymentForm.paid_at,
+          payment_method: paymentForm.payment_method || null,
+          comment: paymentForm.comment.trim() || null,
+        }]);
+        if (error) throw error;
+        showToast('Платіж додано', 'success');
+        setShowPaymentModal(false);
+        setPaymentForm({ amount: '', paid_at: new Date().toISOString().split('T')[0], payment_method: 'Безготівково', comment: '' });
+        await refreshPayments();
+      } catch (error) {
+        showToast(humanError(error), 'error');
+      } finally {
+        setSavingPayment(false);
+      }
   };
 
   // Handlers
@@ -295,7 +350,6 @@ export default function ProjectDetailPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20 font-sans text-slate-800">
-      <Toast message={toast.message} type={toast.type} isVisible={toast.isVisible} onClose={hideToast} />
 
       {/* HEADER */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
@@ -333,6 +387,23 @@ export default function ProjectDetailPage() {
                   <p className="text-sm font-medium text-slate-500 mt-1">
                     {project.client?.company_name || project.client?.name} • {project.client?.oblast}
                   </p>
+                  <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
+                    <Chip tone={STATUS_TONE[project.status] || 'neutral'}>
+                        {PROJECT_STATUS_LABELS[project.status] || project.status || 'Невідомо'}
+                    </Chip>
+                    <Chip tone={(PAYMENT_STATUS_INFO[project.payment_status] || { tone: 'neutral' }).tone}>
+                        {(PAYMENT_STATUS_INFO[project.payment_status] || { label: 'Невідомо' }).label}
+                    </Chip>
+                    {readiness !== null && (
+                        <a href={`#/provisioning?obj=${project.custom_id}`} target="_blank" rel="noopener noreferrer"
+                            className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded border text-[10px] font-black uppercase tracking-wide transition-colors
+                                ${readiness >= 100 ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                    : readiness >= 50 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
+                                    : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'}`}>
+                            <FaBoxes size={9} /> Забезпечення {readiness}% <FaExternalLinkAlt size={8} />
+                        </a>
+                    )}
+                  </div>
                </div>
             </div>
 
@@ -367,17 +438,19 @@ export default function ProjectDetailPage() {
 
           {/* TABS NAVIGATION */}
           <div className="flex items-center gap-8 mt-6 border-b border-slate-100">
-             {['general', 'documents', 'workflow'].map((tab) => (
-                <button 
-                    key={tab}
-                    onClick={() => setActiveTab(tab)}
-                    className={`pb-3 px-1 text-sm font-extrabold flex items-center gap-2 transition-all relative 
-                        ${activeTab === tab ? 'text-indigo-600 border-b-[3px] border-indigo-600' : 'text-slate-400 hover:text-slate-700'}`}
+             {[
+                { key: 'general', label: 'Основна інформація', icon: FaBolt },
+                { key: 'documents', label: 'Документи', icon: FaFileAlt },
+                { key: 'workflow', label: 'Етапи та задачі', icon: FaTools },
+                ...(canSeeOffer ? [{ key: 'offer', label: 'КП (оцифровано)', icon: FaFileInvoiceDollar }] : []),
+             ].map(({ key, label, icon: Icon }) => (
+                <button
+                    key={key}
+                    onClick={() => setActiveTab(key)}
+                    className={`pb-3 px-1 text-sm font-extrabold flex items-center gap-2 transition-all relative
+                        ${activeTab === key ? 'text-indigo-600 border-b-[3px] border-indigo-600' : 'text-slate-400 hover:text-slate-700'}`}
                 >
-                    {tab === 'general' && <FaBolt />}
-                    {tab === 'documents' && <FaFileAlt />}
-                    {tab === 'workflow' && <FaTools />}
-                    {tab === 'general' ? 'Основна інформація' : tab === 'documents' ? 'Документи' : 'Етапи та задачі'}
+                    <Icon /> {label}
                 </button>
              ))}
           </div>
@@ -466,6 +539,69 @@ export default function ProjectDetailPage() {
                     </div>
                  </div>
 
+                 {/* FINANCE CARD */}
+                 <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                       <h3 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
+                          <FaMoneyBillWave className="text-indigo-500"/> Фінанси
+                       </h3>
+                       <Chip tone={(PAYMENT_STATUS_INFO[project.payment_status] || { tone: 'neutral' }).tone}>
+                          {(PAYMENT_STATUS_INFO[project.payment_status] || { label: 'Невідомо' }).label}
+                       </Chip>
+                    </div>
+
+                    <div className="p-6 space-y-4">
+                        {(() => {
+                            const cost = parseFloat(project.total_cost) || 0;
+                            const paid = parseFloat(project.paid_amount) || 0;
+                            const debt = Math.max(0, cost - paid);
+                            return (
+                                <div className="grid grid-cols-3 gap-3">
+                                    <div className="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                                        <div className={labelClass}>Вартість</div>
+                                        <div className="text-base font-black text-slate-900 mt-0.5">${num(cost)}</div>
+                                        {/* Звідки цифра: сама приїхала з КП чи її вводили руками.
+                                            Без цієї підказки «сума змінилась сама» виглядає як збій. */}
+                                        {project.total_cost_source === 'offer' && (
+                                            <div className="text-[9px] font-black uppercase tracking-wider text-indigo-500 mt-1">з КП</div>
+                                        )}
+                                    </div>
+                                    <div className="bg-emerald-50 rounded-xl border border-emerald-100 p-3 text-center">
+                                        <div className={`${labelClass} text-emerald-500`}>Сплачено</div>
+                                        <div className="text-base font-black text-emerald-700 mt-0.5">${num(paid)}</div>
+                                    </div>
+                                    <div className={`rounded-xl border p-3 text-center ${debt > 0 ? 'bg-rose-50 border-rose-100' : 'bg-slate-50 border-slate-200'}`}>
+                                        <div className={`${labelClass} ${debt > 0 ? 'text-rose-500' : ''}`}>Борг</div>
+                                        <div className={`text-base font-black mt-0.5 ${debt > 0 ? 'text-rose-700' : 'text-slate-400'}`}>${num(debt)}</div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
+                        <div className="flex items-center justify-between pt-1">
+                            <span className={labelClass}>Історія платежів ({payments.length})</span>
+                            <Btn size="sm" variant="accent" icon={FaPlus} onClick={() => setShowPaymentModal(true)}>Додати платіж</Btn>
+                        </div>
+
+                        {payments.length === 0 ? (
+                            <p className="text-sm text-slate-400 italic">Платежів ще немає</p>
+                        ) : (
+                            <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar pr-1">
+                                {payments.map(p => (
+                                    <div key={p.id} className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="text-sm font-bold text-slate-800">${num(p.amount)}</div>
+                                            <div className="text-[11px] text-slate-400 truncate">
+                                                {formatDate(p.paid_at)}{p.payment_method ? ` · ${p.payment_method}` : ''}{p.comment ? ` · ${p.comment}` : ''}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                 </div>
+
                  {/* ADDITIONAL INFO BLOCK (HISTORY) */}
                  <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
                     <div 
@@ -525,17 +661,19 @@ export default function ProjectDetailPage() {
               </div>
 
               {/* RIGHT COLUMN (Project Details) */}
-              <div className="lg:col-span-8">
+              <div className="lg:col-span-8 space-y-6">
+
+                 {/* ХІД РОБІТ — primary: хто, який статус, коли */}
                  <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-                     <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                     <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2">
                         <h3 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
-                            <FaTools className="text-indigo-500"/> Специфікація об'єкта
+                            <FaBolt className="text-indigo-500"/> Хід робіт
                         </h3>
                      </div>
 
-                 <div className="p-6 md:p-8 space-y-8">
+                 <div className="p-6 md:p-8 space-y-6">
                     {/* Responsible Person */}
-                    <div className="pb-6 border-b border-slate-100">
+                    <div>
                         <label className={labelClass}>Відповідальний за проект (Менеджер)</label>
                         {isEditing ? (
                              <div className="relative max-w-md">
@@ -570,148 +708,160 @@ export default function ProjectDetailPage() {
                         )}
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-8">
-                        {/* Status & Type */}
-                        <div className="space-y-6">
-                             <div>
-                                <label className={labelClass}>Статус виконання</label>
-                                {isEditing ? (
-                                    <select value={formData.status || 'planning'} onChange={e => setFormData({...formData, status: e.target.value})} className={inputClass}>
-                                        {Object.entries(PROJECT_STATUS_LABELS).map(([key, label]) => (
-                                            <option key={key} value={key}>{label}</option>
-                                        ))}
-                                    </select>
-                                ) : (
-                                    <span className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-xl text-sm font-bold border shadow-sm
-                                        ${project.status === 'completed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 
-                                          project.status === 'in_progress' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 
-                                          project.status === 'on_hold' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                                          'bg-slate-50 text-slate-700 border-slate-200'}`}>
-                                        {project.status === 'completed' && <FaCheckCircle className="text-emerald-500"/>}
-                                        {PROJECT_STATUS_LABELS[project.status] || project.status}
-                                    </span>
-                                )}
-                            </div>
-                             <div>
-                                <label className={labelClass}>Клас станції</label>
-                                {isEditing ? (
-                                    <select value={formData.station_type || ''} onChange={e => setFormData({...formData, station_type: e.target.value})} className={inputClass}>
-                                        <option value="">Не вказано</option>
-                                        <option value="Мережева">Мережева (СЕС)</option>
-                                        <option value="Автономна">Автономна (АЕС)</option>
-                                        <option value="Гібридна">Гібридна (ГЕС)</option>
-                                    </select>
-                                ) : (
-                                    <p className="text-base font-bold text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 inline-block">{project.station_type || '—'}</p>
-                                )}
-                            </div>
-                             <div>
-                                 <label className={labelClass}>Спосіб монтажу</label>
-                                 {isEditing ? (
-                                    <select value={formData.mount_type || ''} onChange={e => setFormData({...formData, mount_type: e.target.value})} className={inputClass}>
-                                        <option value="">Не вказано</option>
-                                        <option value="Дахове кріплення (Скатний дах)">Дах (Скатний)</option>
-                                        <option value="Дахове кріплення (Плоский дах)">Дах (Плоский баласт)</option>
-                                        <option value="Наземне кріплення">Наземна конструкція</option>
-                                        <option value="Трекерна система">Трекер</option>
-                                        <option value="Електромонтаж">Тільки електромонтаж</option>
-                                    </select>
-                                 ) : (
-                                    <p className="text-base font-bold text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200">{project.mount_type || '—'}</p>
-                                 )}
-                            </div>
-                        </div>
-
-                        {/* Specs & Dates */}
-                        <div className="space-y-6">
-                            <div className="flex gap-4">
-                                <div className="flex-1">
-                                    <label className={labelClass}>Потужність</label>
-                                    {isEditing ? (
-                                        <div className="relative">
-                                            <input type="number" step="0.1" value={formData.capacity_kw || ''} onChange={e => setFormData({...formData, capacity_kw: e.target.value})} className={`${inputClass} pr-12`} />
-                                            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">кВт</span>
-                                        </div>
-                                    ) : (
-                                        <p className="text-base font-black text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{project.capacity_kw ? `${project.capacity_kw} кВт` : '—'}</p>
-                                    )}
-                                </div>
-                                <div className="flex-1">
-                                    <label className={labelClass}>Мережа</label>
-                                    {isEditing ? (
-                                        <select value={formData.quant_phase || ''} onChange={e => setFormData({...formData, quant_phase: e.target.value})} className={inputClass}>
-                                            <option value="">—</option>
-                                            <option value="1">1 фаза</option>
-                                            <option value="3">3 фази</option>
-                                        </select>
-                                    ) : (
-                                        <p className="text-base font-black text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{project.quant_phase ? `${project.quant_phase}ф` : '—'}</p>
-                                    )}
-                                </div>
-                            </div>
-                            
-                            <div className="flex gap-4">
-                                 <div className="flex-1">
-                                     <label className={`${labelClass} flex items-center gap-1.5`}><FaCalendarAlt className="text-indigo-400"/> Старт</label>
-                                     {isEditing ? (
-                                         <input type="date" value={formData.start_date || ''} onChange={e => setFormData({...formData, start_date: e.target.value})} className={inputClass} />
-                                     ) : (
-                                         <p className="text-sm font-bold text-slate-800 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{formatDate(project.start_date)}</p>
-                                     )}
-                                </div>
-                                <div className="flex-1">
-                                     <label className={`${labelClass} flex items-center gap-1.5`}><FaCalendarAlt className="text-emerald-400"/> Фініш</label>
-                                     {isEditing ? (
-                                         <input type="date" value={formData.end_date || ''} onChange={e => setFormData({...formData, end_date: e.target.value})} className={inputClass} />
-                                     ) : (
-                                         <p className="text-sm font-bold text-slate-800 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{formatDate(project.end_date)}</p>
-                                     )}
-                                </div>
-                            </div>
-
-                             <div>
-                                 <label className={labelClass}>Локація об'єкта (GPS)</label>
-                                 {isEditing ? (
-                                     <div className="relative">
-                                        <input type="url" placeholder="Вставте посилання з Google Maps..." value={formData.gps_link || ''} onChange={e => setFormData({...formData, gps_link: e.target.value})} className={`${inputClass} pl-10`} />
-                                        <FaGlobe className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                                     </div>
-                                 ) : (
-                                     locationLink ? (
-                                         <a href={locationLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2.5 w-full justify-center px-4 py-3 bg-indigo-50 border border-indigo-200 rounded-xl text-sm font-bold text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 transition-colors shadow-sm">
-                                             <FaMapMarkerAlt className="text-red-500 text-lg"/> Відкрити на Google Maps
-                                         </a>
-                                     ) : <p className="text-sm font-bold text-slate-400 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">Немає посилання</p>
-                                 )}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Організаційні деталі (Банк та Примітки) */}
-                    <div className="pt-6 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div>
-                            <label className={labelClass}>Банк / Реквізити</label>
+                            <label className={labelClass}>Статус виконання</label>
                             {isEditing ? (
-                                <input type="text" placeholder="Вкажіть назву банку..." value={formData.bank || ''} onChange={e => setFormData({...formData, bank: e.target.value})} className={inputClass} />
+                                <select value={formData.status || 'planning'} onChange={e => setFormData({...formData, status: e.target.value})} className={inputClass}>
+                                    {Object.entries(PROJECT_STATUS_LABELS).map(([key, label]) => (
+                                        <option key={key} value={key}>{label}</option>
+                                    ))}
+                                </select>
                             ) : (
-                                <p className="text-base font-bold text-slate-800 flex items-center gap-3 bg-slate-50 px-4 py-3 rounded-xl border border-slate-200">
-                                    <FaUniversity className="text-slate-400"/> {project.bank || 'Не вказано'}
-                                </p>
+                                <Chip tone={STATUS_TONE[project.status] || 'neutral'}>
+                                    {PROJECT_STATUS_LABELS[project.status] || project.status}
+                                </Chip>
                             )}
                         </div>
                         <div>
-                            <label className={labelClass}>Технічні примітки</label>
-                            {isEditing ? (
-                                <textarea rows="2" value={formData.notes || ''} onChange={e => setFormData({...formData, notes: e.target.value})} className={`${inputClass} resize-y min-h-[50px]`} placeholder="Умови монтажу, складність тощо..." />
-                            ) : (
-                                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 whitespace-pre-wrap leading-relaxed">
-                                    {project.notes || <span className="italic opacity-70">Відсутні</span>}
-                                </div>
-                            )}
+                             <label className={`${labelClass} flex items-center gap-1.5`}><FaCalendarAlt className="text-indigo-400"/> Старт</label>
+                             {isEditing ? (
+                                 <input type="date" value={formData.start_date || ''} onChange={e => setFormData({...formData, start_date: e.target.value})} className={inputClass} />
+                             ) : (
+                                 <p className="text-sm font-bold text-slate-800">{formatDate(project.start_date)}</p>
+                             )}
+                        </div>
+                        <div>
+                             <label className={`${labelClass} flex items-center gap-1.5`}><FaCalendarAlt className="text-emerald-400"/> Фініш</label>
+                             {isEditing ? (
+                                 <input type="date" value={formData.end_date || ''} onChange={e => setFormData({...formData, end_date: e.target.value})} className={inputClass} />
+                             ) : (
+                                 <p className="text-sm font-bold text-slate-800">{formatDate(project.end_date)}</p>
+                             )}
                         </div>
                     </div>
 
+                    {/* Примітки — лишаються на видноті, це часто ключовий контекст */}
+                    <div className="pt-2">
+                        <label className={labelClass}>Технічні примітки</label>
+                        {isEditing ? (
+                            <textarea rows="2" value={formData.notes || ''} onChange={e => setFormData({...formData, notes: e.target.value})} className={`${inputClass} resize-y min-h-[50px]`} placeholder="Умови монтажу, складність тощо..." />
+                        ) : (
+                            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 whitespace-pre-wrap leading-relaxed">
+                                {project.notes || <span className="italic opacity-70">Відсутні</span>}
+                            </div>
+                        )}
+                    </div>
                  </div>
+                 </div>
+
+                 {/* ТЕХНІЧНІ ДЕТАЛІ — secondary: довідкові поля, згорнуто за замовчуванням */}
+                 <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div
+                        onClick={() => setIsTechExpanded(v => !v)}
+                        className="px-6 py-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center cursor-pointer hover:bg-slate-100 transition-colors"
+                    >
+                        <h3 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
+                            <FaTools className="text-indigo-500"/> Технічні деталі
+                        </h3>
+                        <div className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-400 shadow-sm">
+                            {isTechExpanded ? <FaChevronUp size={12}/> : <FaChevronDown size={12}/>}
+                        </div>
+                    </div>
+
+                    <AnimatePresence>
+                        {isTechExpanded && (
+                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
+                                <div className="p-6 md:p-8 space-y-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-6">
+                                        <div className="space-y-6">
+                                             <div>
+                                                <label className={labelClass}>Клас станції</label>
+                                                {isEditing ? (
+                                                    <select value={formData.station_type || ''} onChange={e => setFormData({...formData, station_type: e.target.value})} className={inputClass}>
+                                                        <option value="">Не вказано</option>
+                                                        <option value="Мережева">Мережева (СЕС)</option>
+                                                        <option value="Автономна">Автономна (АЕС)</option>
+                                                        <option value="Гібридна">Гібридна (ГЕС)</option>
+                                                    </select>
+                                                ) : (
+                                                    <p className="text-base font-bold text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 inline-block">{project.station_type || '—'}</p>
+                                                )}
+                                            </div>
+                                             <div>
+                                                 <label className={labelClass}>Спосіб монтажу</label>
+                                                 {isEditing ? (
+                                                    <select value={formData.mount_type || ''} onChange={e => setFormData({...formData, mount_type: e.target.value})} className={inputClass}>
+                                                        <option value="">Не вказано</option>
+                                                        <option value="Дахове кріплення (Скатний дах)">Дах (Скатний)</option>
+                                                        <option value="Дахове кріплення (Плоский дах)">Дах (Плоский баласт)</option>
+                                                        <option value="Наземне кріплення">Наземна конструкція</option>
+                                                        <option value="Трекерна система">Трекер</option>
+                                                        <option value="Електромонтаж">Тільки електромонтаж</option>
+                                                    </select>
+                                                 ) : (
+                                                    <p className="text-base font-bold text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200">{project.mount_type || '—'}</p>
+                                                 )}
+                                            </div>
+                                            <div className="flex gap-4">
+                                                <div className="flex-1">
+                                                    <label className={labelClass}>Потужність</label>
+                                                    {isEditing ? (
+                                                        <div className="relative">
+                                                            <input type="number" step="0.1" value={formData.capacity_kw || ''} onChange={e => setFormData({...formData, capacity_kw: e.target.value})} className={`${inputClass} pr-12`} />
+                                                            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">кВт</span>
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-base font-black text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{project.capacity_kw ? `${project.capacity_kw} кВт` : '—'}</p>
+                                                    )}
+                                                </div>
+                                                <div className="flex-1">
+                                                    <label className={labelClass}>Мережа</label>
+                                                    {isEditing ? (
+                                                        <select value={formData.quant_phase || ''} onChange={e => setFormData({...formData, quant_phase: e.target.value})} className={inputClass}>
+                                                            <option value="">—</option>
+                                                            <option value="1">1 фаза</option>
+                                                            <option value="3">3 фази</option>
+                                                        </select>
+                                                    ) : (
+                                                        <p className="text-base font-black text-slate-900 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">{project.quant_phase ? `${project.quant_phase}ф` : '—'}</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-6">
+                                             <div>
+                                                 <label className={labelClass}>Локація об'єкта (GPS)</label>
+                                                 {isEditing ? (
+                                                     <div className="relative">
+                                                        <input type="url" placeholder="Вставте посилання з Google Maps..." value={formData.gps_link || ''} onChange={e => setFormData({...formData, gps_link: e.target.value})} className={`${inputClass} pl-10`} />
+                                                        <FaGlobe className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                                                     </div>
+                                                 ) : (
+                                                     locationLink ? (
+                                                         <a href={locationLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2.5 w-full justify-center px-4 py-3 bg-indigo-50 border border-indigo-200 rounded-xl text-sm font-bold text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 transition-colors shadow-sm">
+                                                             <FaMapMarkerAlt className="text-red-500 text-lg"/> Відкрити на Google Maps
+                                                         </a>
+                                                     ) : <p className="text-sm font-bold text-slate-400 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 text-center">Немає посилання</p>
+                                                 )}
+                                            </div>
+                                            <div>
+                                                <label className={labelClass}>Банк / Реквізити</label>
+                                                {isEditing ? (
+                                                    <input type="text" placeholder="Вкажіть назву банку..." value={formData.bank || ''} onChange={e => setFormData({...formData, bank: e.target.value})} className={inputClass} />
+                                                ) : (
+                                                    <p className="text-base font-bold text-slate-800 flex items-center gap-3 bg-slate-50 px-4 py-3 rounded-xl border border-slate-200">
+                                                        <FaUniversity className="text-slate-400"/> {project.bank || 'Не вказано'}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                  </div>
               </div>
            </motion.div>
@@ -735,6 +885,17 @@ export default function ProjectDetailPage() {
             </motion.div>
         )}
 
+        {/* --- TAB: ОЦИФРОВАНА КП (лише super_admin) --- */}
+        {activeTab === 'offer' && canSeeOffer && (
+            <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} className="mt-2">
+              <CommercialOfferPanel
+                  installationId={project.custom_id}
+                  canEdit={canEdit}
+                  onTotalApplied={loadProjectData}
+              />
+            </motion.div>
+        )}
+
       </main>
 
       {/* MODAL Component */}
@@ -744,10 +905,53 @@ export default function ProjectDetailPage() {
             onClose={() => setIsModalOpen(false)}
             project={project}
             currentUser={currentUser}
-            onUpdate={refreshAdditionalInfo} 
+            onUpdate={refreshAdditionalInfo}
             showToast={showToast}
         />
       )}
+
+      {/* ДОДАТИ ПЛАТІЖ */}
+      <Modal
+        isOpen={showPaymentModal} onClose={() => setShowPaymentModal(false)}
+        title="Додати платіж" subtitle={project.name || `Об'єкт #${project.custom_id}`}
+        tone="ok" size="sm"
+        onSubmit={() => { if (!savingPayment) savePayment(); }}
+        submitHint="зберегти платіж"
+        footer={<>
+            <Btn variant="outline" onClick={() => setShowPaymentModal(false)}>Скасувати</Btn>
+            <Btn variant="ok" onClick={savePayment} disabled={savingPayment}>
+                {savingPayment ? 'Зберігаємо…' : 'Додати платіж'}
+            </Btn>
+        </>}
+      >
+        <div className="space-y-3">
+            <Field label="Сума (USD)" required>
+                <input type="number" min="0" step="0.01" autoFocus
+                    className={`${T.input} text-lg font-black tabular-nums`}
+                    value={paymentForm.amount}
+                    onChange={e => setPaymentForm(f => ({ ...f, amount: e.target.value }))} />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+                <Field label="Дата">
+                    <input type="date" className={T.input} value={paymentForm.paid_at}
+                        onChange={e => setPaymentForm(f => ({ ...f, paid_at: e.target.value }))} />
+                </Field>
+                <Field label="Спосіб оплати">
+                    <select className={T.select} value={paymentForm.payment_method}
+                        onChange={e => setPaymentForm(f => ({ ...f, payment_method: e.target.value }))}>
+                        <option value="Безготівково">Безготівково</option>
+                        <option value="Готівка">Готівка</option>
+                        <option value="Bank Transfer">Bank Transfer</option>
+                    </select>
+                </Field>
+            </div>
+            <Field label="Коментар">
+                <input className={T.input} placeholder="Необов'язково"
+                    value={paymentForm.comment}
+                    onChange={e => setPaymentForm(f => ({ ...f, comment: e.target.value }))} />
+            </Field>
+        </div>
+      </Modal>
     </div>
   );
 }

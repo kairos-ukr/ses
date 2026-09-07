@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { 
-  FaBars, FaTimes, FaUsers, FaUserTie, 
+import {
+  FaBars, FaTimes, FaUsers, FaUserTie,
   FaTasks, FaFolderOpen, FaSignOutAlt,
   FaHardHat, FaProjectDiagram,
-  FaHandshake, FaWarehouse, FaTruck
+  FaHandshake, FaWarehouse, FaTruck, FaMoneyBillWave
 } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -16,7 +16,7 @@ const Layout = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
   
-  const { signOut } = useAuth();
+  const { signOut, isOffice } = useAuth();
 
   const handleLogout = async () => {
     await signOut();
@@ -30,6 +30,8 @@ const Layout = ({ children }) => {
       { path: '/provisioning', label: "Забезпечення об'єктів", icon: FaTruck },
       { path: '/partners', label: 'Партнерство', icon: FaHandshake },
       { path: '/inventory', label: 'Склад', icon: FaWarehouse },
+      // Фінанси — бачать лише офіс-менеджери й адміністратори, не монтажники
+      ...(isOffice ? [{ path: '/payments', label: 'Платежі', icon: FaMoneyBillWave }] : []),
       { path: '/employees', label: 'Працівники', icon: FaUserTie },
       { path: '/tasks', label: 'Задачі', icon: FaTasks },
       { path: '/documents', label: 'Документи', icon: FaFolderOpen },

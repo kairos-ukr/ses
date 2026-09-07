@@ -653,6 +653,136 @@ export const Modal = ({
 };
 
 /* =====================================================================
+ *  ВИСУВНА ПАНЕЛЬ (DRAWER)
+ *  Той самий каркас, що й Modal (стек/Esc/фокус-трап), але виїжджає
+ *  збоку замість спливання по центру. Для форм, де список позаду
+ *  має лишатись видимим і не «губитись» за модальним вікном.
+ * ===================================================================== */
+
+const DRAWER_SIZES = {
+    sm: 'sm:w-[380px]',
+    md: 'sm:w-[480px] lg:w-[560px]',
+    lg: 'sm:w-[560px] lg:w-[680px]',
+};
+
+export const Drawer = ({
+    isOpen, onClose, title, subtitle, tone = 'neutral', size = 'md',
+    toolbar, footer, children,
+    onSubmit, submitHint,
+}) => {
+    const isTouch = useIsTouch();
+    const boxRef = useRef(null);
+    const downOnBackdrop = useRef(false);
+    const tokenRef = useRef(null);
+    if (!tokenRef.current) tokenRef.current = {};
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const token = tokenRef.current;
+        modalStack.push(token);
+
+        const onKey = (e) => {
+            if (modalStack[modalStack.length - 1] !== token) return;
+            if (e.key === 'Escape') { onClose(); return; }
+            if (onSubmit && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault(); onSubmit();
+            }
+        };
+        document.addEventListener('keydown', onKey);
+
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            const at = modalStack.indexOf(token);
+            if (at >= 0) modalStack.splice(at, 1);
+            document.removeEventListener('keydown', onKey);
+            document.body.style.overflow = modalStack.length ? 'hidden' : prev;
+        };
+    }, [isOpen, onClose, onSubmit]);
+
+    useEffect(() => {
+        if (!isOpen || isTouch) return;
+        const returnTo = document.activeElement;
+        const t = setTimeout(() => {
+            const box = boxRef.current;
+            if (!box || box.contains(document.activeElement)) return;
+            const first = box.querySelector(
+                'input[type="text"]:not([disabled]),input[type="search"]:not([disabled]),input:not([type]):not([disabled]),textarea:not([disabled])'
+            );
+            (first || box).focus?.();
+        }, 60);
+        return () => { clearTimeout(t); returnTo?.focus?.(); };
+    }, [isOpen, isTouch]);
+
+    const trapTab = (e) => {
+        if (e.key !== 'Tab' || !boxRef.current) return;
+        const list = Array.from(boxRef.current.querySelectorAll(FOCUSABLE))
+            .filter(el => el.offsetParent !== null);
+        if (!list.length) return;
+        const first = list[0], last = list[list.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+
+    return (
+        <AnimatePresence>
+            {isOpen && (
+                <motion.div
+                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                    transition={{ duration: .15 }}
+                    onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget; }}
+                    onClick={e => { if (e.target === e.currentTarget && downOnBackdrop.current) onClose(); }}
+                    className="fixed inset-0 z-[120] bg-slate-900/60 backdrop-blur-sm flex justify-end"
+                >
+                    <motion.div
+                        ref={boxRef}
+                        tabIndex={-1}
+                        onKeyDown={trapTab}
+                        initial={{ x: '100%' }}
+                        animate={{ x: 0 }}
+                        exit={{ x: '100%' }}
+                        transition={{ type: 'tween', ease: 'easeOut', duration: .22 }}
+                        className={`w-full ${DRAWER_SIZES[size]} h-full bg-white shadow-2xl outline-none
+                            flex flex-col overflow-hidden`}
+                    >
+                        <div className={`px-4 lg:px-6 py-3 lg:py-3.5 border-b border-slate-200 flex items-start justify-between gap-3 flex-none
+                            ${tone === 'neutral' ? 'bg-white' : TONE[tone].chip.replace(/border-\S+/, '')}`}>
+                            <div className="min-w-0">
+                                <h2 className={`text-[15px] lg:text-base font-bold leading-tight ${tone === 'neutral' ? 'text-slate-900' : TONE[tone].text}`}>{title}</h2>
+                                {subtitle && <p className="text-[11.5px] lg:text-xs text-slate-500 mt-0.5 leading-snug">{subtitle}</p>}
+                            </div>
+                            <IconBtn variant="soft" icon={FaTimes} label="Закрити (Esc)" onClick={onClose} />
+                        </div>
+
+                        {toolbar && (
+                            <div className="px-4 lg:px-6 py-2.5 border-b border-slate-200 bg-white flex-none">
+                                {toolbar}
+                            </div>
+                        )}
+
+                        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 lg:px-6 py-4 lg:py-5">{children}</div>
+
+                        {footer && (
+                            <div className="px-4 lg:px-6 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-2 flex-none pb-safe">
+                                {submitHint && (
+                                    <span className="hidden lg:block mr-auto text-[11px] text-slate-400">
+                                        <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-sans font-bold text-slate-500">Ctrl</kbd>
+                                        {' + '}
+                                        <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-sans font-bold text-slate-500">Enter</kbd>
+                                        {' — '}{submitHint}
+                                    </span>
+                                )}
+                                {footer}
+                            </div>
+                        )}
+                    </motion.div>
+                </motion.div>
+            )}
+        </AnimatePresence>
+    );
+};
+
+/* =====================================================================
  *  ПІДТВЕРДЖЕННЯ
  *  Замість window.confirm: видно, ЩО саме станеться, і це можна скасувати.
  * ===================================================================== */

@@ -5,8 +5,11 @@ import {
     FaEye, FaTimes, FaDownload, FaCheck, FaExclamationTriangle, FaTrash, FaRegFile, FaFolderOpen
 } from "react-icons/fa";
 
+import { useAuth } from "./AuthProvider";
+import { ingestOfferInBackground } from "./utils/commercialOffer";
+
 // --- КОНФІГУРАЦІЯ ---
-const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev'; 
+const SERVER_URL = 'https://quiet-water-a1ad.kairosost38500.workers.dev';
 
 const DOC_TYPES = [
     "Комерційна пропозиція", 
@@ -29,6 +32,7 @@ const getFileIcon = (mimeType) => {
 };
 
 export default function ObjectDocumentsModal({ project, onClose }) {
+    const { employee } = useAuth();
     const [documents, setDocuments] = useState([]);
     const [loading, setLoading] = useState(false);
     const [uploadFiles, setUploadFiles] = useState([]); 
@@ -100,6 +104,9 @@ export default function ObjectDocumentsModal({ project, onClose }) {
             return;
         }
 
+        // Копія черги до того, як її очистить успішна відправка
+        const sentFiles = [...uploadFiles];
+
         setIsUploading(true);
         const formData = new FormData();
         formData.append('object_number', project.custom_id);
@@ -112,7 +119,22 @@ export default function ObjectDocumentsModal({ project, onClose }) {
 
             if (result.status === 'success') {
                 setToast({ type: 'success', msg: `Завантажено: ${result.count}` });
-                setUploadFiles([]); 
+
+                // КП оцифровується у фоні, звідки б її не завантажили
+                if (finalDocType === "Комерційна пропозиція") {
+                    ingestOfferInBackground({
+                        files: sentFiles,
+                        installationId: project.custom_id,
+                        employeeId: employee?.id || null,
+                        driveFiles: result.files,
+                        notify: (msg, type) => {
+                            setToast({ type: type === 'error' ? 'error' : 'success', msg });
+                            setTimeout(() => setToast(null), 4000);
+                        },
+                    });
+                }
+
+                setUploadFiles([]);
                 setCustomDocType(""); 
                 if(docType === "Інше") setDocType(DOC_TYPES[0]); 
                 fetchDocuments(); 

@@ -70,6 +70,7 @@ const groupWorkRows = (rows) => {
             groups.push(existing);
         }
         if (item.employee_custom_id) existing.workers.push(item.employee_custom_id);
+        if (item.visit_plan_id) existing.sourceVisitPlanId = item.visit_plan_id;
     });
     return groups;
 };
@@ -80,21 +81,22 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, d
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState("");
     const inputRef = useRef(null);
+    const isDesktop = useIsDesktop();
 
     const filteredOptions = useMemo(() => {
         if (!search && !showInitialList) return [];
 
         const searchLower = search.toLowerCase();
         let count = 0;
-        
+
         return options.filter(opt => {
             if (count > 50) return false;
-            
+
             const isDisabled = disabledItems.includes(opt.value);
-            const matches = !search || 
-                            opt.label.toLowerCase().includes(searchLower) || 
+            const matches = !search ||
+                            opt.label.toLowerCase().includes(searchLower) ||
                             (opt.subLabel && opt.subLabel.toLowerCase().includes(searchLower));
-            
+
             if (!isDisabled && matches) {
                 count++;
                 return true;
@@ -106,15 +108,43 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, d
     const selectedOption = options.find(o => o.value === value);
 
     useEffect(() => {
-        if (isOpen && inputRef.current) {
-            inputRef.current.focus();
-        }
-    }, [isOpen]);
+        if (!isOpen) return;
+        // На мобільному фокус одразу після старту анімації зсуву — так клавіатура
+        // не смикає layout ще до того, як шторка стала на місце.
+        const delay = isDesktop ? 0 : 120;
+        const t = setTimeout(() => inputRef.current?.focus(), delay);
+        return () => clearTimeout(t);
+    }, [isOpen, isDesktop]);
+
+    const selectOption = (val) => {
+        onChange(val);
+        setIsOpen(false);
+        setSearch("");
+    };
+
+    const optionsList = (
+        filteredOptions.length > 0 ? (
+            filteredOptions.map(opt => (
+                <button
+                    key={opt.value}
+                    onClick={() => selectOption(opt.value)}
+                    className="w-full text-left px-4 py-3 text-sm hover:bg-indigo-50 active:bg-indigo-100 transition-colors border-b border-gray-50 last:border-0"
+                >
+                    <div className="font-medium text-gray-800">{opt.label}</div>
+                    {opt.subLabel && <div className="text-[10px] text-gray-400">{opt.subLabel}</div>}
+                </button>
+            ))
+        ) : (
+            <div className="p-4 text-center text-xs text-gray-400 italic">
+                {!search && !showInitialList ? "Введіть текст для пошуку..." : "Нічого не знайдено"}
+            </div>
+        )
+    );
 
     return (
         <div className="relative">
-            <button 
-                onClick={() => setIsOpen(!isOpen)}
+            <button
+                onClick={() => setIsOpen(true)}
                 className={`w-full flex items-center justify-between bg-white border rounded-xl px-4 py-3 text-sm font-medium text-gray-700 shadow-sm active:bg-gray-50 transition-all ${error ? 'border-red-500 ring-1 ring-red-500' : 'border-gray-300 hover:border-gray-400'}`}
             >
                 <span className="flex items-center gap-2 truncate">
@@ -125,11 +155,12 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, d
                 </span>
             </button>
 
+            {/* ДЕСКТОП: компактний список, прив'язаний до кнопки */}
             <AnimatePresence>
-                {isOpen && (
+                {isOpen && isDesktop && (
                     <>
                         <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}/>
-                        <motion.div 
+                        <motion.div
                             initial={{ opacity: 0, y: -10 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -10 }}
@@ -139,9 +170,9 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, d
                             <div className="p-2 border-b border-gray-100 bg-gray-50">
                                 <div className="relative">
                                     <FaSearch className="absolute left-3 top-2.5 text-gray-400 text-xs"/>
-                                    <input 
+                                    <input
                                         ref={inputRef}
-                                        type="text" 
+                                        type="text"
                                         className="w-full pl-8 pr-3 py-2 bg-white rounded-lg text-sm outline-none border border-gray-200 focus:border-indigo-300 transition-all"
                                         placeholder={showInitialList ? "Пошук..." : "Введіть для пошуку..."}
                                         value={search}
@@ -150,25 +181,49 @@ const SearchableSelect = ({ options, value, onChange, placeholder, icon: Icon, d
                                 </div>
                             </div>
                             <div className="max-h-56 overflow-y-auto">
-                                {filteredOptions.length > 0 ? (
-                                    filteredOptions.map(opt => (
-                                        <button
-                                            key={opt.value}
-                                            onClick={() => { onChange(opt.value); setIsOpen(false); setSearch(""); }}
-                                            className="w-full text-left px-4 py-3 text-sm hover:bg-indigo-50 transition-colors border-b border-gray-50 last:border-0"
-                                        >
-                                            <div className="font-medium text-gray-800">{opt.label}</div>
-                                            {opt.subLabel && <div className="text-[10px] text-gray-400">{opt.subLabel}</div>}
-                                        </button>
-                                    ))
-                                ) : (
-                                    <div className="p-4 text-center text-xs text-gray-400 italic">
-                                        {!search && !showInitialList ? "Введіть текст для пошуку..." : "Нічого не знайдено"}
-                                    </div>
-                                )}
+                                {optionsList}
                             </div>
                         </motion.div>
                     </>
+                )}
+            </AnimatePresence>
+
+            {/* МОБІЛЬНИЙ: повноекранна шторка знизу — не залежить від того, де кнопка в скролі форми */}
+            <AnimatePresence>
+                {isOpen && !isDesktop && (
+                    <motion.div
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        transition={{ duration: 0.15 }}
+                        className="fixed inset-0 z-[200] bg-black/30 flex items-end"
+                        onClick={() => setIsOpen(false)}
+                    >
+                        <motion.div
+                            initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
+                            transition={{ type: "tween", ease: "easeOut", duration: 0.22 }}
+                            className="bg-white w-full max-h-[80dvh] rounded-t-2xl shadow-2xl flex flex-col"
+                            onClick={e => e.stopPropagation()}
+                        >
+                            <div className="p-3 border-b border-gray-100 flex items-center gap-2 flex-none">
+                                <div className="relative flex-1">
+                                    <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs"/>
+                                    <input
+                                        ref={inputRef}
+                                        type="text"
+                                        className="w-full pl-8 pr-3 py-2.5 bg-gray-50 rounded-lg text-sm outline-none border border-gray-200 focus:border-indigo-300 transition-all"
+                                        placeholder={showInitialList ? "Пошук..." : "Введіть для пошуку..."}
+                                        value={search}
+                                        onChange={e => setSearch(e.target.value)}
+                                    />
+                                </div>
+                                <button onClick={() => setIsOpen(false)} className="p-2.5 bg-gray-100 rounded-full text-gray-500 flex-shrink-0">
+                                    <FaTimes size={14}/>
+                                </button>
+                            </div>
+                            <div className="overflow-y-auto flex-1" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+                                {optionsList}
+                            </div>
+                        </motion.div>
+                    </motion.div>
                 )}
             </AnimatePresence>
             {error && <p className="text-red-500 text-xs mt-1 ml-1">{error}</p>}
@@ -302,13 +357,17 @@ const AbsentEmployeesList = ({ employees }) => {
 };
 
 // --- КОМПОНЕНТ ПЕРЕГЛЯДУ (З УРАХУВАННЯМ ПРАВ) ---
-const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, onEdit, onSave, onCancel, isSaving, absentEmployees, isPast, canManageSchedule, visits = [] }) => {
+const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, onEdit, onSave, onCancel, isSaving, absentEmployees, isPast, canManageSchedule, canEditPast, visits = [] }) => {
     return (
         <div className="flex flex-col h-full bg-slate-50">
             <div className="p-4 border-b flex items-center justify-between bg-white rounded-t-2xl shadow-sm z-20 flex-none">
                 <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2">
                     {isPreviewMode ? "Попередній перегляд" : "План робіт"}
-                    {isPast && <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full flex items-center gap-1"><FaLock size={10}/> Архів</span>}
+                    {isPast && (
+                        <span className={`text-xs px-2 py-1 rounded-full flex items-center gap-1 ${canEditPast ? 'bg-amber-50 text-amber-600' : 'bg-gray-100 text-gray-500'}`}>
+                            <FaLock size={10}/> Архів{canEditPast ? ' · редагування' : ''}
+                        </span>
+                    )}
                 </h3>
                 <button onClick={onCancel} className="p-2 bg-gray-100 rounded-full text-gray-500 hover:text-gray-800"><FaTimes/></button>
             </div>
@@ -393,13 +452,13 @@ const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, on
                         </button>
                     </>
                 ) : (
-                    // КНОПКА РЕДАГУВАННЯ: ТІЛЬКИ ЯКЩО НЕ В МИНУЛОМУ І Є ПРАВА
-                    !isPast && canManageSchedule ? (
-                        <button 
-                            onClick={onEdit} 
+                    // КНОПКА РЕДАГУВАННЯ: ЯКЩО НЕ В МИНУЛОМУ, АБО СУПЕР АДМІН МОЖЕ ПРАВИТИ АРХІВ
+                    (!isPast || canEditPast) && canManageSchedule ? (
+                        <button
+                            onClick={onEdit}
                             className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
                         >
-                            <FaPencilAlt/> Редагувати план
+                            <FaPencilAlt/> {isPast ? 'Виправити архівний день' : 'Редагувати план'}
                         </button>
                     ) : (
                         <div className="text-center text-gray-400 text-sm py-2 flex items-center justify-center gap-2">
@@ -415,9 +474,11 @@ const SchedulePreview = ({ schedule, employees, installations, isPreviewMode, on
 // --- ГОЛОВНИЙ КОМПОНЕНТ ---
 export default function WorkCalendar() {
     // 2. ОТРИМУЄМО РОЛЬ
-    const { role } = useAuth();
+    const { role, user } = useAuth();
     // 3. ВИЗНАЧАЄМО ПРАВО НА РЕДАГУВАННЯ (Admin або Office)
     const canManageSchedule = role === 'admin' || role === 'super_admin' || role === 'office';
+    // Тільки супер адмін може редагувати вже минулі (архівні) дні — виправити задній числом
+    const canEditPast = role === 'super_admin';
 
     const isDesktop = useIsDesktop();
     
@@ -446,6 +507,8 @@ export default function WorkCalendar() {
     const [employees, setEmployees] = useState([]);
     const [timeOffMap, setTimeOffMap] = useState({});
     const [visitsMap, setVisitsMap] = useState({}); // dateStr -> [{ id, installationId, title, workerCustomIds }]
+    const [draftsMap, setDraftsMap] = useState({}); // dateStr -> { payload, updated_at, updated_by_email }
+    const [draftNotice, setDraftNotice] = useState(null); // чернетка, знайдена при відкритті дня — очікує рішення
 
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -498,7 +561,7 @@ export default function WorkCalendar() {
 
             const { data: empData } = await supabase
                 .from('employees')
-                .select('id, custom_id, name, department, position')
+                .select('id, custom_id, name, department, position, hidden_from_list')
                 .order('name');
 
             const { data: attendanceData } = await supabase
@@ -510,7 +573,7 @@ export default function WorkCalendar() {
 
             const { data: workData } = await supabase
                 .from('installation_workers')
-                .select('installation_custom_id, employee_custom_id, work_date, notes')
+                .select('installation_custom_id, employee_custom_id, work_date, notes, visit_plan_id')
                 .gte('work_date', startDateStr)
                 .lte('work_date', endDateStr);
 
@@ -521,6 +584,17 @@ export default function WorkCalendar() {
                 .gte('planned_date', startDateStr)
                 .lte('planned_date', endDateStr)
                 .neq('status', 'cancelled');
+
+            // Незбережені чернетки графіка на цей тиждень
+            const { data: draftData } = await supabase
+                .from('schedule_day_drafts')
+                .select('work_date, payload, updated_at, updated_by_email')
+                .gte('work_date', startDateStr)
+                .lte('work_date', endDateStr);
+
+            const dMap = {};
+            (draftData || []).forEach(d => { dMap[d.work_date] = d; });
+            setDraftsMap(dMap);
 
             setInstallations(instData || []);
             setEmployees(empData || []);
@@ -590,13 +664,14 @@ export default function WorkCalendar() {
         setDayAssignments(existingData);
         setEditingDate(date);
         setValidationErrors({});
-        
+        setDraftNotice(draftsMap[dateStr] || null);
+
         // 5. ЛОГІКА ВІДКРИТТЯ МОДАЛКИ В ЗАЛЕЖНОСТІ ВІД ПРАВ
         if (!canManageSchedule) {
             // Монтажники завжди бачать 'view'
             setModalMode('view');
-        } else if (isPast) {
-            // Минуле тільки для перегляду навіть для адмінів
+        } else if (isPast && !canEditPast) {
+            // Минуле тільки для перегляду — крім супер адміна, який може виправити заднім числом
             setModalMode('view');
         } else if (existingData.length === 0) {
             // Якщо пусто і є права - зразу режим редагування
@@ -613,6 +688,30 @@ export default function WorkCalendar() {
         setModalMode('view');
         setValidationErrors({});
         setIsPastDate(false);
+        setDraftNotice(null);
+    };
+
+    const applyDraft = () => {
+        if (!draftNotice) return;
+        setDayAssignments(JSON.parse(JSON.stringify(draftNotice.payload || [])));
+        setModalMode('edit');
+        setDraftNotice(null);
+    };
+
+    const discardDraft = async () => {
+        if (!editingDate) return;
+        const dateStr = formatDateToYYYYMMDD(editingDate);
+        try {
+            await supabase.from('schedule_day_drafts').delete().eq('work_date', dateStr);
+            setDraftsMap(prev => {
+                const next = { ...prev };
+                delete next[dateStr];
+                return next;
+            });
+        } catch (e) {
+            console.error('Не вдалося видалити чернетку:', e);
+        }
+        setDraftNotice(null);
     };
 
     const getAbsentEmployees = () => {
@@ -640,10 +739,10 @@ export default function WorkCalendar() {
         const dayOffs = timeOffMap[dateStr] || {};
 
         return employees.filter(emp => {
-            const deps = emp.department || [];
+            if (emp.hidden_from_list) return false;
             if (dayOffs.hasOwnProperty(emp.custom_id)) return false;
             if (assignedElsewhere.has(emp.custom_id)) return false;
-            if (assignedInCurrent.has(emp.custom_id)) return false; 
+            if (assignedInCurrent.has(emp.custom_id)) return false;
             return true;
         }).map(emp => ({
             value: emp.custom_id,
@@ -669,7 +768,7 @@ export default function WorkCalendar() {
             if (dayData === undefined) {
                 const { data } = await supabase
                     .from('installation_workers')
-                    .select('installation_custom_id, employee_custom_id, work_date, notes')
+                    .select('installation_custom_id, employee_custom_id, work_date, notes, visit_plan_id')
                     .eq('work_date', ds);
                 dayData = groupWorkRows(data || []);
             }
@@ -711,16 +810,17 @@ export default function WorkCalendar() {
             const isCustom = !visit.installationId;
             const existing = !isCustom && meaningful.find(a => String(a.installationId) === String(visit.installationId));
             if (existing) {
-                // об'єкт вже в графіку — просто доукомплектовуємо людьми з плану
+                // об'єкт вже в графіку — просто доукомплектовуємо людьми з плану і запам'ятовуємо джерело
                 return meaningful.map(a => a === existing
-                    ? { ...a, workers: [...a.workers, ...availableWorkers.filter(w => !a.workers.includes(w))] }
+                    ? { ...a, workers: [...a.workers, ...availableWorkers.filter(w => !a.workers.includes(w))], sourceVisitPlanId: a.sourceVisitPlanId || visit.id }
                     : a);
             }
             return [...meaningful, {
                 id: Date.now() + Math.random(),
                 installationId: isCustom ? 'custom' : visit.installationId,
                 notes: isCustom ? (visit.title || 'Виїзд за планом') : (visit.comment || ""),
-                workers: availableWorkers
+                workers: availableWorkers,
+                sourceVisitPlanId: visit.id
             }];
         });
         showNotice('Виїзд додано в графік — перевірте склад людей');
@@ -817,7 +917,7 @@ export default function WorkCalendar() {
     };
 
     const handleSaveDay = async () => {
-        if (isPastDate) {
+        if (isPastDate && !canEditPast) {
             alert("Неможливо зберегти зміни для минулої дати.");
             return;
         }
@@ -828,30 +928,57 @@ export default function WorkCalendar() {
         for (const assign of dayAssignments) {
             if (!assign.installationId) continue;
             if (assign.installationId === 'custom' && !assign.notes.trim()) continue;
-            
+
             if (assign.workers.length > 0) {
                 assign.workers.forEach(wId => {
                     records.push({
-                        work_date: dateStr,
                         installation_custom_id: assign.installationId === 'custom' ? null : assign.installationId,
                         employee_custom_id: wId,
                         notes: assign.notes,
-                        work_hours: 8
+                        work_hours: 8,
+                        visit_plan_id: assign.sourceVisitPlanId || null
                     });
                 });
             }
         }
 
         try {
-            await supabase.from('installation_workers').delete().eq('work_date', dateStr);
-            if (records.length > 0) {
-                const { error } = await supabase.from('installation_workers').insert(records);
-                if (error) throw error;
-            }
+            const { error } = await supabase.rpc('save_day_schedule', {
+                p_work_date: dateStr,
+                p_records: records
+            });
+            if (error) throw error;
+
+            await supabase.from('schedule_day_drafts').delete().eq('work_date', dateStr);
             await loadWeekData();
             closeDayEditor();
         } catch (e) {
             alert("Помилка: " + e.message);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const saveDraft = async () => {
+        if (!editingDate) return;
+        const dateStr = formatDateToYYYYMMDD(editingDate);
+        setSaving(true);
+        try {
+            const { error } = await supabase.from('schedule_day_drafts').upsert({
+                work_date: dateStr,
+                payload: dayAssignments,
+                updated_by_email: user?.email || null,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'work_date' });
+            if (error) throw error;
+
+            setDraftsMap(prev => ({
+                ...prev,
+                [dateStr]: { work_date: dateStr, payload: dayAssignments, updated_at: new Date().toISOString(), updated_by_email: user?.email || null }
+            }));
+            showNotice('Чернетку збережено — повернетесь пізніше і продовжите');
+        } catch (e) {
+            alert("Помилка збереження чернетки: " + e.message);
         } finally {
             setSaving(false);
         }
@@ -877,11 +1004,11 @@ export default function WorkCalendar() {
         if(!editingDate) return [];
         const dateStr = formatDateToYYYYMMDD(editingDate);
         const dayOffs = timeOffMap[dateStr] || {};
-        return employees.filter(e => !dayOffs.hasOwnProperty(e.custom_id));
+        return employees.filter(e => !e.hidden_from_list && !dayOffs.hasOwnProperty(e.custom_id));
     }, [employees, timeOffMap, editingDate]);
 
     return (
-        <div className="min-h-screen bg-slate-100 pb-20">
+        <div className="min-h-full bg-slate-100 pb-20">
             {/* Легке сповіщення */}
             <AnimatePresence>
                 {notice && (
@@ -945,6 +1072,7 @@ export default function WorkCalendar() {
                             const isToday = dateStr === formatDateToYYYYMMDD(new Date());
                             const dayTasks = assignmentsByDate[dateStr] || [];
                             const dayOffsCount = Object.keys(timeOffMap[dateStr] || {}).length;
+                            const cellIsPast = isDateInPast(date);
 
                             return (
                                 <div 
@@ -985,7 +1113,7 @@ export default function WorkCalendar() {
                                             })
                                         ) : (
                                             // Плюсик показуємо тільки тим, хто може редагувати
-                                            canManageSchedule && !isPastDate && (
+                                            canManageSchedule && (!cellIsPast || canEditPast) && (
                                                 <div className="h-full flex items-center justify-center text-gray-300 text-xs">
                                                     <FaPlus/>
                                                 </div>
@@ -993,8 +1121,13 @@ export default function WorkCalendar() {
                                         )}
                                     </div>
 
-                                    {(dayOffsCount > 0 || (visitsMap[dateStr]?.length > 0)) && (
+                                    {(dayOffsCount > 0 || (visitsMap[dateStr]?.length > 0) || draftsMap[dateStr]) && (
                                         <div className="mt-auto pt-2 space-y-0.5">
+                                            {draftsMap[dateStr] && (
+                                                <div className="text-[10px] text-amber-600 font-bold flex items-center gap-1">
+                                                    <FaSave size={10}/> є чернетка
+                                                </div>
+                                            )}
                                             {visitsMap[dateStr]?.length > 0 && (
                                                 <div className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
                                                     <FaRoute size={10}/> {visitsMap[dateStr].length} виїзд(и) у плані
@@ -1044,6 +1177,7 @@ export default function WorkCalendar() {
                                     isPast={isPastDate}
                                     // ПЕРЕДАЄМО ПРАВА В КОМПОНЕНТ ПЕРЕГЛЯДУ
                                     canManageSchedule={canManageSchedule}
+                                    canEditPast={canEditPast}
                                     visits={editingDate ? (visitsMap[formatDateToYYYYMMDD(editingDate)] || []) : []}
                                 />
                             )}
@@ -1065,6 +1199,23 @@ export default function WorkCalendar() {
                                     </div>
 
                                     <div className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-6">
+                                        {draftNotice && (
+                                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-3">
+                                                <FaSave className="text-amber-500 mt-0.5 flex-shrink-0" />
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-bold text-amber-800">Знайдено незбережену чернетку</p>
+                                                    <p className="text-xs text-amber-700 mb-2">
+                                                        Востаннє змінено {new Date(draftNotice.updated_at).toLocaleString('uk-UA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                                        {draftNotice.updated_by_email ? ` — ${draftNotice.updated_by_email}` : ''}
+                                                    </p>
+                                                    <div className="flex gap-2">
+                                                        <button onClick={applyDraft} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600 transition-colors">Відновити</button>
+                                                        <button onClick={discardDraft} className="px-3 py-1.5 bg-white border border-amber-200 text-amber-700 rounded-lg text-xs font-bold hover:bg-amber-100 transition-colors">Відхилити</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {/* Швидкий старт: копія попереднього дня + заплановані виїзди */}
                                         <div className="space-y-3">
                                             <button
@@ -1085,6 +1236,13 @@ export default function WorkCalendar() {
 
                                         {/* Секція завдань */}
                                         <div className="space-y-4">
+                                            {dayAssignments.length === 0 && (
+                                                <div className="text-center py-10 text-gray-400 bg-white rounded-xl border-2 border-dashed border-gray-200">
+                                                    <FaBriefcase className="mx-auto text-3xl mb-2 opacity-30" />
+                                                    <p className="text-sm font-bold text-gray-500">На цей день ще немає завдань</p>
+                                                    <p className="text-xs mt-1 px-6">Натисніть "Додати ще завдання" нижче, щоб обрати об'єкт і призначити людей</p>
+                                                </div>
+                                            )}
                                             {dayAssignments.map((assign, idx) => (
                                                 <div key={assign.id} className={`bg-white p-4 rounded-xl shadow-sm border relative ${validationErrors[idx] ? 'border-red-300 ring-1 ring-red-100' : 'border-gray-200'}`}>
                                                     <button onClick={() => removeCard(idx)} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 p-2"><FaTrash size={14}/></button>
@@ -1176,10 +1334,18 @@ export default function WorkCalendar() {
                                         </div>
                                     </div>
 
-                                    <div className="p-4 border-t bg-white sticky bottom-0 z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] rounded-b-none md:rounded-b-2xl flex-none">
-                                        <button 
-                                            onClick={handleSwitchToPreview} 
-                                            className="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 text-lg hover:bg-indigo-700"
+                                    <div className="p-4 border-t bg-white sticky bottom-0 z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] rounded-b-none md:rounded-b-2xl flex-none flex gap-2">
+                                        <button
+                                            onClick={saveDraft}
+                                            disabled={saving}
+                                            className="flex-shrink-0 py-3.5 px-3.5 bg-white border border-gray-200 text-gray-600 rounded-xl font-bold active:scale-95 transition-all flex items-center justify-center gap-1.5 hover:bg-gray-50 disabled:opacity-50 text-xs"
+                                            title="Зберегти чернетку — можна продовжити пізніше"
+                                        >
+                                            <FaSave/> Чернетка
+                                        </button>
+                                        <button
+                                            onClick={handleSwitchToPreview}
+                                            className="flex-1 py-3.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 text-base hover:bg-indigo-700"
                                         >
                                             <FaEye/> Попередній перегляд
                                         </button>
