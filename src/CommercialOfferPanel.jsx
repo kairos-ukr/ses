@@ -22,7 +22,7 @@ import {
 } from 'react-icons/fa';
 
 import { supabase } from './supabaseClient';
-import { T, TONE, Btn, IconBtn, Chip, useToast, humanError, num } from './ui';
+import { T, TONE, Btn, IconBtn, Chip, Tip, useToast, humanError, num } from './ui';
 import { CATEGORIES, categoryLabel } from './utils/kpParser';
 import { loadCurrentOffer, loadOfferVersions } from './utils/commercialOffer';
 import {
@@ -650,6 +650,7 @@ export default function CommercialOfferPanel({ installationId, canEdit = false, 
                     <div className="flex items-center gap-2 min-w-0">
                         <FaBoxes className="text-indigo-500 flex-shrink-0" />
                         <span className={T.h2}>Потреба об'єкта</span>
+                        <Tip width={320} text="Обладнання з КП стає потребою об'єкта автоматично при оцифровці — закупівля бачить, що треба, на кілька етапів раніше за комплектацію. Виправлена тут прив'язка одразу оновлює потребу. Комплекти (конструкція, захист, заземлення) сюди не потрапляють: їх розписує комплектація." />
                         <Chip tone={(NEED_STATUS_LABEL[need?.need_status] || NEED_STATUS_LABEL.none).tone}>
                             {(NEED_STATUS_LABEL[need?.need_status] || NEED_STATUS_LABEL.none).label}
                         </Chip>
@@ -662,15 +663,6 @@ export default function CommercialOfferPanel({ installationId, canEdit = false, 
                 </div>
 
                 <div className="p-4 space-y-4">
-                    <p className="text-[12.5px] text-slate-500 leading-relaxed">
-                        Обладнання з КП стає потребою об'єкта автоматично, просто при
-                        оцифровці — закупівля бачить, що треба, на кілька етапів раніше за
-                        комплектацію. Виправлена тут прив'язка одразу оновлює й потребу.
-                        Комплекти (конструкція, захист, заземлення) сюди не потрапляють:
-                        один рядок КП — це десятки позицій складу, і розписати їх може лише
-                        комплектація.
-                    </p>
-
                     {byRole.equipment.length === 0 ? (
                         <p className="text-[13px] text-slate-400 italic">
                             У цій пропозиції немає позицій обладнання — переносити нічого.

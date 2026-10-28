@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useToast } from "./ui";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaSearch, FaPlus, FaTrash, FaPlane, FaBed, FaNotesMedical, 
@@ -187,12 +188,12 @@ const DeleteConfirmModal = ({ isOpen, onClose, onConfirm }) => {
 
 // --- ГОЛОВНИЙ КОМПОНЕНТ ---
 export default function TimeOffManager() {
+    const toast = useToast();
     // 1. ОТРИМУЄМО ДАНІ ПРО КОРИСТУВАЧА
-    const { role, employee } = useAuth();
-    
-    // Визначаємо права
-    const isInstaller = role === 'installer';
-    const isAdminOrOffice = role === 'admin' || role === 'super_admin' || role === 'office';
+    const { role, can, employee } = useAuth();
+
+    // Права — Доступи → «Вихідні й відпустки»; свої вихідні кожен ставить сам
+    const isInstaller = role === 'installer' || !can('timeoff', 'edit');
     const myCustomId = employee?.custom_id;
 
     const isDesktop = useIsDesktop();
@@ -283,7 +284,7 @@ export default function TimeOffManager() {
 
     const handleAddRecord = async () => {
         if (!formData.employeeId) {
-            alert("Оберіть працівника");
+            toast("Оберіть працівника", 'warning');
             return;
         }
         
@@ -293,7 +294,7 @@ export default function TimeOffManager() {
             const start = new Date(formData.startDate);
             const end = new Date(formData.endDate);
             if (end < start) {
-                alert("Дата завершення не може бути раніше дати початку");
+                toast("Дата завершення не може бути раніше дати початку", 'warning');
                 return;
             }
             for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
@@ -301,7 +302,7 @@ export default function TimeOffManager() {
             }
         } else {
             if (manualDates.length === 0) {
-                alert("Додайте хоча б одну дату");
+                toast("Додайте хоча б одну дату", 'warning');
                 return;
             }
             finalDates = [...manualDates];
@@ -327,7 +328,7 @@ export default function TimeOffManager() {
             if (!isDesktop) setIsFormOpen(false);
             
         } catch (e) {
-            alert("Помилка: " + e.message);
+            toast("Помилка: " + e.message, 'error');
         } finally {
             setIsSaving(false);
         }
@@ -339,7 +340,7 @@ export default function TimeOffManager() {
             await supabase.from('attendance').delete().eq('id', deleteModal.id);
             await loadData();
         } catch (e) {
-            alert("Помилка видалення");
+            toast("Помилка видалення", 'error');
         } finally {
             setDeleteModal({ show: false, id: null });
         }
@@ -617,7 +618,7 @@ export default function TimeOffManager() {
 
                                                 // 4. ПРАВА НА ВИДАЛЕННЯ
                                                 // Admin/Office - всі. Installer - тільки своє.
-                                                const canDelete = isAdminOrOffice || (isInstaller && rec.employee_custom_id === myCustomId);
+                                                const canDelete = can('timeoff', 'delete') || (isInstaller && rec.employee_custom_id === myCustomId);
 
                                                 return (
                                                     <motion.div 

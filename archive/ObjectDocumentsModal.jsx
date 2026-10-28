@@ -111,6 +111,8 @@ export default function ObjectDocumentsModal({ project, onClose }) {
         const formData = new FormData();
         formData.append('object_number', project.custom_id);
         formData.append('doc_type', finalDocType);
+        // Хто завантажив — у підписі в гілці Telegram
+        formData.append('uploaded_by', employee?.name || '');
         uploadFiles.forEach((file) => formData.append('files', file));
 
         try {

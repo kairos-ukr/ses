@@ -68,6 +68,8 @@ export default function ItemMovementHistoryModal({ isOpen, onClose, item, wareho
     const [tab, setTab] = useState('objects');
     const [expandedKey, setExpandedKey] = useState(null);
     const [error, setError] = useState(null);
+    // Позиції, влиті в цю: їхня історія тепер показується тут
+    const [mergedFrom, setMergedFrom] = useState([]);
 
     const [period, setPeriod] = useState('all');
     const [dateFrom, setDateFrom] = useState('');
@@ -98,14 +100,17 @@ export default function ItemMovementHistoryModal({ isOpen, onClose, item, wareho
 
             q = q.order('operation_date', { ascending: false }).limit(MAX_ROWS);
 
-            const [movRes, whRes, instRes, clRes, empRes] = await Promise.all([
+            const [movRes, whRes, instRes, clRes, empRes, mergedRes] = await Promise.all([
                 q,
                 supabase.from('warehouses').select('id, name'),
                 supabase.from('installations').select('custom_id, name'),
                 supabase.from('clients').select('id, custom_id, name'),
                 supabase.from('employees').select('id, name'),
+                // До міграції stock_rules колонки немає — тоді просто без позначки
+                supabase.from('nomenclature').select('id, name, sku').eq('merged_into_id', item.id),
             ]);
             if (movRes.error) throw movRes.error;
+            setMergedFrom(mergedRes.error ? [] : (mergedRes.data || []));
 
             const d = { wh: {}, inst: {}, clients: {}, emp: {} };
             (whRes.data || []).forEach(w => { d.wh[w.id] = w.name; });
@@ -295,13 +300,25 @@ export default function ItemMovementHistoryModal({ isOpen, onClose, item, wareho
             toolbar={<div className="space-y-2">
 
                 {/* Мітки позиції */}
-                {(item?.sku || warehouseId) && (
+                {(item?.sku || warehouseId || mergedFrom.length > 0) && (
                     <div className="flex items-center gap-1.5 flex-wrap">
                         {item?.sku && <span className={T.mono}>SKU {item.sku}</span>}
                         {warehouseId && (
                             <Chip tone="accent" icon={FaWarehouse}>
                                 {dicts.wh[warehouseId] || 'обраний склад'}
                             </Chip>
+                        )}
+                        {/* Видно, що в цій історії вже є рухи обʼєднаних дублікатів */}
+                        {mergedFrom.length > 0 && (
+                            <span className="inline-flex items-center gap-1 flex-wrap text-[11px] text-slate-500"
+                                title={mergedFrom.map(m => `${m.name}${m.sku ? ` (${m.sku})` : ''}`).join('\n')}>
+                                <Chip tone="info" icon={FaExchangeAlt}>
+                                    влито {mergedFrom.length}
+                                </Chip>
+                                <span className="truncate max-w-[320px]">
+                                    разом з історією: {mergedFrom.map(m => m.name).join(', ')}
+                                </span>
+                            </span>
                         )}
                     </div>
                 )}

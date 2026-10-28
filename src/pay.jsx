@@ -1,629 +1,319 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  FaDollarSign, FaPlus, FaSearch, FaReceipt, FaSort,
-  FaSortUp, FaSortDown, FaExclamationCircle, FaCheckCircle, FaTimes,
-  FaFileInvoiceDollar, FaCreditCard, FaSpinner, FaCalendarAlt, FaCommentDots,
-  FaUniversity, FaMoneyBillWave, FaCreditCard as FaCard, FaQuestionCircle
-} from "react-icons/fa";
-import { supabase } from "./supabaseClient";
-import Layout from "./Layout";
-import { useAuth } from "./AuthProvider";
+// =====================================================================
+//  K-CORE · «Фінанси»: Борги і Надходження
+//
+//  Надходження показуються за період — типово останній місяць; період
+//  змінюється кнопками (місяць / 3 місяці / рік / усе) або датами.
+//  База віддає лише одну сторінку платежів (по 20), далі — гортаємо
+//  сторінками, тож сторінка не вантажить усю історію одразу.
+//  Новий платіж — форма над списком (PaymentForm), без вікна поверх.
+//  Натиснули на платіж — під ним деталі: курс, спосіб, коментар, видалити.
+// =====================================================================
 
-// --- Helpers ---
-const formatCurrency = (amount) => {
-    if (typeof amount !== 'number') return '$0.00';
-    return amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { FaPlus, FaCreditCard, FaQuestionCircle, FaCommentDots, FaChevronDown, FaTrash, FaExternalLinkAlt } from 'react-icons/fa';
+
+import { supabase } from './supabaseClient';
+import Layout from './Layout';
+import { useAuth } from './AuthProvider';
+import { T, Btn, SearchInput, Skeleton, Pagination, Linkify, useToast, humanError } from './ui';
+import { CURRENCIES, DEFAULT_CURRENCY, formatMoney } from './domain/objects';
+import { hasPaymentSchedule } from './utils/features';
+import ReceivablesPanel from './pages/ReceivablesPanel';
+import PaymentForm, { methodLabel } from './pages/PaymentForm';
+import UsdRateEditor from './pages/UsdRateEditor';
+
+const PAGE = 20;
+const isoDay = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const monthsAgo = (n) => { const d = new Date(); d.setMonth(d.getMonth() - n); return isoDay(d); };
+const fmtDate = (s) => (s ? new Date(`${String(s).slice(0, 10)}T12:00:00`).toLocaleDateString('uk-UA') : '');
+
+const PERIODS = [
+    { k: 'm1', l: 'Місяць', from: () => monthsAgo(1) },
+    { k: 'm3', l: '3 місяці', from: () => monthsAgo(3) },
+    { k: 'y1', l: 'Рік', from: () => monthsAgo(12) },
+    { k: 'all', l: 'Усе', from: () => '' },
+];
+
+const SELECT = 'id, installation_custom_id, client_id, amount, currency, exchange_rate, amount_object, paid_at, payment_method, comment, created_at, '
+    + 'installation:installations(custom_id, name, currency, total_cost, paid_amount, client:clients(name, company_name)), '
+    + 'client:clients(id, custom_id, name, company_name)';
+
+const payCur = (p) => p.currency || p.installation?.currency || DEFAULT_CURRENCY;
+const totalsText = (by) => {
+    const parts = CURRENCIES.filter(c => by[c.key]).map(c => formatMoney(by[c.key], c.key));
+    return parts.length ? parts.join(' · ') : formatMoney(0, DEFAULT_CURRENCY);
 };
 
-const getMethodLabel = (method) => {
-    const map = {
-        'Bank Transfer': 'Банківський переказ',
-        'Cash': 'Готівка',
-        'Card': 'Картка',
-        'Other': 'Інше'
-    };
-    return map[method] || method || 'Не вказано';
-};
-
-const getMethodIcon = (method) => {
-    switch (method) {
-        case 'Bank Transfer': return <FaUniversity className="text-blue-500"/>;
-        case 'Cash': return <FaMoneyBillWave className="text-green-500"/>;
-        case 'Card': return <FaCard className="text-purple-500"/>;
-        default: return <FaQuestionCircle className="text-gray-400"/>;
-    }
-};
-
-// --- UI Components ---
-
-const StatCard = ({ title, value, icon: Icon, color, isCurrency = true }) => {
-    const colors = {
-        red: 'bg-red-50 text-red-600 border-red-100',
-        green: 'bg-emerald-50 text-emerald-600 border-emerald-100',
-        indigo: 'bg-indigo-50 text-indigo-600 border-indigo-100'
-    };
-    const iconColors = {
-        red: 'bg-red-500',
-        green: 'bg-emerald-500',
-        indigo: 'bg-indigo-500'
-    };
-
+/* Деталі платежу — під рядком */
+function PaymentDetails({ p, onDelete }) {
+    const [ask, setAsk] = useState(false);
+    const inst = p.installation;
+    const objCur = inst?.currency || DEFAULT_CURRENCY;
+    const converted = payCur(p) !== objCur && p.amount_object != null;
+    const debt = Math.max(0, (Number(inst?.total_cost) || 0) - (Number(inst?.paid_amount) || 0));
     return (
-        <div className={`p-5 rounded-2xl border ${colors[color]} shadow-sm flex items-center gap-4`}>
-            <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white shadow-md ${iconColors[color]}`}>
-                <Icon className="text-xl" />
-            </div>
-            <div>
-                <p className="text-xs font-bold uppercase tracking-wider opacity-70 mb-0.5">{title}</p>
-                <p className="text-2xl font-extrabold">{isCurrency ? formatCurrency(value) : value}</p>
+        <div className="px-4 pb-3.5 pt-1 bg-slate-50/70 border-t border-slate-100 space-y-2.5 text-[13px]">
+            <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
+                {converted && <><dt className="text-slate-500">Зараховано в угоду</dt><dd className="font-semibold text-slate-800 tabular-nums">{formatMoney(p.amount_object, objCur)}</dd></>}
+                <dt className="text-slate-500">Курс</dt><dd className="font-semibold text-slate-800 tabular-nums">{p.exchange_rate ? `1 $ = ${Number(p.exchange_rate)} ₴` : 'не вказано'}</dd>
+                <dt className="text-slate-500">Спосіб</dt><dd className="font-semibold text-slate-800">{methodLabel(p.payment_method)}</dd>
+                {inst && <><dt className="text-slate-500">Борг по об'єкту</dt><dd className={`font-semibold tabular-nums ${debt > 0.009 ? 'text-rose-700' : 'text-emerald-700'}`}>{debt > 0.009 ? formatMoney(debt, objCur) : 'немає'}</dd></>}
+                {p.comment && <><dt className="text-slate-500">Коментар</dt><dd className="text-slate-800 whitespace-pre-wrap break-words"><Linkify>{p.comment}</Linkify></dd></>}
+            </dl>
+            <div className="flex flex-wrap items-center gap-2">
+                {inst && (
+                    <a href={`#/project/${inst.custom_id}`} className="h-9 px-3 rounded-lg border border-slate-200 bg-white text-[12.5px] font-semibold text-slate-700 inline-flex items-center gap-1.5 hover:border-slate-300">
+                        <FaExternalLinkAlt size={10} /> Картка об'єкта
+                    </a>
+                )}
+                {p.client?.custom_id && (
+                    <a href={`#/clients/${p.client.custom_id}`} className="h-9 px-3 rounded-lg border border-slate-200 bg-white text-[12.5px] font-semibold text-slate-700 inline-flex items-center gap-1.5 hover:border-slate-300">
+                        <FaExternalLinkAlt size={10} /> Картка клієнта
+                    </a>
+                )}
+                {onDelete && (ask ? (
+                    <span className="inline-flex items-center gap-1.5">
+                        <span className="text-[12.5px] font-semibold text-rose-700">Видалити платіж?</span>
+                        <Btn size="sm" variant="danger" onClick={() => onDelete(p)}>Так</Btn>
+                        <Btn size="sm" variant="ghost" onClick={() => setAsk(false)}>Ні</Btn>
+                    </span>
+                ) : (
+                    <Btn size="sm" variant="ghost" icon={FaTrash} className="hover:!text-rose-600" onClick={() => setAsk(true)}>Видалити</Btn>
+                ))}
             </div>
         </div>
     );
-};
+}
 
-const PaymentStatusBadge = ({ installation }) => {
-    const totalCost = installation?.total_cost || 0;
-    const paidAmount = installation?.paid_amount || 0;
-    const debt = totalCost - paidAmount;
+function Payments({ employeeId }) {
+    const toast = useToast();
+    const { can } = useAuth();   // Доступи → «Платежі й борги»: додавати, видаляти
+    const [periodKey, setPeriodKey] = useState('m1');
+    const [range, setRange] = useState(() => ({ from: monthsAgo(1), to: '' }));
+    const [search, setSearch] = useState('');
+    const [q, setQ] = useState('');
+    const [page, setPage] = useState(1);
+    const [rows, setRows] = useState(null);
+    const [total, setTotal] = useState(0);
+    const [sums, setSums] = useState({});
+    const [objects, setObjects] = useState([]);
+    const [clients, setClients] = useState([]);
+    const [adding, setAdding] = useState(false);
+    const [open, setOpen] = useState(null);
+    const listTop = useRef(null);
 
-    let statusConfig = { text: 'Невідомо', className: 'bg-slate-100 text-slate-600' };
+    // Легкі списки об'єктів і клієнтів: для пошуку й для форми платежу
+    useEffect(() => {
+        supabase.from('installations').select('custom_id, name, currency, client:clients(name, company_name)').order('custom_id', { ascending: false })
+            .then(({ data }) => setObjects(data || []));
+        supabase.from('clients').select('id, custom_id, name, company_name, phone').order('name')
+            .then(({ data }) => setClients(data || []));
+    }, []);
 
-    if (debt <= 0) {
-        statusConfig = { text: 'Оплачено', className: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
-    } else if (paidAmount > 0) {
-        statusConfig = { text: 'Частково', className: 'bg-blue-100 text-blue-700 border-blue-200' };
-    } else {
-        statusConfig = { text: 'Борг', className: 'bg-red-100 text-red-700 border-red-200' };
-    }
+    useEffect(() => { const t = setTimeout(() => setQ(search.trim().toLowerCase().replace(/^сес-?/, '')), 300); return () => clearTimeout(t); }, [search]);
+    useEffect(() => { setPage(1); }, [q, range]);
+
+    // Пошук: об'єкти й клієнти, що підходять, → платежі по них
+    const ids = useMemo(() => {
+        if (!q) return null;
+        const has = (vals) => vals.some(v => v != null && String(v).toLowerCase().includes(q));
+        return {
+            objects: objects.filter(o => has([o.custom_id, o.name, o.client?.name, o.client?.company_name])).map(o => o.custom_id),
+            clients: clients.filter(c => has([c.name, c.company_name, c.phone])).map(c => c.id),
+        };
+    }, [q, objects, clients]);
+
+    const load = useCallback(async () => {
+        if (ids && !ids.objects.length && !ids.clients.length) { setRows([]); setTotal(0); setSums({}); return; }
+        const filter = (query) => {
+            let x = query;
+            if (range.from) x = x.gte('paid_at', range.from);
+            if (range.to) x = x.lte('paid_at', range.to);
+            if (ids) {
+                const parts = [];
+                if (ids.objects.length) parts.push(`installation_custom_id.in.(${ids.objects.slice(0, 300).join(',')})`);
+                if (ids.clients.length) parts.push(`client_id.in.(${ids.clients.slice(0, 300).join(',')})`);
+                x = x.or(parts.join(','));
+            }
+            return x;
+        };
+        const from = (page - 1) * PAGE;
+        const [list, money] = await Promise.all([
+            filter(supabase.from('payment_history').select(SELECT, { count: 'exact' }))
+                .order('paid_at', { ascending: false }).order('id', { ascending: false })
+                .range(from, from + PAGE - 1),
+            filter(supabase.from('payment_history').select('amount, currency, installation:installations(currency)')),
+        ]);
+        if (list.error) { toast(humanError(list.error), 'error'); setRows([]); return; }
+        setRows(list.data || []);
+        setTotal(list.count || 0);
+        const by = {};
+        (money.data || []).forEach(p => { const c = payCur(p); by[c] = (by[c] || 0) + (Number(p.amount) || 0); });
+        setSums(by);
+    }, [ids, range, page, toast]);
+
+    useEffect(() => { setRows(null); load(); }, [load]);
+
+    const pickPeriod = (p) => { setPeriodKey(p.k); setRange({ from: p.from(), to: '' }); };
+    const setDates = (patch) => { setPeriodKey('custom'); setRange(r => ({ ...r, ...patch })); };
+    const goPage = (n) => { setPage(n); setOpen(null); listTop.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
+
+    const remove = async (p) => {
+        const { error } = await supabase.from('payment_history').delete().eq('id', p.id);
+        if (error) { toast(humanError(error), 'error'); return; }
+        toast("Платіж видалено — «оплачено» по об'єкту перераховано", 'info');
+        setOpen(null);
+        load();
+    };
+
+    const pages = Math.max(1, Math.ceil(total / PAGE));
 
     return (
-        <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${statusConfig.className}`}>
-            {statusConfig.text}
-        </span>
-    );
-};
-
-const PaymentCard = ({ payment, onClick }) => {
-    const inst = payment.installation;
-    const debt = (inst?.total_cost || 0) - (inst?.paid_amount || 0);
-
-    return (
-        <div onClick={onClick} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-col gap-3 active:scale-[0.98] transition-transform cursor-pointer">
-            <div className="flex justify-between items-start">
-                <div>
-                    <h4 className="font-bold text-slate-800 text-lg">{formatCurrency(payment.amount)}</h4>
-                    <p className="text-xs text-slate-500 font-medium flex items-center gap-1 mt-1">
-                        <FaCalendarAlt /> {new Date(payment.paid_at).toLocaleDateString('uk-UA')}
-                    </p>
+        <div className="space-y-3">
+            {/* Новий платіж — тут же, над списком */}
+            {!can('payments', 'add') ? null : adding ? (
+                <div className={`${T.card} p-4 sm:p-5`}>
+                    <h2 className="text-[16px] font-bold text-slate-900 mb-3">Новий платіж</h2>
+                    <PaymentForm objects={objects} clients={clients} employeeId={employeeId}
+                        onCancel={() => setAdding(false)}
+                        onSaved={() => { setAdding(false); setPage(1); load(); }} />
                 </div>
-                <PaymentStatusBadge installation={inst} />
-            </div>
-            
-            <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
-                <p className="text-sm font-bold text-slate-700 mb-1">{inst.client?.company_name || inst.client?.name}</p>
-                <p className="text-xs text-slate-500">Проект: <span className="font-mono">{inst.name || '---'} (#{inst.custom_id})</span></p>
+            ) : (
+                <button type="button" onClick={() => setAdding(true)}
+                    className="w-full h-12 px-4 rounded-xl border border-dashed border-emerald-300 bg-white text-left text-[14px] font-semibold text-emerald-700 hover:bg-emerald-50 inline-flex items-center gap-2.5">
+                    <FaPlus size={11} /> Новий платіж…
+                </button>
+            )}
+
+            {/* Період, пошук, підсумок */}
+            <div className={`${T.card} p-3 space-y-2.5`}>
+                <div className="flex flex-wrap items-center gap-1.5">
+                    {PERIODS.map(p => (
+                        <button key={p.k} type="button" onClick={() => pickPeriod(p)}
+                            className={`h-9 px-3 rounded-lg border text-[12.5px] font-semibold ${periodKey === p.k ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'}`}>
+                            {p.l}
+                        </button>
+                    ))}
+                    <span className="flex items-center gap-1.5 w-full sm:w-auto sm:ml-1">
+                        <input type="date" value={range.from} onChange={e => setDates({ from: e.target.value })} aria-label="З дати"
+                            className="flex-1 min-w-0 h-9 px-2 rounded-lg border border-slate-200 bg-white text-[12.5px]" />
+                        <span className="text-slate-400">—</span>
+                        <input type="date" value={range.to} onChange={e => setDates({ to: e.target.value })} aria-label="По дату"
+                            className="flex-1 min-w-0 h-9 px-2 rounded-lg border border-slate-200 bg-white text-[12.5px]" />
+                    </span>
+                </div>
+                <SearchInput value={search} onChange={setSearch} placeholder="Об'єкт: номер, назва, клієнт…" />
+                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 pt-0.5">
+                    <span className="text-[13px] text-slate-500">Надійшло за період: <b className="text-[16px] text-emerald-700 tabular-nums">{totalsText(sums)}</b></span>
+                    <span className="text-[13px] text-slate-500">Платежів: <b className="text-slate-800 tabular-nums">{total}</b></span>
+                </div>
             </div>
 
-            <div className="flex justify-between items-center text-xs pt-2 border-t border-slate-100">
-                <span className="text-slate-400">Загальний борг:</span>
-                <span className={`font-bold ${debt > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                    {debt > 0 ? formatCurrency(debt) : '0.00'}
-                </span>
+            {/* Платежі */}
+            <div ref={listTop} className="scroll-mt-3">
+                {rows === null ? (
+                    <div className={T.card}><Skeleton rows={5} /></div>
+                ) : rows.length === 0 ? (
+                    <div className={`${T.card} px-4 py-10 text-center`}>
+                        <div className="text-[14px] font-semibold text-slate-600">За цей період платежів немає</div>
+                        {periodKey !== 'all' && (
+                            <button type="button" onClick={() => pickPeriod(PERIODS[PERIODS.length - 1])} className="mt-1.5 text-[13px] font-semibold text-indigo-600 hover:underline">Показати за весь час</button>
+                        )}
+                    </div>
+                ) : (
+                    <div className={`${T.card} overflow-hidden`}>
+                        <ul className="divide-y divide-slate-100">
+                            {rows.map(p => {
+                                const inst = p.installation;
+                                const isOpen = open === p.id;
+                                return (
+                                    <li key={p.id}>
+                                        <button type="button" onClick={() => setOpen(o => (o === p.id ? null : p.id))} aria-expanded={isOpen}
+                                            className={`w-full text-left px-4 py-3 flex items-start gap-3 ${isOpen ? 'bg-slate-50' : 'hover:bg-slate-50'}`}>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex flex-wrap items-baseline gap-x-2">
+                                                    <span className="text-[15px] font-bold text-emerald-700 tabular-nums">{formatMoney(Number(p.amount), payCur(p))}</span>
+                                                    <span className="text-[12.5px] text-slate-500 tabular-nums">{fmtDate(p.paid_at)}</span>
+                                                    {p.exchange_rate && <span className="text-[12px] text-slate-400 tabular-nums">· курс {Number(p.exchange_rate)}</span>}
+                                                </div>
+                                                <div className="text-[13px] text-slate-700 break-words">
+                                                    {inst
+                                                        ? <><span className="font-mono text-[11px] text-slate-400 mr-1">СЕС-{inst.custom_id}</span>{inst.client?.company_name || inst.client?.name || inst.name}</>
+                                                        : <><span className="text-[11px] font-semibold text-indigo-600 mr-1">клієнт</span>{p.client?.company_name || p.client?.name || '—'}</>}
+                                                </div>
+                                                {p.comment && !isOpen && (
+                                                    <div className="text-[12px] text-slate-500 break-words line-clamp-1"><FaCommentDots size={10} className="inline mr-1.5 -mt-0.5" />{p.comment}</div>
+                                                )}
+                                            </div>
+                                            <span className="hidden sm:inline text-[12px] text-slate-500 mt-1">{methodLabel(p.payment_method)}</span>
+                                            <FaChevronDown size={10} className={`mt-2 text-slate-400 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                                        </button>
+                                        {isOpen && <PaymentDetails p={p} onDelete={can('payments', 'delete') ? remove : null} />}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    </div>
+                )}
             </div>
-            
-            {payment.comment && (
-                <div className="flex items-start gap-2 text-xs text-slate-500 bg-yellow-50/50 p-2 rounded border border-yellow-100">
-                    <FaCommentDots className="mt-0.5 text-yellow-500 flex-shrink-0"/>
-                    <span className="line-clamp-2">{payment.comment}</span>
-                </div>
+
+            {total > PAGE && (
+                <Pagination page={page} pages={pages} total={total}
+                    from={(page - 1) * PAGE + 1} to={Math.min(page * PAGE, total)} onPage={goPage} />
             )}
         </div>
     );
-};
-
-// --- View Payment Details Modal ---
-const PaymentDetailsModal = ({ onClose, payment }) => {
-    const inst = payment.installation;
-    const totalCost = inst?.total_cost || 0;
-    const paidAmount = inst?.paid_amount || 0;
-    const debt = totalCost - paidAmount;
-
-    return (
-        <motion.div 
-            className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 sm:p-6"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}
-        >
-            <motion.div 
-                className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[85dvh] overflow-hidden relative"
-                initial={{ scale: 0.95, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0, y: 20 }}
-                onClick={e => e.stopPropagation()}
-            >
-                {/* Header */}
-                <div className="flex-none p-5 border-b border-slate-100 flex justify-between items-start bg-slate-50/50">
-                    <div>
-                        <h3 className="text-xl font-bold text-slate-800">Деталі платежу</h3>
-                        <p className="text-sm text-slate-500">{new Date(payment.paid_at).toLocaleDateString('uk-UA')}</p>
-                    </div>
-                    <button onClick={onClose} className="p-2 bg-white text-slate-400 hover:text-slate-600 rounded-full shadow-sm"><FaTimes /></button>
-                </div>
-
-                {/* Body */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-6 overscroll-contain">
-                    <div className="text-center">
-                        <p className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-1">Сума платежу</p>
-                        <h2 className="text-4xl font-extrabold text-emerald-600">{formatCurrency(payment.amount)}</h2>
-                        <div className="flex items-center justify-center gap-2 mt-3 text-sm text-slate-700 bg-slate-100 py-1.5 px-4 rounded-full w-fit mx-auto border border-slate-200">
-                            {getMethodIcon(payment.payment_method)}
-                            <span className="font-medium">{getMethodLabel(payment.payment_method)}</span>
-                        </div>
-                    </div>
-
-                    <div className="border-t border-slate-100"></div>
-
-                    <div className="space-y-3">
-                        <h4 className="font-bold text-slate-800 text-xs uppercase flex items-center gap-2 tracking-wider"><FaFileInvoiceDollar/> Проект</h4>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
-                            <div className="flex justify-between">
-                                <span className="text-slate-500 text-sm">Клієнт</span>
-                                <span className="font-bold text-slate-700 text-right">{inst.client?.company_name || inst.client?.name}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-slate-500 text-sm">Об'єкт</span>
-                                <span className="font-medium text-slate-700 text-right">{inst.name} (#{inst.custom_id})</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="space-y-3">
-                        <h4 className="font-bold text-slate-800 text-xs uppercase flex items-center gap-2 tracking-wider"><FaCreditCard/> Баланс проекту</h4>
-                        <div className="grid grid-cols-2 gap-3">
-                            <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
-                                <p className="text-[10px] uppercase text-slate-400 font-bold mb-1">Всього</p>
-                                <p className="font-bold text-slate-800">{formatCurrency(totalCost)}</p>
-                            </div>
-                            <div className="p-3 bg-red-50 rounded-xl border border-red-100 text-center">
-                                <p className="text-[10px] uppercase text-red-400 font-bold mb-1">Борг</p>
-                                <p className="font-bold text-red-600">{formatCurrency(debt > 0 ? debt : 0)}</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    {payment.comment && (
-                        <div className="space-y-2">
-                            <h4 className="font-bold text-slate-800 text-xs uppercase flex items-center gap-2 tracking-wider"><FaCommentDots/> Коментар</h4>
-                            <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100 text-slate-700 text-sm italic leading-relaxed whitespace-pre-wrap">
-                                {payment.comment}
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Footer */}
-                <div className="flex-none p-4 border-t border-slate-100 bg-slate-50 pb-safe">
-                    <button onClick={onClose} className="w-full py-3.5 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl shadow-sm hover:bg-slate-50 active:scale-95 transition-transform">
-                        Закрити
-                    </button>
-                </div>
-            </motion.div>
-        </motion.div>
-    );
-};
-
-// --- Add Payment Modal ---
-const AddPaymentModal = ({ onClose, installations, onSuccess, showToast }) => {
-    const [formData, setFormData] = useState({
-        installation_custom_id: '',
-        amount: '',
-        paid_at: new Date().toISOString().split('T')[0],
-        payment_method: 'Bank Transfer', 
-        comment: ''
-    });
-    const [installationSearch, setInstallationSearch] = useState("");
-    const [formErrors, setFormErrors] = useState({});
-    const [submitting, setSubmitting] = useState(false);
-    
-    const filteredInstallations = useMemo(() => {
-        if (!installationSearch) return [];
-        const lower = installationSearch.toLowerCase();
-        return installations.filter(inst => 
-            inst.custom_id.toString().includes(lower) || 
-            (inst.name && inst.name.toLowerCase().includes(lower)) ||
-            (inst.client?.name && inst.client.name.toLowerCase().includes(lower))
-        );
-    }, [installations, installationSearch]);
-
-    const handleInstallationSelect = (inst) => {
-        setFormData(p => ({ ...p, installation_custom_id: inst.custom_id }));
-        setInstallationSearch(`#${inst.custom_id} - ${inst.name || 'Без назви'}`);
-        setFormErrors(p => ({ ...p, installation_custom_id: '' }));
-    };
-
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        const errors = {};
-        if (!formData.installation_custom_id) errors.installation_custom_id = 'Оберіть об\'єкт';
-        if (!formData.amount || parseFloat(formData.amount) <= 0) errors.amount = 'Введіть суму';
-        
-        if (Object.keys(errors).length > 0) {
-            setFormErrors(errors);
-            return;
-        }
-
-        setSubmitting(true);
-        try {
-            const { error } = await supabase.from('payment_history').insert([{
-                installation_custom_id: parseInt(formData.installation_custom_id),
-                amount: parseFloat(formData.amount),
-                paid_at: formData.paid_at,
-                payment_method: formData.payment_method,
-                comment: formData.comment || null,
-            }]);
-
-            if (error) throw error;
-            showToast('Платіж додано!', 'success');
-            onSuccess();
-            onClose();
-        } catch (err) {
-            showToast(err.message, 'error');
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
-    return (
-        <motion.div 
-            className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 sm:p-6"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}
-        >
-            <motion.div 
-                className="bg-white rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[90dvh] overflow-hidden"
-                initial={{ scale: 0.95, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0, y: 20 }}
-                onClick={e => e.stopPropagation()}
-            >
-                <div className="flex-none p-5 border-b border-slate-100 flex justify-between items-center bg-white">
-                    <h2 className="text-xl font-bold text-slate-800">Новий платіж</h2>
-                    <button onClick={onClose} className="p-2 bg-slate-50 text-slate-400 hover:text-slate-600 rounded-full"><FaTimes /></button>
-                </div>
-                
-                <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-slate-50/30">
-                    <div className="relative">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Об'єкт</label>
-                        <div className="relative">
-                            <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
-                            <input 
-                                type="text" 
-                                value={installationSearch} 
-                                onChange={(e) => { setInstallationSearch(e.target.value); if(formData.installation_custom_id) setFormData(p => ({...p, installation_custom_id: ''})); }} 
-                                placeholder="Пошук (ID, Назва, Клієнт)..." 
-                                className={`w-full border rounded-xl pl-11 pr-4 py-3.5 text-base sm:text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition bg-white ${formErrors.installation_custom_id ? 'border-red-500' : 'border-slate-200'}`}
-                            />
-                        </div>
-                        {installationSearch && !formData.installation_custom_id && (
-                            <div className="absolute z-20 w-full bg-white border border-slate-200 rounded-xl mt-1 shadow-xl max-h-48 overflow-y-auto">
-                                {filteredInstallations.length > 0 ? filteredInstallations.map(inst => (
-                                    <button key={inst.custom_id} type="button" onClick={() => handleInstallationSelect(inst)} className="w-full px-4 py-3 text-left hover:bg-indigo-50 border-b border-slate-50 last:border-0">
-                                        <div className="font-bold text-slate-800 text-sm">#{inst.custom_id} - {inst.name}</div>
-                                        <div className="text-xs text-slate-500">{inst.client?.company_name || inst.client?.name}</div>
-                                    </button>
-                                )) : <div className="p-4 text-sm text-slate-400 text-center">Не знайдено</div>}
-                            </div>
-                        )}
-                        {formErrors.installation_custom_id && <p className="text-red-500 text-xs mt-1 font-bold ml-1">{formErrors.installation_custom_id}</p>}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Сума ($)</label>
-                            <div className="relative">
-                                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">$</span>
-                                <input type="number" min="0" step="0.01" value={formData.amount} onChange={(e) => setFormData(p => ({ ...p, amount: e.target.value }))} className={`w-full border rounded-xl pl-8 pr-4 py-3.5 text-base sm:text-sm outline-none focus:ring-2 focus:ring-indigo-500 ${formErrors.amount ? 'border-red-500' : 'border-slate-200'}`} placeholder="0.00" />
-                            </div>
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Дата</label>
-                            <input type="date" value={formData.paid_at} onChange={(e) => setFormData(p => ({ ...p, paid_at: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-4 py-3.5 text-base sm:text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Метод оплати</label>
-                        <select value={formData.payment_method} onChange={(e) => setFormData(p => ({ ...p, payment_method: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-4 py-3.5 text-base sm:text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white appearance-none">
-                            <option value="Bank Transfer">Банківський переказ</option>
-                            <option value="Cash">Готівка</option>
-                            <option value="Card">Картка</option>
-                            <option value="Other">Інше</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Коментар</label>
-                        <textarea rows="3" value={formData.comment} onChange={(e) => setFormData(p => ({ ...p, comment: e.target.value }))} className="w-full border border-slate-200 rounded-xl p-4 text-base sm:text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-none bg-white" placeholder="Призначення платежу..."></textarea>
-                    </div>
-                </div>
-
-                <div className="flex-none p-6 bg-white border-t border-slate-100 flex justify-end gap-3 pb-safe">
-                    <button type="button" onClick={onClose} disabled={submitting} className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition">Скасувати</button>
-                    <button type="button" onClick={handleSubmit} disabled={submitting} className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-lg transition flex items-center gap-2">
-                        {submitting ? <FaSpinner className="animate-spin" /> : <FaPlus />} <span>Додати</span>
-                    </button>
-                </div>
-            </motion.div>
-        </motion.div>
-    );
-};
-
-// --- Toast ---
-const Toast = ({ message, type, onClose }) => { 
-    useEffect(() => { const t = setTimeout(onClose, 4000); return () => clearTimeout(t); }, [onClose]);
-    return (
-        <motion.div initial={{ opacity: 0, y: -50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -50 }} className={`fixed top-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-auto z-[200] flex items-center gap-3 p-4 rounded-xl shadow-2xl text-white font-medium ${type === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}>
-            <div className="text-xl">{type === 'error' ? <FaExclamationCircle /> : <FaCheckCircle />}</div>
-            <p className="text-sm flex-1">{message}</p>
-            <button onClick={onClose} className="opacity-80 hover:opacity-100"><FaTimes /></button>
-        </motion.div>
-    );
-};
-
-// --- MAIN PAGE ---
-export default function PaymentsPage() {
-  const navigate = useNavigate();
-  const { isOffice, loading: authLoading } = useAuth();
-  const [payments, setPayments] = useState([]);
-  const [installations, setInstallations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  
-  const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
-  const [sortConfig, setSortConfig] = useState({ key: 'paid_at', direction: 'descending' });
-  
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [viewingPayment, setViewingPayment] = useState(null); 
-  const [toast, setToast] = useState(null);
-
-  const showToast = useCallback((message, type = 'success') => setToast({ id: Date.now(), message, type }), []);
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [paymentsRes, installationsRes] = await Promise.all([
-        supabase.from('payment_history').select(`*, installation:installations!inner(custom_id, name, total_cost, paid_amount, notes, client:clients(name, company_name))`).order('paid_at', { ascending: false }),
-        supabase.from('installations').select(`custom_id, name, client:clients(name, company_name)`)
-      ]);
-      if (paymentsRes.error) throw paymentsRes.error;
-      if (installationsRes.error) throw installationsRes.error;
-      setPayments(paymentsRes.data || []);
-      setInstallations(installationsRes.data || []);
-    } catch (error) {
-      showToast(`Помилка: ${error.message}`, 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, [showToast]);
-
-  useEffect(() => { if (!authLoading && isOffice) loadData(); }, [loadData, authLoading, isOffice]);
-
-  // Filtering & Sorting
-  const filteredPayments = useMemo(() => {
-    let res = payments.filter(payment => {
-      const searchLower = searchTerm.toLowerCase();
-      const clientName = payment.installation?.client?.name || '';
-      const companyName = payment.installation?.client?.company_name || '';
-      const instName = payment.installation?.name || '';
-      const instId = payment.installation?.custom_id?.toString() || '';
-      
-      const matchesSearch = clientName.toLowerCase().includes(searchLower) || 
-                            companyName.toLowerCase().includes(searchLower) || 
-                            instName.toLowerCase().includes(searchLower) ||
-                            instId.includes(searchLower);
-
-      // Date Filter
-      const pDate = new Date(payment.paid_at);
-      const start = dateFilter.start ? new Date(dateFilter.start) : null;
-      const end = dateFilter.end ? new Date(dateFilter.end) : null;
-      if (end) end.setHours(23, 59, 59, 999);
-      const matchesDate = (!start || pDate >= start) && (!end || pDate <= end);
-
-      // Status Filter
-      const total = payment.installation?.total_cost || 0;
-      const paid = payment.installation?.paid_amount || 0;
-      const debt = total - paid;
-      let matchesStatus = true;
-      if (statusFilter === 'debtors') matchesStatus = debt > 0;
-      if (statusFilter === 'paid') matchesStatus = debt <= 0;
-
-      return matchesSearch && matchesDate && matchesStatus;
-    });
-
-    if (sortConfig.key) {
-        res.sort((a, b) => {
-            let aVal = a[sortConfig.key];
-            let bVal = b[sortConfig.key];
-            
-            if (sortConfig.key === 'client') {
-                aVal = a.installation?.client?.company_name || a.installation?.client?.name;
-                bVal = b.installation?.client?.company_name || b.installation?.client?.name;
-            }
-
-            if (aVal < bVal) return sortConfig.direction === 'ascending' ? -1 : 1;
-            if (aVal > bVal) return sortConfig.direction === 'ascending' ? 1 : -1;
-            return 0;
-        });
-    }
-    return res;
-  }, [payments, searchTerm, statusFilter, dateFilter, sortConfig]);
-
-  const stats = useMemo(() => {
-      const uniqueInsts = new Map();
-      let totalPaid = 0;
-      
-      filteredPayments.forEach(p => {
-          totalPaid += p.amount;
-          if (p.installation) uniqueInsts.set(p.installation.custom_id, p.installation);
-      });
-
-      let totalDebt = 0;
-      uniqueInsts.forEach(inst => {
-          const d = (inst.total_cost || 0) - (inst.paid_amount || 0);
-          if (d > 0) totalDebt += d;
-      });
-
-      return { count: filteredPayments.length, totalPaid, totalDebt };
-  }, [filteredPayments]);
-
-  const handleSort = (key) => {
-      setSortConfig(p => ({ key, direction: p.key === key && p.direction === 'ascending' ? 'descending' : 'ascending' }));
-  };
-
-  if (!authLoading && !isOffice) {
-    return (
-      <Layout>
-        <div className="flex flex-col items-center justify-center h-full py-24 text-center px-6">
-          <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
-            <FaQuestionCircle className="text-2xl text-slate-400" />
-          </div>
-          <h2 className="text-lg font-bold text-slate-700">Немає доступу</h2>
-          <p className="text-sm text-slate-400 mt-1 max-w-sm">
-            Розділ "Платежі" бачать офіс-менеджери та адміністратори.
-          </p>
-        </div>
-      </Layout>
-    );
-  }
-
-  return (
-    <Layout>
-      <div className="p-4 sm:p-8 space-y-6 max-w-[1600px] mx-auto pb-safe min-h-[calc(100dvh-80px)] flex flex-col">
-        {/* HEADER */}
-        <div className="flex flex-col gap-4 flex-none">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                <div>
-                    <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
-                        <FaCreditCard className="text-emerald-600"/> Фінанси
-                    </h1>
-                    <p className="text-slate-500 text-sm mt-1">Історія надходжень та заборгованість</p>
-                </div>
-                <button onClick={() => setShowAddForm(true)} className="hidden sm:flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl font-bold shadow-lg hover:bg-emerald-700 active:scale-95 transition-all w-full sm:w-auto">
-                    <FaPlus/> <span>Новий платіж</span>
-                </button>
-            </div>
-
-            {/* STATS CARDS */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <StatCard title="Надходження (Вибірка)" value={stats.totalPaid} icon={FaDollarSign} color="green" />
-                <StatCard title="Загальний борг (Вибірка)" value={stats.totalDebt} icon={FaFileInvoiceDollar} color="red" />
-                <StatCard title="Транзакцій" value={stats.count} icon={FaReceipt} color="indigo" isCurrency={false} />
-            </div>
-
-            {/* FILTERS */}
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-                <div className="flex flex-col md:flex-row gap-4 justify-between">
-                    <div className="relative flex-grow max-w-md">
-                        <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
-                        <input type="text" placeholder="Пошук (Клієнт, ID, Сума)..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-sm transition-all"/>
-                    </div>
-                    <div className="flex bg-slate-100 p-1 rounded-xl w-full md:w-auto">
-                        {[{id:'all', l:'Всі'}, {id:'debtors', l:'Боржники'}, {id:'paid', l:'Оплачені'}].map(s => (
-                            <button key={s.id} onClick={() => setStatusFilter(s.id)} className={`flex-1 px-4 py-2 rounded-lg text-xs font-bold transition-all ${statusFilter === s.id ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{s.l}</button>
-                        ))}
-                    </div>
-                </div>
-                {/* FIX: Адаптивний блок фільтру дати */}
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-3 text-sm text-slate-600 border-t border-slate-100 pt-4">
-                    <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-700">Період:</span>
-                        <input 
-                            type="date" 
-                            value={dateFilter.start} 
-                            onChange={e => setDateFilter(p => ({...p, start: e.target.value}))} 
-                            className="border border-slate-200 rounded-lg px-3 py-1.5 bg-white outline-none focus:border-emerald-500 text-xs"
-                        />
-                        <span className="text-slate-400">—</span>
-                        <input 
-                            type="date" 
-                            value={dateFilter.end} 
-                            onChange={e => setDateFilter(p => ({...p, end: e.target.value}))} 
-                            className="border border-slate-200 rounded-lg px-3 py-1.5 bg-white outline-none focus:border-emerald-500 text-xs"
-                        />
-                    </div>
-                    
-                    {(dateFilter.start || dateFilter.end) && (
-                        <button 
-                            onClick={() => setDateFilter({start:'', end:''})} 
-                            className="text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ml-auto sm:ml-0 bg-red-50/50 border border-red-100"
-                        >
-                            Скинути
-                        </button>
-                    )}
-                </div>
-            </div>
-        </div>
-
-        {/* CONTENT */}
-        <div className="flex-1">
-            {loading ? <div className="text-center py-20 text-slate-400">Завантаження...</div> : 
-             filteredPayments.length === 0 ? <div className="text-center py-20 text-slate-400 bg-white rounded-2xl border border-dashed border-slate-200">Платежів не знайдено</div> : 
-             (
-                <>
-                    {/* DESKTOP TABLE */}
-                    <div className="hidden md:block bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                        <table className="w-full text-left border-collapse">
-                            <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500 font-bold">
-                                <tr>
-                                    <th className="p-4 cursor-pointer hover:bg-slate-100" onClick={() => handleSort('paid_at')}>Дата <FaSort className="inline ml-1"/></th>
-                                    <th className="p-4 cursor-pointer hover:bg-slate-100" onClick={() => handleSort('client')}>Клієнт <FaSort className="inline ml-1"/></th>
-                                    <th className="p-4 cursor-pointer hover:bg-slate-100" onClick={() => handleSort('amount')}>Сума <FaSort className="inline ml-1"/></th>
-                                    <th className="p-4">Проект</th>
-                                    <th className="p-4 text-center">Статус боргу</th>
-                                    <th className="p-4 text-center">Коментар</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 text-sm">
-                                {filteredPayments.map(payment => (
-                                    <tr key={payment.id} onClick={() => setViewingPayment(payment)} className="hover:bg-slate-50/50 transition-colors cursor-pointer">
-                                        <td className="p-4 text-slate-600 font-mono">{new Date(payment.paid_at).toLocaleDateString('uk-UA')}</td>
-                                        <td className="p-4 font-bold text-slate-800">{payment.installation?.client?.company_name || payment.installation?.client?.name}</td>
-                                        <td className="p-4 font-bold text-emerald-600">{formatCurrency(payment.amount)}</td>
-                                        <td className="p-4 text-slate-600">
-                                            <div>{payment.installation?.name}</div>
-                                            <div className="text-xs text-slate-400 font-mono">#{payment.installation?.custom_id}</div>
-                                        </td>
-                                        <td className="p-4 text-center"><PaymentStatusBadge installation={payment.installation} /></td>
-                                        <td className="p-4 text-center">
-                                            {payment.comment && <FaCommentDots className="inline text-slate-400"/>}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    {/* MOBILE CARDS */}
-                    <div className="md:hidden space-y-3">
-                        {filteredPayments.map(payment => (
-                            <PaymentCard key={payment.id} payment={payment} onClick={() => setViewingPayment(payment)} />
-                        ))}
-                    </div>
-                </>
-             )
-            }
-        </div>
-
-        {/* MOBILE FAB */}
-        <div className="sm:hidden fixed bottom-6 right-6 z-40">
-            <button onClick={() => setShowAddForm(true)} className="w-14 h-14 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform">
-                <FaPlus size={24} />
-            </button>
-        </div>
-
-        <AnimatePresence>
-            {showAddForm && <AddPaymentModal onClose={() => setShowAddForm(false)} installations={installations} onSuccess={loadData} showToast={showToast} />}
-            {viewingPayment && <PaymentDetailsModal onClose={() => setViewingPayment(null)} payment={viewingPayment} />}
-            {toast && <Toast key={toast.id} {...toast} onClose={() => setToast(null)} />}
-        </AnimatePresence>
-      </div>
-    </Layout>
-  );
 }
+
+export default function PaymentsPage() {
+    const { can, loading: authLoading, employee } = useAuth();
+    const isOffice = can('payments');   // Доступи → «Платежі й борги»
+    const [scheduleReady, setScheduleReady] = useState(false);
+    useEffect(() => { hasPaymentSchedule().then(setScheduleReady); }, []);
+    const [params, setParams] = useSearchParams();
+    const tab = scheduleReady && params.get('tab') !== 'payments' ? 'debts' : 'payments';
+
+    if (!authLoading && !isOffice) {
+        return (
+            <Layout>
+                <div className="flex flex-col items-center justify-center h-full py-24 text-center px-6">
+                    <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
+                        <FaQuestionCircle className="text-2xl text-slate-400" />
+                    </div>
+                    <h2 className="text-lg font-bold text-slate-700">Немає доступу</h2>
+                    <p className="text-sm text-slate-400 mt-1 max-w-sm">Розділ «Платежі» бачать офіс-менеджери та адміністратори.</p>
+                </div>
+            </Layout>
+        );
+    }
+
+    return (
+        <Layout>
+            <div className="p-3 sm:p-6 space-y-3 max-w-[1100px] mx-auto pb-24 lg:pb-8">
+                <div className="flex flex-wrap items-center gap-2">
+                    <h1 className="text-2xl font-bold text-slate-900 tracking-tight inline-flex items-center gap-2 mr-auto">
+                        <FaCreditCard className="text-emerald-600" size={20} /> Фінанси
+                    </h1>
+                    <UsdRateEditor compact />
+                </div>
+
+                {scheduleReady && (
+                    <nav className="flex gap-1 border-b border-slate-200">
+                        {[{ k: 'debts', l: 'Борги' }, { k: 'payments', l: 'Надходження' }].map(t => (
+                            <button key={t.k} type="button"
+                                onClick={() => setParams(t.k === 'debts' ? {} : { tab: t.k }, { replace: true })}
+                                className={`px-3 h-10 text-[14px] border-b-2 -mb-px transition-colors ${tab === t.k ? 'border-indigo-600 text-indigo-700 font-semibold' : 'border-transparent text-slate-500 hover:text-slate-800 font-medium'}`}>
+                                {t.l}
+                            </button>
+                        ))}
+                    </nav>
+                )}
+
+                {tab === 'debts' && <ReceivablesPanel />}
+                {tab === 'payments' && <Payments employeeId={employee?.id} />}
+            </div>
+        </Layout>
+    );
+}
+

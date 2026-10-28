@@ -22,3 +22,14 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Telegram-бот: секрети та кеш Python
+/tg bot/.env
+__pycache__/
+*.pyc
+
+# Сервер документів: секрети прописані прямо в config.py, а репозиторій
+# публічний. Токен Google і логи — теж не для git.
+/doc-server/config.py
+/doc-server/google_token.json
+/doc-server/logs/

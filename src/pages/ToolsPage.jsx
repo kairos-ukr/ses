@@ -61,7 +61,8 @@ export default function ToolsPage({ externalSearch = '', externalActionTrigger =
     const { employee, loading: authLoading } = useAuth();
     const toast = useToast();
     const confirm = useConfirm();
-    const isMobile = useIsMobile();
+    // Картки замість таблиці на всьому, що вужче за ноутбук (і телефон в альбомній орієнтації)
+    const isMobile = useIsMobile(1024);
 
     const [tab, setTab] = useState('inventory');
     const [tools, setTools] = useState([]);

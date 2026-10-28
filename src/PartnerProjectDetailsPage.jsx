@@ -16,6 +16,7 @@ import { useAuth } from "./AuthProvider";
 import AdditionalInfoModal from "./AdditionalInfoModal";
 import ProjectDocuments from "./ProjectDocumentsPage";
 import ProjectWorkflow from "./PWT"
+import Layout from "./Layout";
 
 const PROJECT_STATUS_LABELS = {
   planning: 'Планування',
@@ -67,8 +68,8 @@ const Toast = ({ message, type = 'success', isVisible, onClose }) => {
 export default function PartnerProjectDetailsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { role, tier } = useAuth();
-  const canEdit = role === 'admin' || role === 'super_admin' || role === 'office' || (role === 'installer' && tier === 1);
+  const { can } = useAuth();
+  const canEdit = can('partners', 'edit');   // Доступи → «Партнерство»
 
   // States
   const [activeTab, setActiveTab] = useState('general');
@@ -259,16 +260,19 @@ export default function PartnerProjectDetailsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
-      </div>
+      <Layout>
+        <div className="min-h-full bg-gray-50 flex items-center justify-center py-24">
+          <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      </Layout>
     );
   }
 
   if (!project) return null;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20 font-sans text-gray-800">
+    <Layout>
+    <div className="min-h-full bg-gray-50 pb-20 font-sans text-gray-800">
       <Toast message={toast.message} type={toast.type} isVisible={toast.isVisible} onClose={hideToast} />
 
       {/* HEADER: Змінено класи для вільної прокрутки */}
@@ -680,5 +684,6 @@ export default function PartnerProjectDetailsPage() {
         />
       )}
     </div>
+    </Layout>
   );
 }

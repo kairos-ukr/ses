@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { FaEye, FaEyeSlash, FaUser, FaLock, FaEnvelope, FaSignInAlt, FaUserPlus, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
 
-import logoImg from './logo.png'; // ІМПОРТ ЛОГОТИПУ
+import logoImg from './logo.webp'; // логотип: зменшений, у форматі WebP
 
 // Ініціалізація клієнта Supabase
 import { supabase } from './supabaseClient';
@@ -136,7 +136,7 @@ export default function AuthPage() {
         });
 
         if (profileError) throw profileError;
-        setSuccessMessage("Реєстрація успішна! Підтвердіть свою пошту та увійдіть в акаунт.");
+        setSuccessMessage("Реєстрація успішна! Підтвердіть свою пошту та увійдіть. Доступ до CRM відкриється, коли адміністратор підтвердить ваш акаунт.");
         toggleMode();
 
       } else {

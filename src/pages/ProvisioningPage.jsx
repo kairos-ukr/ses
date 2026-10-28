@@ -14,21 +14,35 @@
 // =====================================================================
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
     FaSearch, FaChevronLeft, FaExclamationTriangle, FaHardHat, FaBoxOpen,
     FaLock, FaUnlock, FaArrowUp, FaUndo, FaClipboardList, FaShoppingCart,
     FaTrash, FaEllipsisH, FaTruck, FaLayerGroup, FaBoxes, FaFileInvoiceDollar,
+    FaShieldAlt, FaBell, FaClock, FaTimes, FaChevronDown, FaExternalLinkAlt,
+    FaUserTie, FaTelegramPlane, FaCog,
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import Layout from '../Layout';
 import { useAuth } from '../AuthProvider';
 import ManualSpecBuilder from './ManualSpecBuilder';
 import EquipmentDemand from './EquipmentDemand';
+import SupplyAutomation from './SupplyAutomation';
+import { hasSupplyAlerts } from '../utils/features';
+import {
+    ALERT_KIND, alertText, dueInfo, loadSupplyAlerts,
+    loadAssignees, assignAlert, snoozeAlert, dismissAlert,
+} from '../utils/supplyAlerts';
 import {
     T, TONE, Btn, IconBtn, Chip, Card, Field, Bar, EmptyState,
     Skeleton, Modal, useToast, useConfirm, humanError, num, useAutoFocus,
 } from '../ui';
+
+/* Що саме вносити вручну: звичайну комплектацію чи специфікацію захисту з нагадування */
+const MANUAL_TASK = {
+    complectation: { taskId: 'complectation', title: 'Комплектація матеріалів' },
+    protection: { taskId: 'comp_protection', title: 'Специфікація електрозахисту' },
+};
 
 const OPS = {
     reserve: { label: 'Зарезервувати', short: 'Резерв', icon: FaLock, tone: 'accent', variant: 'accent' },
@@ -57,7 +71,9 @@ const FILTERS = [
 ];
 
 export default function ProvisioningPage() {
-    const { employee, loading: authLoading } = useAuth();
+    const { employee, loading: authLoading, can } = useAuth();
+    // Доступи → «Забезпечення об'єктів»: резерв, видача, повернення, заявки, специфікації
+    const canProv = can('provisioning', 'edit');
     const toast = useToast();
     const confirm = useConfirm();
     const autoFocus = useAutoFocus();
@@ -88,12 +104,59 @@ export default function ProvisioningPage() {
     const [op, setOp] = useState(null);
     const [reqModal, setReqModal] = useState(null);
     const [manualOpen, setManualOpen] = useState(false);
+    const [manualTask, setManualTask] = useState(MANUAL_TASK.complectation);
     const [busy, setBusy] = useState(false);
+    const navigate = useNavigate();
+
+    /* ---------------- НАГАДУВАННЯ ---------------- */
+
+    // Перераховуються щоразу, коли оновлюється дашборд: після резерву чи
+    // видачі нагадування може закритись саме. Лічильник, а не прямий
+    // виклик — щоб завантаження дашборда не залежало від нагадувань.
+    const [alertsTick, setAlertsTick] = useState(0);
+    const [alerts, setAlerts] = useState([]);
+    const [alertsOpen, setAlertsOpen] = useState(true);
+    const [autoOpen, setAutoOpen] = useState(false);   // панель «Автоматика»
+    const [alertBusy, setAlertBusy] = useState(null);
+    const [assignees, setAssignees] = useState([]);
+    // «Нагадати пізніше»: коли і кому — вибирають тут же, у рядку нагадування
+    const [snoozeDraft, setSnoozeDraft] = useState(null); // { id, days, to }
+    const assigneesLoaded = useRef(false);
+
+    useEffect(() => {
+        if (!alertsTick) return;
+        let alive = true;
+        (async () => {
+            if (!(await hasSupplyAlerts())) return;
+            const list = await loadSupplyAlerts();
+            if (!alive) return;
+            setAlerts(list);
+            // Відповідальні з'являються після міграції supply_alerts_bot_ready.
+            // Список людей тягнемо один раз — він не міняється від резерву чи видачі.
+            if (!assigneesLoaded.current && list.length && 'assigned_to' in list[0]) {
+                assigneesLoaded.current = true;
+                const people = await loadAssignees();
+                if (alive) setAssignees(people);
+            }
+        })();
+        return () => { alive = false; };
+    }, [alertsTick]);
+
+    const alertsByObject = useMemo(() => {
+        const m = new Map();
+        alerts.forEach(a => {
+            const list = m.get(a.installation_custom_id) || [];
+            list.push(a);
+            m.set(a.installation_custom_id, list);
+        });
+        return m;
+    }, [alerts]);
 
     /* ---------------- ДАШБОРД ---------------- */
 
     const loadDashboard = useCallback(async () => {
         setLoading(true);
+        setAlertsTick(t => t + 1);
         try {
             const [instRes, needsRes, whRes, incRes, reqRes] = await Promise.all([
                 supabase.from('installations')
@@ -283,6 +346,91 @@ export default function ProvisioningPage() {
         loadDashboard();
     }, [selected, openObject, loadDashboard]);
 
+    /* ---------------- ДІЇ НАД НАГАДУВАННЯМИ ---------------- */
+
+    const objectOf = useCallback(
+        (id) => installations.find(i => i.custom_id === id) || null,
+        [installations]
+    );
+
+    const openAlertObject = (a) => {
+        const inst = objectOf(a.installation_custom_id);
+        if (!inst) return navigate(`/project/${a.installation_custom_id}`);
+        openObject(inst);
+    };
+
+    const startProtectionSpec = (a) => {
+        const inst = objectOf(a.installation_custom_id);
+        if (!inst) return navigate(`/project/${a.installation_custom_id}`);
+        if (selected?.custom_id !== inst.custom_id) openObject(inst);
+        setManualTask(MANUAL_TASK.protection);
+        setManualOpen(true);
+    };
+
+    /** Доручити нагадування іншій людині — бот писатиме вже їй */
+    const reassign = async (a, employeeId) => {
+        const id = employeeId ? Number(employeeId) : null;
+        setAlertBusy(a.id);
+        try {
+            await assignAlert(a.id, id);
+            const person = assignees.find(p => p.id === id);
+            setAlerts(prev => prev.map(x => (x.id === a.id
+                ? {
+                    ...x,
+                    assigned_to: id,
+                    assigned_manually: !!id,
+                    assignee_name: person?.name || null,
+                    assignee_has_telegram: !!person?.telegram_user_id,
+                }
+                : x)));
+            toast(id ? `Доручено: ${person?.name || 'працівник'}` : 'Відповідального визначатиме система', 'info');
+            // Без ручного вибору відповідального рахує база — перечитуємо
+            if (!id) setAlertsTick(t => t + 1);
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setAlertBusy(null); }
+    };
+
+    const SNOOZE_DAYS = [{ d: 1, l: 'Завтра' }, { d: 3, l: 'Через 3 дні' }, { d: 7, l: 'Через тиждень' }];
+
+    const openSnooze = (a) => setSnoozeDraft(s => (s?.id === a.id ? null : { id: a.id, days: 3, to: a.assigned_to ?? employee?.id ?? '' }));
+
+    /** Сховати до вибраного дня; тоді бот нагадає саме вибраній людині */
+    const saveSnooze = async (a) => {
+        const d = snoozeDraft;
+        setAlertBusy(a.id);
+        try {
+            const to = d.to ? Number(d.to) : null;
+            if (String(to ?? '') !== String(a.assigned_to ?? '')) await assignAlert(a.id, to);
+            await snoozeAlert(a.id, d.days);
+            setAlerts(prev => prev.filter(x => x.id !== a.id));
+            const who = to ? (assignees.find(p => p.id === to)?.name || 'вибраній людині') : 'відповідальному за етапом';
+            const when = SNOOZE_DAYS.find(x => x.d === d.days)?.l.toLowerCase() || `через ${d.days} дн`;
+            toast(`Нагадаємо ${when} — ${who}`, 'info');
+            setSnoozeDraft(null);
+        } catch (e) { toast(humanError(e), 'error'); }
+        finally { setAlertBusy(null); }
+    };
+
+    const dismiss = async (a) => {
+        const ok = await confirm({
+            title: 'Нагадування не потрібне?',
+            tone: 'danger',
+            confirmLabel: 'Не потрібно',
+            message: `${ALERT_KIND[a.kind]?.title || 'Нагадування'} · СЕС-${a.installation_custom_id} ${a.installation_name || ''}`,
+            details: [
+                'Наприклад, клієнт купує захист сам або його роблять поза системою.',
+                'Для цього обʼєкта таке нагадування більше не відкриється.',
+            ],
+        });
+        if (!ok) return;
+        try {
+            await dismissAlert(a.id, employee?.id);
+            setAlerts(prev => prev.filter(x => x.id !== a.id));
+            toast('Нагадування закрито');
+        } catch (e) { toast(humanError(e), 'error'); }
+    };
+
     /* ---------------- ЗАЛИШКИ ---------------- */
 
     const stockMap = useMemo(() => {
@@ -381,6 +529,7 @@ export default function ProvisioningPage() {
     /* ---------------- ОПЕРАЦІЯ ---------------- */
 
     const openOp = (mode, n) => {
+        if (!canProv) return;
         const nomId = n.nomenclature_id;
         const left = parseFloat(n.outstanding_need) || 0;
         let candidates;
@@ -558,6 +707,7 @@ export default function ProvisioningPage() {
     };
 
     const deleteRequest = async (req) => {
+        if (!can('provisioning', 'delete')) { toast('Видаляти заявки вам не відкрито', 'error'); return; }
         const ok = await confirm({
             title: 'Видалити заявку?', tone: 'danger', confirmLabel: 'Видалити',
             message: nomOf(req.nomenclature_id)?.fullName || `Номенклатура #${req.nomenclature_id}`,
@@ -676,8 +826,9 @@ export default function ProvisioningPage() {
 
                 <div className="text-[11px] text-slate-500 mt-1.5 leading-snug">{s.hint}</div>
 
-                {/* Усі дії видно завжди. Недоступні — сірі, з причиною в підказці. */}
-                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                {/* Усі дії видно завжди. Недоступні — сірі, з причиною в підказці.
+                    Без права змінювати забезпечення — дій немає зовсім */}
+                {canProv && <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                     {['reserve', 'issue'].map(mode => {
                         const why = blockedReason(mode, n);
                         return (
@@ -705,10 +856,105 @@ export default function ProvisioningPage() {
 
                     <IconBtn variant="ghost" icon={FaEllipsisH} label="Зняти резерв · повернути · подробиці"
                         className="ml-auto" onClick={() => setSheet({ item: n })} />
-                </div>
+                </div>}
             </div>
         );
     };
+
+    /** inObject — усередині картки об'єкта: назву не повторюємо, дія — на місці */
+    const renderAlert = (a, inObject = false) => {
+        const kind = ALERT_KIND[a.kind] || { title: a.kind };
+        const due = dueInfo(a.due_date);
+        const busyHere = alertBusy === a.id;
+        return (
+            <div key={a.id} className="px-3 py-2.5 flex items-start gap-2.5 flex-wrap sm:flex-nowrap">
+                <FaShieldAlt size={13}
+                    className={`flex-shrink-0 mt-0.5 ${a.is_overdue ? 'text-rose-500' : 'text-amber-500'}`} />
+                {/* На телефоні текст — на всю ширину, кнопки — окремим рядком під ним */}
+                <div className="min-w-0 flex-1 basis-[calc(100%-28px)] sm:basis-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[12.5px] font-bold text-slate-900">{kind.title}</span>
+                        {due && <Chip tone={due.tone} icon={FaClock}>{due.label}</Chip>}
+                    </div>
+                    {!inObject && (
+                        <div className="text-[12px] text-slate-700 mt-0.5 sm:truncate">
+                            <span className={T.mono}>СЕС-{a.installation_custom_id}</span>{' '}
+                            <b className="font-semibold">{a.installation_name}</b>
+                            <span className="text-slate-400"> · {a.company_name || a.client_name || 'клієнт не вказаний'}</span>
+                        </div>
+                    )}
+                    <div className="text-[11px] text-slate-500 mt-0.5 leading-snug">{alertText(a)}</div>
+
+                    {/* Кому доручено — саме цій людині писатиме Telegram-бот */}
+                    {'assigned_to' in a && (
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                            <FaUserTie className="text-slate-400 flex-shrink-0" size={10} />
+                            <select
+                                className="h-7 max-w-[220px] px-2 bg-white border border-slate-200 rounded-md text-[11px] font-semibold text-slate-700 outline-none focus:border-indigo-400 cursor-pointer disabled:opacity-50"
+                                value={a.assigned_to ?? ''}
+                                disabled={busyHere}
+                                title="Кому доручено нагадування"
+                                onChange={e => reassign(a, e.target.value)}
+                            >
+                                <option value="">Автоматично — за етапом чи обʼєктом</option>
+                                {a.assigned_to && !assignees.some(p => p.id === a.assigned_to) && (
+                                    <option value={a.assigned_to}>{a.assignee_name || `Працівник #${a.assigned_to}`}</option>
+                                )}
+                                {assignees.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                            {!a.assigned_to && <Chip tone="danger">не призначено</Chip>}
+                            {a.assigned_to && a.assigned_manually && <Chip tone="neutral">вручну</Chip>}
+                            {a.assigned_to && (a.assignee_has_telegram
+                                ? <Chip tone="info" icon={FaTelegramPlane}>бот напише</Chip>
+                                : <Chip tone="warn" icon={FaTelegramPlane}>без Telegram</Chip>)}
+                        </div>
+                    )}
+                </div>
+                <div className="flex items-center justify-end gap-1 flex-shrink-0 w-full sm:w-auto ml-auto">
+                    {a.kind === 'protection_spec' && (
+                        <Btn size="sm" variant="accent" icon={FaClipboardList} onClick={() => startProtectionSpec(a)}>
+                            Скласти
+                        </Btn>
+                    )}
+                    {a.kind === 'protection_supply' && !inObject && (
+                        <Btn size="sm" variant="outline" onClick={() => openAlertObject(a)}>Відкрити</Btn>
+                    )}
+                    <IconBtn variant="ghost" icon={FaExternalLinkAlt} label="Картка обʼєкта"
+                        onClick={() => navigate(`/project/${a.installation_custom_id}`)} />
+                    <IconBtn variant={snoozeDraft?.id === a.id ? 'soft' : 'ghost'} icon={FaClock} label="Нагадати пізніше" onClick={() => openSnooze(a)} />
+                    <IconBtn variant="ghost" icon={FaTimes} label="Не потрібно" onClick={() => dismiss(a)} />
+                </div>
+
+                {snoozeDraft?.id === a.id && (
+                    <div className="basis-full sm:ml-6 mt-1 p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex flex-wrap items-center gap-2">
+                        <span className="text-[12px] font-semibold text-slate-500">Нагадати</span>
+                        {SNOOZE_DAYS.map(x => (
+                            <button key={x.d} type="button" onClick={() => setSnoozeDraft(s => ({ ...s, days: x.d }))}
+                                className={`h-8 px-2.5 rounded-lg border text-[12px] font-semibold ${snoozeDraft.days === x.d ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'}`}>
+                                {x.l}
+                            </button>
+                        ))}
+                        <span className="text-[12px] font-semibold text-slate-500 ml-1">кому</span>
+                        <select
+                            className="h-8 max-w-[240px] px-2 bg-white border border-slate-200 rounded-lg text-[12px] font-semibold text-slate-700 outline-none focus:border-indigo-400"
+                            value={snoozeDraft.to ?? ''}
+                            onChange={e => setSnoozeDraft(s => ({ ...s, to: e.target.value }))}
+                        >
+                            <option value="">Відповідальному за етапом</option>
+                            {employee?.id && <option value={employee.id}>Мені ({employee.name})</option>}
+                            {assignees.filter(p => p.id !== employee?.id).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                        <span className="flex gap-1.5 ml-auto">
+                            <Btn size="sm" variant="ghost" onClick={() => setSnoozeDraft(null)}>Скасувати</Btn>
+                            <Btn size="sm" variant="accent" icon={FaClock} disabled={busyHere} onClick={() => saveSnooze(a)}>Відкласти</Btn>
+                        </span>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const overdueCount = alerts.filter(a => a.is_overdue).length;
 
     /* ---------------- РЕНДЕР ---------------- */
 
@@ -718,14 +964,44 @@ export default function ProvisioningPage() {
 
                 {!selected ? (
                     <>
-                        <div>
-                            <h1 className="text-[19px] font-bold text-slate-900 flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h1 className="text-[19px] font-bold text-slate-900 flex items-center gap-2 mr-auto">
                                 <FaBoxOpen className="text-indigo-600" size={16} /> Забезпечення об'єктів
                             </h1>
-                            <p className="text-[12.5px] text-slate-500 mt-0.5">
-                                Комплектація, резерв, видача та повернення матеріалів
-                            </p>
+                            <Btn size="sm" variant={autoOpen ? 'primary' : 'outline'} icon={FaCog} onClick={() => setAutoOpen(v => !v)}>
+                                Автоматика
+                            </Btn>
                         </div>
+
+                        {/* Що система робить сама — лише якщо так налаштували вручну */}
+                        {autoOpen && (
+                            <Card pad="p-0" className="overflow-hidden">
+                                <SupplyAutomation bare onChanged={() => setAlertsTick(t => t + 1)} />
+                            </Card>
+                        )}
+
+                        {/* Що об'єкти чекають від забезпечення — раніше, ніж про це хтось згадає */}
+                        {alerts.length > 0 && (
+                            <Card pad="p-0" className="border-amber-200 overflow-hidden">
+                                <button onClick={() => setAlertsOpen(v => !v)}
+                                    className="w-full px-3 py-2 bg-amber-50 flex items-center gap-2 text-left">
+                                    <FaBell className="text-amber-500 flex-shrink-0" size={12} />
+                                    <span className="text-[12.5px] font-bold text-amber-900">Нагадування</span>
+                                    <Chip tone="warn">{alerts.length}</Chip>
+                                    {overdueCount > 0 && <Chip tone="danger">{overdueCount} прострочено</Chip>}
+                                    <span className="text-[11px] text-amber-700/70 hidden md:inline ml-1">
+                                        що обʼєкти чекають від забезпечення
+                                    </span>
+                                    <FaChevronDown size={11}
+                                        className={`ml-auto text-amber-400 transition-transform ${alertsOpen ? 'rotate-180' : ''}`} />
+                                </button>
+                                {alertsOpen && (
+                                    <div className="divide-y divide-slate-100 border-t border-amber-100 sm:max-h-80 sm:overflow-y-auto">
+                                        {alerts.map(a => renderAlert(a))}
+                                    </div>
+                                )}
+                            </Card>
+                        )}
 
                         {/* Два погляди на те саме: від об'єкта і від позиції */}
                         <div className="flex items-center gap-1.5">
@@ -798,6 +1074,12 @@ export default function ProvisioningPage() {
                                                         {inst.waiting > 0 && <Chip tone="info" icon={FaTruck}>{inst.waiting} в дорозі</Chip>}
                                                         {inst.deficit > 0 && <Chip tone="danger">{inst.deficit} бракує</Chip>}
                                                         {inst.requests > 0 && <Chip tone="warn" icon={FaShoppingCart}>{inst.requests} заявки</Chip>}
+                                                        {alertsByObject.has(inst.custom_id) && (
+                                                            <Chip tone={alertsByObject.get(inst.custom_id).some(a => a.is_overdue) ? 'danger' : 'warn'}
+                                                                icon={FaShieldAlt}>
+                                                                захист
+                                                            </Chip>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <div className="text-right w-20 flex-shrink-0">
@@ -831,17 +1113,27 @@ export default function ProvisioningPage() {
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <Btn variant="outline" icon={FaClipboardList} onClick={() => setManualOpen(true)}>
-                                        <span className="hidden sm:inline">Комплектація вручну</span>
-                                        <span className="sm:hidden">Вручну</span>
-                                    </Btn>
+                                    {canProv && (
+                                        <Btn variant="outline" icon={FaClipboardList} onClick={() => setManualOpen(true)}>
+                                            <span className="hidden sm:inline">Комплектація вручну</span>
+                                            <span className="sm:hidden">Вручну</span>
+                                        </Btn>
+                                    )}
                                     <div className="text-right">
                                         <div className="text-[17px] font-black tabular-nums text-slate-900">{selected.readiness}%</div>
-                                        <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">готовність</div>
+                                        <div className="text-[11px] font-semibold text-slate-400">готовність</div>
                                     </div>
                                 </div>
                             </div>
                         </Card>
+
+                        {alertsByObject.has(selected.custom_id) && (
+                            <Card pad="p-0" className="border-amber-200 overflow-hidden">
+                                <div className="divide-y divide-slate-100">
+                                    {alertsByObject.get(selected.custom_id).map(a => renderAlert(a, true))}
+                                </div>
+                            </Card>
+                        )}
 
                         {detailLoading ? <Card><Skeleton rows={8} /></Card> : (
                             <div className="space-y-2.5">
@@ -852,9 +1144,11 @@ export default function ProvisioningPage() {
                                             title="Специфікація порожня або не затверджена"
                                             hint="Оцифруйте PDF на етапі проекту або внесіть комплектацію вручну."
                                         >
-                                            <Btn variant="accent" icon={FaClipboardList} onClick={() => setManualOpen(true)}>
-                                                Внести вручну
-                                            </Btn>
+                                            {canProv && (
+                                                <Btn variant="accent" icon={FaClipboardList} onClick={() => setManualOpen(true)}>
+                                                    Внести вручну
+                                                </Btn>
+                                            )}
                                         </EmptyState>
                                     </Card>
                                 ) : (
@@ -934,9 +1228,12 @@ export default function ProvisioningPage() {
                                                             <div className="text-[12.5px] font-semibold text-slate-900 truncate">
                                                                 {nomOf(r.nomenclature_id)?.fullName || `Номенклатура #${r.nomenclature_id}`}
                                                             </div>
-                                                            <div className="text-[10.5px] text-slate-400">
-                                                                {new Date(r.created_at).toLocaleDateString('uk-UA')}
-                                                                {r.note && <span className="italic"> · {r.note}</span>}
+                                                            <div className="text-[10.5px] text-slate-400 flex items-center gap-1.5 flex-wrap">
+                                                                <span>{new Date(r.created_at).toLocaleDateString('uk-UA')}</span>
+                                                                {r.source === 'auto_protection' && (
+                                                                    <Chip tone="info" icon={FaShieldAlt}>авто · захист</Chip>
+                                                                )}
+                                                                {r.note && r.source !== 'auto_protection' && <span className="italic">{r.note}</span>}
                                                             </div>
                                                         </div>
                                                         <span className="text-[13px] font-black tabular-nums text-amber-700">
@@ -1040,10 +1337,6 @@ export default function ProvisioningPage() {
                                     );
                                 })}
                             </div>
-
-                            <p className="text-[11px] text-slate-400 leading-relaxed">
-                                Сірі кнопки зараз недоступні — наведіть, щоб побачити причину.
-                            </p>
                             )}
                         </div>
                     );
@@ -1129,11 +1422,8 @@ export default function ProvisioningPage() {
             >
                 {reqModal && (
                     <div className="space-y-3">
-                        <p className="text-[12px] text-slate-500 leading-relaxed">
-                            Заявка потрапить у розділ «Закупівлі» — закупівельник побачить,
-                            що і під який об'єкт треба замовити.
-                        </p>
-                        <Field label={`Кількість, ${unitOf(reqModal.item.nomenclature_id)}`} required>
+                        <Field label={`Кількість, ${unitOf(reqModal.item.nomenclature_id)}`} required
+                            hint="Заявка потрапить у «Закупівлі» — закупівельник побачить, що і під який об'єкт треба замовити.">
                             <input type="number" min="0" step="any" inputMode="decimal" autoFocus={autoFocus}
                                 className={`${T.input} text-lg font-black tabular-nums`}
                                 value={reqModal.quantity}
@@ -1150,12 +1440,13 @@ export default function ProvisioningPage() {
 
             {manualOpen && selected && (
                 <ManualSpecBuilder
+                    key={manualTask.taskId}
                     isOpen={manualOpen}
-                    onClose={() => setManualOpen(false)}
+                    onClose={() => { setManualOpen(false); setManualTask(MANUAL_TASK.complectation); }}
                     onSuccess={refresh}
                     installationId={selected.custom_id}
-                    taskId="complectation"
-                    title="Комплектація матеріалів"
+                    taskId={manualTask.taskId}
+                    title={manualTask.title}
                     showToast={toast}
                 />
             )}

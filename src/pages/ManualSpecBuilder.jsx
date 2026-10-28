@@ -102,7 +102,10 @@ export default function ManualSpecBuilder({
 
             const list = specs || [];
             const exact = taskId ? list.find(s => s.notes === taskId) : null;
-            const spec = exact || list[0] || null;
+            // Електрозахист — окрема специфікація, а не частина матеріалів.
+            // Якщо її ще немає, починаємо з порожньої: інакше збереження
+            // перетворило б захист на нову версію комплектації.
+            const spec = exact || (taskId === 'comp_protection' ? null : list[0]) || null;
 
             setBase(spec ? {
                 id: spec.id,
@@ -608,6 +611,7 @@ export default function ManualSpecBuilder({
                 isOpen={!!quickAdd}
                 onClose={() => setQuickAdd(null)}
                 onSuccess={onNomCreated}
+                onPickExisting={onNomCreated}
                 initialName={quickAdd?.name}
             />
         </>

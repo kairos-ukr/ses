@@ -35,6 +35,58 @@ export const normalizeName = (str) => {
 export const tokenizeName = (str) =>
     normalizeName(str).split(' ').filter(t => t.length >= 2 || /^\d+$/.test(t));
 
+// ============================================================================
+// Дублікати номенклатури
+// ============================================================================
+
+/**
+ * Відбиток назви для пошуку дублікатів.
+ *  key    — нормалізована назва без пробілів. Дзеркало nomenclature_name_key()
+ *           у БД: однаковий key = база не дасть створити другу таку позицію.
+ *  tokens — слова й числа окремо: «ПВ3 6мм» → пв · 3 · 6 · мм
+ *  nums   — лише числа; вони мусять збігтися всі
+ */
+export const nameFingerprint = (str) => {
+    const norm = normalizeName(str);
+    const tokens = new Set(norm
+        .replace(/(\d)([^\d\s])/g, '$1 $2')
+        .replace(/([^\d\s])(\d)/g, '$1 $2')
+        .split(' ')
+        .filter(Boolean));
+    return {
+        key: norm.replace(/ /g, ''),
+        tokens,
+        nums: [...tokens].filter(t => /\d/.test(t)),
+    };
+};
+
+/** Ключ унікальності позиції: назва + характеристики */
+export const nomenclatureKey = (name, tech) => nameFingerprint(`${name || ''} ${tech || ''}`).key;
+
+/**
+ * Наскільки два відбитки описують ту саму позицію, 0…1.
+ * Числа (переріз, потужність, номінал) мусять збігтися всі: «кабель 4» і
+ * «кабель 6» — різні позиції, хоч слова ті самі. Довгі слова рахуються
+ * збігом і за початком: «автомат» ~ «автоматичний».
+ */
+export const fingerprintSimilarity = (a, b) => {
+    if (!a.key || !b.key) return 0;
+    if (a.key === b.key) return 1;
+    if (a.nums.length !== b.nums.length || a.nums.some(n => !b.tokens.has(n))) return 0;
+
+    let common = 0;
+    a.tokens.forEach(t => {
+        if (b.tokens.has(t)) { common++; return; }
+        if (t.length < 4 || /\d/.test(t)) return;
+        for (const u of b.tokens) {
+            if (u.length >= 4 && !/\d/.test(u) && (u.startsWith(t) || t.startsWith(u))) { common++; return; }
+        }
+    });
+    return common / (a.tokens.size + b.tokens.size - common);
+};
+
+export const nameSimilarity = (a, b) => fingerprintSimilarity(nameFingerprint(a), nameFingerprint(b));
+
 /**
  * Пошук найкращого збігу назви з номенклатурою.
  * @param {string} rawName — сира назва з документа

@@ -6,6 +6,13 @@
       "runtimeExecutable": "py",
       "runtimeArgs": ["-m", "http.server", "4123"],
       "port": 4123
+    },
+    {
+      "name": "crm",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "env": { "BROWSER": "none", "PORT": "3000" },
+      "port": 3000
     }
   ]
 }

@@ -4,6 +4,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import * as Fa from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
+import { loadEquipmentCatalog, equipmentLabel } from "./utils/equipmentCatalog";
+
+// Моделі тепер — позиції складської номенклатури. Під старі назви категорій
+// цієї сторінки (іконки, S/N, логін для інвертора) зводимо групи каталогу.
+const KIND_TO_CATEGORY = { inverter: 'inverter', battery: 'battery', solar_panel: 'solar_panel', logger: 'logger', bms: 'other' };
 
 // --- Helpers --- //
 const getCategoryProps = (category) => ({
@@ -258,14 +263,10 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, children }) => {
 // --- Main Page --- //
 export default function EquipmentPage() {
     const navigate = useNavigate();
-    const [activeTab, setActiveTab] = useState('installations');
     const [modal, setModal] = useState({ type: null, data: null });
     const [loading, setLoading] = useState(true);
     const [notification, setNotification] = useState({ message: null, type: 'success' });
     const [confirmDialog, setConfirmDialog] = useState({ isOpen: false });
-    
-    // Filters for Catalog
-    const [catalogCategoryFilter, setCatalogCategoryFilter] = useState('all');
 
     const [equipment, setEquipment] = useState([]);
     const [installedEquipment, setInstalledEquipment] = useState([]);
@@ -281,21 +282,33 @@ export default function EquipmentPage() {
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
-            const [eqRes, instRes, instEqRes, empRes] = await Promise.all([
-                supabase.from('equipment').select('*').order('name'),
+            const [catalog, instRes, instEqRes, empRes] = await Promise.all([
+                loadEquipmentCatalog(),
                 supabase.from('installations').select('*, clients!inner(name)').order('created_at', { ascending: false }),
-                supabase.from('installed_equipment').select('*, equipment:equipment_id(*), employees:employee_custom_id(name, phone)').order('created_at', { ascending: false }),
+                supabase.from('installed_equipment').select('*, nom:nomenclature_id(id, name, brand, category_id), employees:employee_custom_id(name, phone)').order('created_at', { ascending: false }),
                 supabase.from('employees').select('custom_id, name, phone').order('name')
             ]);
-            
-            if (eqRes.error) throw eqRes.error;
+
             if (instRes.error) throw instRes.error;
             if (instEqRes.error) throw instEqRes.error;
             if (empRes.error) throw empRes.error;
 
-            setEquipment(eqRes.data);
+            // Каталог у звичному для сторінки вигляді: { id, name, category, ... }
+            const models = catalog.map(n => ({
+                id: n.id, name: n.label, category: KIND_TO_CATEGORY[n.kind] || 'other',
+                power_kw: n.power_kw, manufacturer: n.brand, category_id: n.category_id,
+            }));
+            const kindByCategory = new Map(models.map(m => [m.category_id, m.category]));
+
+            setEquipment(models);
             setInstallations(instRes.data);
-            setInstalledEquipment(instEqRes.data);
+            // item.equipment — як і раніше: назва й категорія моделі
+            setInstalledEquipment((instEqRes.data || []).map(row => ({
+                ...row,
+                equipment: row.nom
+                    ? { name: equipmentLabel(row.nom), category: kindByCategory.get(row.nom.category_id) || 'other' }
+                    : null,
+            })));
             setEmployees(empRes.data);
         } catch (e) {
             showNotification(e.message, 'error');
@@ -323,14 +336,6 @@ export default function EquipmentPage() {
         );
     }, [installationsWithEquipment, installationSearch]);
     
-    const filteredCatalog = useMemo(() => {
-        let res = equipment;
-        if (catalogCategoryFilter !== 'all') {
-            res = res.filter(e => e.category === catalogCategoryFilter);
-        }
-        return res;
-    }, [equipment, catalogCategoryFilter]);
-
     const paginatedInstallations = useMemo(() => {
         const start = (currentPage - 1) * ITEMS_PER_PAGE;
         return filteredInstallations.slice(start, start + ITEMS_PER_PAGE);
@@ -344,21 +349,10 @@ export default function EquipmentPage() {
         setLoading(false);
     };
 
-    const handleTypeSubmit = (data) => {
-        const payload = { ...data, power_kw: data.power_kw ? parseFloat(data.power_kw) : null };
-        const req = modal.data?.id ? supabase.from('equipment').update(payload).eq('id', modal.data.id) : supabase.from('equipment').insert([payload]);
-        handleCrud(req, modal.data?.id ? 'Оновлено' : 'Створено');
-    };
-
-    const deleteType = (id) => {
-        setConfirmDialog({
-            isOpen: true, title: "Видалити тип?", message: "Це вплине на всі записи.",
-            onConfirm: () => { setConfirmDialog({ isOpen: false }); handleCrud(supabase.from('equipment').delete().eq('id', id), 'Видалено'); }
-        });
-    };
-
+    // Модель — позиція номенклатури (equipment_id старого довідника більше не заповнюємо)
     const handleAssign = (data) => {
-        const payload = { ...data, equipment_id: parseInt(data.equipment_id), quantity: parseInt(data.quantity) };
+        const { equipment_id, ...rest } = data;
+        const payload = { ...rest, nomenclature_id: Number(equipment_id), quantity: parseInt(data.quantity) };
         handleCrud(supabase.from('installed_equipment').insert([payload]), 'Додано на об\'єкт');
     };
 
@@ -396,38 +390,22 @@ export default function EquipmentPage() {
                             <p className="text-slate-500 text-sm mt-1">Облік та розподіл по об'єктах</p>
                         </div>
                         
-                        {/* TABS */}
-                        <div className="flex bg-slate-100 p-1 rounded-xl w-full sm:w-auto">
-                            <button onClick={() => setActiveTab('installations')} className={`flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'installations' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Об'єкти</button>
-                            <button onClick={() => setActiveTab('catalog')} className={`flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'catalog' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Довідник</button>
-                        </div>
+                        {/* Моделі тепер ведуться в одному місці — у прайсі на базі складської номенклатури */}
+                        <button onClick={() => navigate('/base_equip')} className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold shadow-sm hover:bg-slate-50 transition-colors text-sm">
+                            <Fa.FaTags /> <span>Прайс і моделі</span>
+                        </button>
                     </div>
 
-                    {/* SEARCH & FILTERS */}
-                    {activeTab === 'installations' && (
-                        <div className="relative">
-                            <Fa.FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
-                            <input type="text" placeholder="Пошук об'єкта..." value={installationSearch} onChange={e => {setInstallationSearch(e.target.value); setCurrentPage(1);}} className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-base sm:text-sm shadow-sm"/>
-                        </div>
-                    )}
-                    {activeTab === 'catalog' && (
-                        <div className="flex flex-col sm:flex-row gap-3">
-                            <div className="flex bg-white border border-slate-200 p-1 rounded-xl overflow-x-auto no-scrollbar flex-1">
-                                {[{id: 'all', l: 'Всі'}, {id: 'inverter', l: 'Інвертори'}, {id: 'battery', l: 'АКБ'}, {id: 'solar_panel', l: 'Панелі'}, {id: 'logger', l: 'Логери'}].map(cat => (
-                                    <button key={cat.id} onClick={() => setCatalogCategoryFilter(cat.id)} className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${catalogCategoryFilter === cat.id ? 'bg-slate-800 text-white shadow' : 'text-slate-600 hover:bg-slate-50'}`}>{cat.l}</button>
-                                ))}
-                            </div>
-                            <button onClick={() => setModal({type: 'addType', data: null})} className="w-full sm:w-auto self-end flex items-center justify-center gap-2 py-2.5 px-5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all text-sm">
-                                <Fa.FaPlus /> <span>Додати</span>
-                            </button>
-                        </div>
-                    )}
+                    {/* SEARCH */}
+                    <div className="relative">
+                        <Fa.FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
+                        <input type="text" placeholder="Пошук об'єкта..." value={installationSearch} onChange={e => {setInstallationSearch(e.target.value); setCurrentPage(1);}} className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-base sm:text-sm shadow-sm"/>
+                    </div>
                 </div>
 
                 {/* CONTENT */}
                 <div className="flex-1">
                     <AnimatePresence mode="wait">
-                        {activeTab === 'installations' ? (
                             <motion.div key="installations" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
                                 {loading ? <div className="col-span-full text-center py-20 text-slate-400">Завантаження...</div> : 
                                 paginatedInstallations.length === 0 ? <div className="col-span-full text-center py-20 text-slate-400 bg-white rounded-2xl border border-dashed border-slate-200">Нічого не знайдено</div> :
@@ -435,7 +413,7 @@ export default function EquipmentPage() {
                                     <div key={inst.custom_id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col">
                                         <div className="flex justify-between items-start mb-4">
                                             <div>
-                                                <h3 className="font-bold text-lg text-slate-800 line-clamp-1">{inst.name || 'Без назви'}</h3>
+                                                <h3 className="font-bold text-base sm:text-lg text-slate-800 leading-snug break-words">{inst.name || 'Без назви'}</h3>
                                                 <p className="text-xs text-slate-500 font-medium">{inst.clients?.name}</p>
                                             </div>
                                             <span className="text-xs font-mono font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded">#{inst.custom_id}</span>
@@ -448,7 +426,7 @@ export default function EquipmentPage() {
                                                 let serialDisplay = 'S/N ---';
                                                 try {
                                                     const parsed = JSON.parse(item.serial_number);
-                                                    if (Array.isArray(parsed) && parsed.length > 0) serialDisplay = `${parsed[0]}...`;
+                                                    if (Array.isArray(parsed)) { if (parsed.length > 0) serialDisplay = `${parsed[0]}...`; }
                                                     else if (item.serial_number) serialDisplay = item.serial_number;
                                                 } catch(e) {
                                                     if(item.serial_number) serialDisplay = item.serial_number.substring(0,10) + '...';
@@ -480,78 +458,12 @@ export default function EquipmentPage() {
                                     </div>
                                 ))}
                             </motion.div>
-                        ) : (
-                            <motion.div key="catalog" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                                {/* DESKTOP TABLE */}
-                                <div className="hidden md:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-left">
-                                            <thead className="bg-slate-50 border-b border-slate-200">
-                                                <tr>
-                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase">Назва</th>
-                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase">Категорія</th>
-                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase">Потужність</th>
-                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase">Виробник</th>
-                                                    <th className="p-4 text-xs font-bold text-slate-500 uppercase text-right">Дії</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-slate-100">
-                                                {filteredCatalog.map((type) => {
-                                                    const { name: catName, color } = getCategoryProps(type.category);
-                                                    return (
-                                                        <tr key={type.id} className="hover:bg-slate-50/50 transition-colors">
-                                                            <td className="p-4 text-sm font-bold text-slate-700">{type.name}</td>
-                                                            <td className="p-4"><span className={`px-2.5 py-1 rounded-full text-xs font-bold ${color}`}>{catName}</span></td>
-                                                            <td className="p-4 text-sm text-slate-600">{type.power_kw ? `${type.power_kw} кВт` : '—'}</td>
-                                                            <td className="p-4 text-sm text-slate-600">{type.manufacturer || '—'}</td>
-                                                            <td className="p-4 text-right">
-                                                                <button onClick={() => setModal({type: 'editType', data: type})} className="p-2 text-slate-400 hover:text-indigo-600"><Fa.FaEdit/></button>
-                                                                <button onClick={() => deleteType(type.id)} className="p-2 text-slate-400 hover:text-red-600"><Fa.FaTrash/></button>
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-
-                                {/* MOBILE CARDS */}
-                                <div className="md:hidden space-y-3">
-                                    {filteredCatalog.map((type) => {
-                                        const { name: catName, color, icon: Icon } = getCategoryProps(type.category);
-                                        return (
-                                            <div key={type.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-3">
-                                                <div className="flex justify-between items-start">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className={`p-2.5 rounded-lg ${color}`}><Icon /></div>
-                                                        <div>
-                                                            <h4 className="font-bold text-slate-800 text-sm">{type.name}</h4>
-                                                            <span className="text-xs text-slate-500 font-medium">{catName}</span>
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex gap-1">
-                                                        <button onClick={() => setModal({type: 'editType', data: type})} className="p-2 text-slate-400 hover:text-indigo-600 bg-slate-50 rounded-lg"><Fa.FaEdit/></button>
-                                                        <button onClick={() => deleteType(type.id)} className="p-2 text-slate-400 hover:text-red-600 bg-slate-50 rounded-lg"><Fa.FaTrash/></button>
-                                                    </div>
-                                                </div>
-                                                <div className="flex justify-between text-xs pt-2 border-t border-slate-100 text-slate-500">
-                                                    <span>{type.manufacturer || 'Виробник не вказаний'}</span>
-                                                    <span>{type.power_kw ? `${type.power_kw} кВт` : ''}</span>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </motion.div>
-                        )}
                     </AnimatePresence>
                 </div>
 
                 {/* MODALS */}
                 <AnimatePresence>
                     {modal.type === 'assign' && <AssignEquipmentModal closeModal={() => setModal({ type: null })} installation={modal.data} onAssign={handleAssign} equipmentCatalog={equipment} showNotification={showNotification} />}
-                    {(modal.type === 'addType' || modal.type === 'editType') && <TypeFormModal closeModal={() => setModal({ type: null })} onSubmit={handleTypeSubmit} initialData={modal.data} loading={loading} />}
                     {modal.type === 'viewDetails' && <EquipmentDetailsModal closeModal={() => setModal({ type: null })} item={modal.data} />}
                     {modal.type === 'editDetails' && <EditDetailsModal closeModal={() => setModal({ type: null })} onSubmit={handleUpdateDetails} initialData={modal.data} employees={employees} loading={loading} />}
                 </AnimatePresence>
@@ -604,36 +516,11 @@ function AssignEquipmentModal({ closeModal, installation, onAssign, equipmentCat
                     <div className="grid grid-cols-2 gap-4">
                         <InputField label="Кількість" type="number" min="1" icon={<Fa.FaHashtag/>} value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} />
                     </div>
-                    <p className="text-xs text-slate-400 italic">Деталі (S/N, логіни) додаються через редагування.</p>
+                    <button type="button" onClick={() => { closeModal(); window.location.hash = '#/base_equip'; }} className="text-xs font-semibold text-indigo-600 hover:underline">Немає потрібної моделі? Додати в прайс</button>
                 </div>
                 <div className="flex-none p-6 flex justify-end gap-3 bg-slate-50 border-t border-slate-100 pb-safe">
                     <button type="button" onClick={closeModal} className="px-4 py-2 bg-white border border-slate-200 rounded-lg font-bold text-slate-600">Скасувати</button>
                     <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold shadow-lg">Додати</button>
-                </div>
-            </form>
-        </Modal>
-    );
-}
-
-function TypeFormModal({ closeModal, onSubmit, initialData, loading }) {
-    const [formData, setFormData] = useState(initialData || { name: '', category: '', power_kw: '', manufacturer: '' });
-    return (
-        <Modal closeModal={closeModal} size="md">
-            <form onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }} className="flex flex-col h-full overflow-hidden">
-                <div className="flex-none p-6 border-b border-slate-100"><h3 className="text-xl font-bold text-slate-800">{initialData ? 'Редагувати тип' : 'Новий тип'}</h3></div>
-                <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                    <InputField label="Назва" icon={<Fa.FaTag/>} value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
-                    <SelectField label="Категорія" icon={<Fa.FaFilter/>} value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
-                        <option value="">Оберіть...</option><option value="solar_panel">Панель</option><option value="inverter">Інвертор</option><option value="battery">АКБ</option><option value="logger">Логер</option>
-                    </SelectField>
-                    <div className="grid grid-cols-2 gap-4">
-                        <InputField label="Потужність (кВт)" type="number" step="0.01" icon={<Fa.FaBolt/>} value={formData.power_kw} onChange={e => setFormData({...formData, power_kw: e.target.value})} />
-                        <InputField label="Виробник" icon={<Fa.FaBuilding/>} value={formData.manufacturer} onChange={e => setFormData({...formData, manufacturer: e.target.value})} />
-                    </div>
-                </div>
-                <div className="flex-none p-6 flex justify-end gap-3 bg-slate-50 border-t border-slate-100 pb-safe">
-                    <button type="button" onClick={closeModal} className="px-4 py-2 bg-white border border-slate-200 rounded-lg font-bold text-slate-600">Скасувати</button>
-                    <button type="submit" disabled={loading} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold shadow-lg">Зберегти</button>
                 </div>
             </form>
         </Modal>

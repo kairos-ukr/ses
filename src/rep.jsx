@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
-import { FileText, Download, Eye, Loader2, AlertCircle, Settings, Image, Camera } from 'lucide-react';
+// Іконки — той самий набір, що й у всій програмі (react-icons/fa)
+import { FaFileAlt as FileText, FaDownload as Download, FaEye as Eye, FaSpinner as Loader2, FaExclamationCircle as AlertCircle, FaCog as Settings } from 'react-icons/fa';
+import Layout from './Layout';
+import { getObjectStatus, getPaymentStatus, formatMoney, DEFAULT_CURRENCY, canSeeMoney } from './domain/objects';
+import { useAuth } from './AuthProvider';
+import { equipmentLabel } from './utils/equipmentCatalog';
 
 // --- Helper Functions for Localization ---
 
@@ -12,26 +17,10 @@ const getPaymentMethodName = (method) => {
   return map[method] || method || 'Не вказано';
 };
 
-const getInstallationStatusName = (status) => {
-  const map = {
-    'planned': 'Заплановано',
-    'in_progress': 'В роботі',
-    'completed': 'Завершено',
-    'paused': 'Призупинено',
-    'cancelled': 'Скасовано',
-  };
-  return map[status] || status || 'Не вказано';
-};
+// Статуси — зі спільного списку (src/domain/objects.js)
+const getInstallationStatusName = (status) => (status ? getObjectStatus(status).label : 'Не вказано');
 
-const getPaymentStatusName = (status) => {
-  const map = {
-    'paid': 'Сплачено',
-    'partially_paid': 'Частково сплачено',
-    'unpaid': 'Не сплачено',
-    'overpaid': 'Переплата',
-  };
-  return map[status] || status || 'Не вказано';
-};
+const getPaymentStatusName = (status) => (status ? getPaymentStatus(status).label : 'Не вказано');
 
 const getMountTypeName = (type) => {
   const map = {
@@ -54,6 +43,7 @@ const getStationTypeName = (type) => {
 // --- Main Component ---
 
 const ReportGenerator = () => {
+  const auth = useAuth();
   const [objectId, setObjectId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -94,7 +84,7 @@ const ReportGenerator = () => {
 
       // Equipment
       const equipmentResponse = await fetch(
-        `${SUPABASE_URL}/rest/v1/installed_equipment?installation_custom_id=eq.${customId}&select=*,equipment:equipment_id(name),employees:employee_custom_id(name,phone)`,
+        `${SUPABASE_URL}/rest/v1/installed_equipment?installation_custom_id=eq.${customId}&select=*,nom:nomenclature_id(name,brand),employees:employee_custom_id(name,phone)`,
         { headers }
       );
       const installedEquipment = await equipmentResponse.json();
@@ -185,9 +175,8 @@ const ReportGenerator = () => {
       return `${date.toLocaleDateString('uk-UA')} ${date.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}`;
     };
 
-    const formatCurrency = (amount) => {
-      return amount != null ? `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$0.00';
-    };
+    // Суми — у валюті угоди; платіж — у своїй валюті
+    const formatCurrency = (amount, currency = installation?.currency || DEFAULT_CURRENCY) => formatMoney(amount || 0, currency);
     
     // Group workers by date
     const workersByDate = workers.reduce((acc, worker) => {
@@ -607,7 +596,7 @@ const ReportGenerator = () => {
         <tbody>
             ${installedEquipment.map(eq => `
                 <tr>
-                    <td><strong>${eq.equipment?.name || 'Не вказано'}</strong></td>
+                    <td><strong>${eq.nom ? equipmentLabel(eq.nom) : 'Не вказано'}</strong></td>
                     <td>${eq.serial_number || 'Не вказано'}</td>
                     <td>${eq.quantity || 1} шт.</td>
                     <td>${eq.employees?.name || 'Не вказано'}</td>
@@ -652,7 +641,7 @@ const ReportGenerator = () => {
             ${payments.map(payment => `
                 <tr>
                     <td style="white-space: nowrap;">${formatDate(payment.paid_at)}</td>
-                    <td><strong>${formatCurrency(payment.amount)}</strong></td>
+                    <td><strong>${formatCurrency(payment.amount, payment.currency || installation?.currency || DEFAULT_CURRENCY)}</strong></td>
                     <td>${getPaymentMethodName(payment.payment_method)}</td>
                     <td>${payment.comment || '—'}</td>
                 </tr>
@@ -661,7 +650,7 @@ const ReportGenerator = () => {
     </table>
     ` : sections.payments ? '<div class="no-data">Платежі відсутні</div>' : ''}
 
-    ${sections.summary ? `
+    ${sections.summary && canSeeMoney(auth, installation) ? `
     <h2>💵 Фінансова інформація</h2>
     <table class="summary-table">
         <thead>
@@ -844,10 +833,11 @@ const ReportGenerator = () => {
   };
 
   return (
+    <Layout>
     <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%)',
-      padding: '60px 20px',
+      minHeight: '100%',
+      background: '#f1f5f9',
+      padding: '24px 16px',
       fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
     }}>
       <div style={{
@@ -1188,6 +1178,7 @@ const ReportGenerator = () => {
         }
       `}</style>
     </div>
+    </Layout>
   );
 };
 

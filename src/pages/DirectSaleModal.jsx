@@ -17,9 +17,11 @@ import {
     FaWarehouse, FaHardHat, FaUserTie, FaExclamationTriangle, FaCheckCircle,
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
+import { SUPPLY_TARGET_STATUSES, supplyTargetOptions } from '../domain/objects';
 import { useAuth } from '../AuthProvider';
 import DeliveryNoteModal from './DeliveryNoteModal';
 import { generateDeliveryNoteNumber } from '../utils/deliveryNote';
+import { loadUsdRate } from '../utils/settings';
 import {
     T, TONE, Btn, IconBtn, Chip, Field, Picker, Modal, Skeleton,
     useToast, humanError, num,
@@ -35,7 +37,8 @@ const CURRENCIES = ['USD', 'UAH', 'EUR'];
 const newKey = () => Math.random().toString(36).slice(2, 10);
 const emptyLine = () => ({ key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' });
 
-export default function DirectSaleModal({ isOpen, onClose, onSuccess }) {
+// presetClientId — відкрити одразу «Продаж клієнту» з обраним клієнтом (з картки клієнта)
+export default function DirectSaleModal({ isOpen, onClose, onSuccess, presetClientId = null }) {
     const { employee } = useAuth();
     const toast = useToast();
 
@@ -47,9 +50,15 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }) {
 
     const [form, setForm] = useState({
         kind: 'issue', client_id: '', installation_custom_id: '', warehouse_from_id: '',
-        currency: 'USD', exchange_rate: '41.5', reference_document: '', notes: '',
+        currency: 'USD', exchange_rate: '', reference_document: '', notes: '',
     });
     const [lines, setLines] = useState([emptyLine()]);
+
+    // Курс — з налаштувань програми (той самий, що в платежах і аналітиці)
+    useEffect(() => {
+        if (!isOpen) return;
+        loadUsdRate().then(r => { if (r) setForm(f => (f.exchange_rate === '' ? { ...f, exchange_rate: String(r) } : f)); });
+    }, [isOpen]);
 
     const cfg = KINDS[form.kind];
     const isMoney = cfg.money;
@@ -64,7 +73,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }) {
                 supabase.from('categories').select('id, name, parent_id'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
                 supabase.from('clients').select('id, custom_id, name, phone, is_subcontract').order('name'),
-                supabase.from('installations').select('custom_id, name').in('status', ['planning', 'in_progress', 'pending']),
+                supabase.from('installations').select('custom_id, name, status').in('status', SUPPLY_TARGET_STATUSES),
                 supabase.from('v_warehouse_stock_available').select('warehouse_id, nomenclature_id, quantity_on_hand, quantity_available'),
             ]);
 
@@ -94,7 +103,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }) {
     useEffect(() => {
         if (!isOpen) return;
         setForm(f => ({
-            ...f, kind: 'issue', client_id: '', installation_custom_id: '',
+            ...f, kind: presetClientId ? 'sale' : 'issue', client_id: presetClientId || '', installation_custom_id: '',
             warehouse_from_id: '', notes: '', reference_document: '',
         }));
         setLines([emptyLine()]);
@@ -102,7 +111,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }) {
         setNoteDoc(null);
         loadDict();
         generateDeliveryNoteNumber().then(n => setForm(p => ({ ...p, reference_document: n })));
-    }, [isOpen, loadDict]);
+    }, [isOpen, loadDict, presetClientId]);
 
     // Потреба об'єкта — щоб бачити, чи видаємо в межах плану
     useEffect(() => {
@@ -160,7 +169,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }) {
         })), [dict.clients]
     );
     const instOptions = useMemo(
-        () => dict.installations.map(i => ({ id: i.custom_id, label: `#${i.custom_id} ${i.name}` })),
+        () => supplyTargetOptions(dict.installations),
         [dict.installations]
     );
 
@@ -260,6 +269,9 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }) {
         if (!filledLines.length) return toast('Додайте хоча б одну позицію з кількістю', 'error');
         if (isMoney && filledLines.some(l => !(parseFloat(l.unit_price) >= 0))) {
             return toast('Вкажіть ціну для кожної позиції', 'error');
+        }
+        if (isMoney && form.currency !== 'UAH' && !(parseFloat(form.exchange_rate) > 0)) {
+            return toast('Вкажіть курс до гривні', 'error');
         }
         if (needsReason && !form.notes.trim()) {
             return toast('Є позиції поза планом — вкажіть причину в коментарі', 'warning');
@@ -523,6 +535,11 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }) {
                                         placeholder="Оберіть об'єкт…" icon={FaHardHat}
                                         searchPlaceholder="Назва або номер…"
                                     />
+                                    {instOptions.find(o => String(o.id) === String(form.installation_custom_id))?.completed && (
+                                        <p className="mt-1.5 text-[12px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                                            Об'єкт завершено — це довидача. Відкривати його знову не потрібно.
+                                        </p>
+                                    )}
                                 </Field>
                             )}
 

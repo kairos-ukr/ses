@@ -103,7 +103,7 @@ export default function DeliveryNoteModal({ isOpen, onClose, doc }) {
 
                             {/* Налаштування — на друк не йдуть */}
                             <div className="mt-3 flex flex-wrap items-center gap-2">
-                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5"><FaCog size={10} /> Друкувати:</span>
+                                <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5"><FaCog size={10} /> Друкувати:</span>
 
                                 <button
                                     type="button"

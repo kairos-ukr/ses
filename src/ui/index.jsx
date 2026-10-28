@@ -10,11 +10,12 @@
 //  проміжками. Базовий рядок таблиці — 40px замість 76px.
 // =====================================================================
 
-import React, { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, memo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, useId, useLayoutEffect, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     FaCheck, FaExclamationTriangle, FaTimes, FaInfoCircle, FaSearch,
-    FaChevronLeft, FaChevronRight, FaChevronDown, FaPlus,
+    FaChevronLeft, FaChevronRight, FaChevronDown, FaPlus, FaUserTie,
 } from 'react-icons/fa';
 
 /* =====================================================================
@@ -36,10 +37,11 @@ export const T = {
     // Текст
     h1: 'text-base font-bold text-slate-900 tracking-tight',
     h2: 'text-sm font-bold text-slate-900',
-    label: 'text-[10px] font-black uppercase tracking-wider text-slate-400',
+    // Підпис поля: звичайний регістр і 11.5px — читається й на телефоні під сонцем
+    label: 'text-[11.5px] font-semibold text-slate-500',
     body: 'text-[13px] text-slate-700',
     dim: 'text-[11px] text-slate-500',
-    mono: 'font-mono text-[10px] tracking-wider text-slate-500 uppercase',
+    mono: 'font-mono text-[11px] tracking-wide text-slate-500',
     num: 'font-black tabular-nums text-slate-900',
 
     // Поля вводу — 16px на дотикових екранах ставить index.css, тут лише вигляд
@@ -50,7 +52,7 @@ export const T = {
         'outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-colors cursor-pointer',
 
     // Рядки таблиці
-    th: 'px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-500 bg-slate-50 whitespace-nowrap',
+    th: 'px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 whitespace-nowrap',
     td: 'px-3 py-2 text-[13px] text-slate-700 align-middle',
 
     // Мінімальна зона дотику на мобільному
@@ -187,17 +189,17 @@ export const IconBtn = ({ variant = 'ghost', icon: Icon, label, className = '', 
  * ===================================================================== */
 
 export const Chip = ({ tone = 'neutral', icon: Icon, children, className = '' }) => (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-black uppercase tracking-wide whitespace-nowrap ${TONE[tone].chip} ${className}`}>
-        {Icon && <Icon size={9} />}{children}
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11.5px] font-semibold leading-[18px] whitespace-nowrap ${TONE[tone].chip} ${className}`}>
+        {Icon && <Icon size={10} />}{children}
     </span>
 );
 
 /** Число з підписом. Компактна заміна «плиткам» на пів екрана. */
 export const Metric = ({ label, value, unit, tone = 'neutral', className = '' }) => (
     <div className={`leading-tight ${className}`}>
-        <div className={`text-[9px] font-black uppercase tracking-wider ${tone === 'neutral' ? 'text-slate-400' : TONE[tone].text} opacity-80`}>{label}</div>
+        <div className={`text-[11px] font-semibold ${tone === 'neutral' ? 'text-slate-500' : TONE[tone].text}`}>{label}</div>
         <div className={`text-[13px] font-black tabular-nums ${tone === 'neutral' ? 'text-slate-800' : TONE[tone].text}`}>
-            {value}{unit && <span className="text-[9px] font-bold opacity-60 ml-0.5">{unit}</span>}
+            {value}{unit && <span className="text-[10.5px] font-semibold opacity-60 ml-0.5">{unit}</span>}
         </div>
     </div>
 );
@@ -211,17 +213,134 @@ export const Bar = ({ segments, className = '' }) => (
     </div>
 );
 
+/** Людина — повне ім'я зі значком. Без скорочень до двох літер: вони нічого не кажуть */
+export const Person = ({ name, className = '', empty = 'не призначено' }) => (
+    <span className={`inline-flex items-center gap-1.5 text-[12.5px] leading-tight ${name ? 'font-semibold text-slate-700' : 'text-slate-400'} ${className}`}>
+        <FaUserTie size={10} className="text-slate-400 flex-shrink-0" />
+        <span className="break-words">{name || empty}</span>
+    </span>
+);
+
+/** Текст, де посилання (https://…, www.…) натискаються й відкриваються в новій вкладці */
+const URL_RE = /((?:https?:\/\/|www\.)[^\s<]+)/gi;
+const URL_TAIL = /[.,;:!?)»"'\]]+$/;
+export const Linkify = ({ children }) => {
+    const text = children == null ? '' : String(children);
+    if (!/(https?:\/\/|www\.)/i.test(text)) return text;
+    return text.split(URL_RE).map((part, i) => {
+        if (i % 2 === 0) return part;
+        const tail = (part.match(URL_TAIL) || [''])[0];
+        const url = tail ? part.slice(0, -tail.length) : part;
+        return (
+            <React.Fragment key={i}>
+                <a href={/^www\./i.test(url) ? `https://${url}` : url} target="_blank" rel="noopener noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    className="text-indigo-600 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-800 break-all font-medium">
+                    {url}
+                </a>{tail}
+            </React.Fragment>
+        );
+    });
+};
+
 export const Card = ({ children, className = '', pad = T.pad, ...rest }) => (
     <div className={`${T.card} ${pad} ${className}`} {...rest}>{children}</div>
 );
 
+/* =====================================================================
+ *  ПІДКАЗКА ПРИ НАВЕДЕННІ
+ *  Пояснення, яке потрібне один раз, не займає місця на екрані:
+ *  значок (i), а текст спливає при наведенні, фокусі з клавіатури
+ *  чи дотику пальцем. Рендериться поверх усього (portal), тож його не
+ *  обрізають картки з overflow-hidden.
+ *
+ *  <Tip text="…" />            — значок (i)
+ *  <Tip text="…">кнопка</Tip>  — підказка на будь-якому елементі
+ * ===================================================================== */
+
+export const Tip = ({ text, children, className = '', width = 260 }) => {
+    const [open, setOpen] = useState(false);
+    const [pos, setPos] = useState(null);
+    const anchorRef = useRef(null);
+    const id = useId();
+
+    // Ставимо над елементом; якщо зверху тісно — під ним. По ширині не виходимо за екран.
+    useLayoutEffect(() => {
+        if (!open || !anchorRef.current) return;
+        const r = anchorRef.current.getBoundingClientRect();
+        const w = Math.min(width, window.innerWidth - 16);
+        const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
+        const below = r.top < 90;
+        setPos({ left, width: w, top: below ? r.bottom + 8 : r.top - 8, below });
+    }, [open, width]);
+
+    // Дотик поза підказкою чи Escape — закрити
+    useEffect(() => {
+        if (!open) return;
+        const close = (e) => { if (!anchorRef.current?.contains(e.target)) setOpen(false); };
+        const esc = (e) => { if (e.key === 'Escape') setOpen(false); };
+        document.addEventListener('pointerdown', close);
+        document.addEventListener('keydown', esc);
+        window.addEventListener('scroll', close, true);
+        return () => {
+            document.removeEventListener('pointerdown', close);
+            document.removeEventListener('keydown', esc);
+            window.removeEventListener('scroll', close, true);
+        };
+    }, [open]);
+
+    if (!text) return children || null;
+
+    const trigger = children ? (
+        <span className={`inline-flex ${className}`}>{children}</span>
+    ) : (
+        <button
+            type="button"
+            aria-label="Підказка"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(v => !v); }}
+            className={`inline-flex items-center justify-center w-4 h-4 align-middle text-slate-400 hover:text-slate-600 focus:text-slate-600 focus:outline-none rounded-full ${className}`}
+        >
+            <FaInfoCircle size={12} />
+        </button>
+    );
+
+    return (
+        <span
+            ref={anchorRef}
+            className="inline-flex align-middle"
+            onMouseEnter={() => setOpen(true)}
+            onMouseLeave={() => setOpen(false)}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setOpen(false)}
+            aria-describedby={open ? id : undefined}
+        >
+            {trigger}
+            {open && pos && createPortal(
+                <span
+                    id={id}
+                    role="tooltip"
+                    style={{
+                        position: 'fixed', left: pos.left, width: pos.width, top: pos.top,
+                        transform: pos.below ? 'none' : 'translateY(-100%)',
+                    }}
+                    className="z-[300] pointer-events-none bg-slate-900 text-white text-[12.5px] font-medium normal-case tracking-normal leading-snug rounded-lg px-3 py-2 shadow-xl"
+                >
+                    {text}
+                </span>,
+                document.body
+            )}
+        </span>
+    );
+};
+
+/** Поле форми. hint — пояснення, що спливає зі значка (i) біля назви, а не висить під полем. */
 export const Field = ({ label, hint, required, children, className = '' }) => (
     <label className={`block ${className}`}>
-        <span className={`${T.label} block mb-1`}>
-            {label}{required && <span className="text-rose-500 ml-0.5">*</span>}
+        <span className={`${T.label} flex items-center gap-1 mb-1`}>
+            <span>{label}{required && <span className="text-rose-500 ml-0.5">*</span>}</span>
+            {hint && <Tip text={hint} />}
         </span>
         {children}
-        {hint && <span className="block text-[10px] text-slate-400 mt-1 leading-snug">{hint}</span>}
     </label>
 );
 

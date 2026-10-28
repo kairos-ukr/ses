@@ -15,6 +15,7 @@ import {
     FaChevronDown, FaPlus, FaMinus, FaExchangeAlt, FaWarehouse, FaTimes,
     FaFileExcel, FaMapMarkerAlt, FaHardHat, FaEdit, FaBox, FaHistory,
     FaClipboardList, FaBoxes, FaLayerGroup, FaSlidersH, FaLock,
+    FaCompressArrowsAlt, FaArchive, FaUndo, FaArrowDown,
 } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
@@ -22,12 +23,40 @@ import { useAuth } from '../AuthProvider';
 import { NomenclatureModal } from './NomenclatureModal';
 import ItemMovementHistoryModal from './ItemMovementHistoryModal';
 import LotsPanel from './warehouse/LotsPanel';
+import DuplicatesModal from './warehouse/DuplicatesModal';
 import { printInventorySheet } from '../utils/inventorySheetPdf';
+import { hasStockRules } from '../utils/features';
+import { restoreNomenclature } from '../utils/nomenclatureOps';
 import {
     T, Btn, IconBtn, Chip, Card, Field, Segmented, EmptyState,
     Skeleton, Pagination, Modal, Metric, useToast, useConfirm,
     humanError, num, useIsMobile, useAutoFocus,
 } from '../ui';
+
+/**
+ * Повний шлях категорії та її корінь — рахуємо один раз при
+ * завантаженні, а не в кожному рендері.
+ */
+const decorate = (list, cats) => {
+    const catById = new Map(cats.map(c => [c.id, c]));
+    return list.map(item => {
+        const path = [];
+        let id = item.category_id, root = item.category_id, guard = 0;
+        while (id && guard++ < 20) {
+            const c = catById.get(id);
+            if (!c) break;
+            path.unshift(c.name);
+            root = c.id;
+            id = c.parent_id;
+        }
+        return {
+            ...item,
+            fullName: `${path.join(' ')} ${item.name}`.trim(),
+            rootCategoryId: root,
+            isLot: item.tracking_mode === 'lot',
+        };
+    }).sort((a, b) => a.fullName.localeCompare(b.fullName, 'uk'));
+};
 
 const EMPTY_BALANCE = Object.freeze({ onHand: 0, reserved: 0, available: 0 });
 const round3 = (v) => Math.round((parseFloat(v) || 0) * 1000) / 1000;
@@ -47,11 +76,14 @@ const safeSheetName = (name, used) => {
 
 const ITEMS_PER_PAGE = 25;
 
-export default function WarehousePage({ externalSearch = '', externalActionTrigger = 0 }) {
-    const { employee, loading: authLoading } = useAuth();
+export default function WarehousePage({ externalSearch = '', externalActionTrigger = 0, initialStockMode = null }) {
+    const { employee, loading: authLoading, can } = useAuth();
+    // Доступи → «Склад»: прихід, списання, переміщення, картка товару
+    const canStock = can('stock', 'edit');
     const toast = useToast();
     const confirm = useConfirm();
-    const isMobile = useIsMobile();
+    // Картки замість таблиці на всьому, що вужче за ноутбук (і телефон в альбомній орієнтації)
+    const isMobile = useIsMobile(1024);
     const autoFocus = useAutoFocus();   // на сенсорі клавіатура не вискакує сама
 
     // Дані
@@ -63,7 +95,10 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
 
     // Фільтри
     const [warehouseFilter, setWarehouseFilter] = useState('all');
-    const [stockMode, setStockMode] = useState('all');       // all | instock
+    // Типово — лише позиції, що є на складі; «Усі позиції» — вручну
+    const [stockMode, setStockMode] = useState(initialStockMode || 'instock');   // instock | all | belowmin
+    // Посилання ?stock=… (напр. з повідомлення бота «нижче мінімуму»)
+    useEffect(() => { if (initialStockMode) setStockMode(initialStockMode); }, [initialStockMode]);
     const [rootCategoryFilter, setRootCategoryFilter] = useState('');
     const [filtersOpen, setFiltersOpen] = useState(false);   // на телефоні фільтри згорнуті
     const [currentPage, setCurrentPage] = useState(1);
@@ -82,16 +117,23 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
     const [busy, setBusy] = useState(false);
     const [pdfBusy, setPdfBusy] = useState(false);
 
+    // Мінімуми, архів і дублікати — з'являються після міграції stock_rules
+    const [rulesReady, setRulesReady] = useState(false);
+    const [archiveMode, setArchiveMode] = useState(false);
+    const [archived, setArchived] = useState([]);
+    const [dupOpen, setDupOpen] = useState(false);
+
     /* ---------------- ЗАВАНТАЖЕННЯ ---------------- */
 
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            const [nomRes, catRes, whRes, balRes] = await Promise.all([
+            const [nomRes, catRes, whRes, balRes, rules] = await Promise.all([
                 supabase.from('nomenclature').select('*, unit:units(name)').eq('is_active', true),
                 supabase.from('categories').select('*'),
                 supabase.from('warehouses').select('*').order('name'),
                 supabase.from('v_warehouse_stock_available').select('*'),
+                hasStockRules(),
             ]);
             if (nomRes.error) throw nomRes.error;
 
@@ -99,34 +141,8 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
             setCategories(cats);
             setWarehouses(whRes.data || []);
             setBalances(balRes.data || []);
-
-            // Повний шлях категорії та її корінь — рахуємо один раз тут,
-            // а не в кожному рендері
-            const catById = new Map(cats.map(c => [c.id, c]));
-            const walk = (startId) => {
-                const path = [];
-                let id = startId, root = startId, guard = 0;
-                while (id && guard++ < 20) {
-                    const c = catById.get(id);
-                    if (!c) break;
-                    path.unshift(c.name);
-                    root = c.id;
-                    id = c.parent_id;
-                }
-                return { path, root };
-            };
-
-            const processed = (nomRes.data || []).map(item => {
-                const { path, root } = walk(item.category_id);
-                return {
-                    ...item,
-                    fullName: `${path.join(' ')} ${item.name}`.trim(),
-                    rootCategoryId: root,
-                    isLot: item.tracking_mode === 'lot',
-                };
-            });
-
-            setItems(processed.sort((a, b) => a.fullName.localeCompare(b.fullName, 'uk')));
+            setRulesReady(rules);
+            setItems(decorate(nomRes.data || [], cats));
         } catch (e) {
             toast(humanError(e), 'error');
         } finally {
@@ -135,6 +151,18 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
     }, [toast]);
 
     useEffect(() => { if (!authLoading) loadData(); }, [authLoading, loadData]);
+
+    // Архів тягнемо лише коли його відкрили: у щоденній роботі він не потрібен
+    const loadArchived = useCallback(async () => {
+        const { data, error } = await supabase.from('nomenclature')
+            .select('*, unit:units(name)')
+            .eq('is_active', false)
+            .order('archived_at', { ascending: false, nullsFirst: false });
+        if (error) return toast(humanError(error), 'error');
+        setArchived(decorate(data || [], categories));
+    }, [categories, toast]);
+
+    useEffect(() => { if (archiveMode) loadArchived(); }, [archiveMode, loadArchived]);
 
     const refreshBalances = useCallback(async () => {
         const { data } = await supabase.from('v_warehouse_stock_available').select('*');
@@ -201,25 +229,56 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
 
     /* ---------------- ФІЛЬТРАЦІЯ ---------------- */
 
+    /** Мінімум — на всю компанію, тому порівнюємо з вільним по всіх складах */
+    const isBelowMin = useCallback((item) => {
+        const min = parseFloat(item.min_stock);
+        return min > 0 && totalsOf(item.id).available < min;
+    }, [totalsOf]);
+
+    const belowMinCount = useMemo(
+        () => (rulesReady ? items.filter(isBelowMin).length : 0),
+        [rulesReady, items, isBelowMin]
+    );
+
+    const stockOptions = useMemo(() => [
+        { value: 'instock', label: 'Із залишком' },
+        { value: 'all', label: 'Усі позиції' },
+        ...(rulesReady ? [{ value: 'belowmin', label: belowMinCount ? `Нижче мін. · ${belowMinCount}` : 'Нижче мін.' }] : []),
+    ], [rulesReady, belowMinCount]);
+
     const filtered = useMemo(() => {
         const term = externalSearch.trim().toLowerCase();
-        return items.filter(item => {
+        return (archiveMode ? archived : items).filter(item => {
             if (term && !item.fullName.toLowerCase().includes(term)
                 && !(item.sku && item.sku.toLowerCase().includes(term))) return false;
             if (rootCategoryFilter && item.rootCategoryId !== parseInt(rootCategoryFilter)) return false;
+            if (archiveMode) return true;
             if (stockMode === 'instock') {
                 const b = shownBalance(item.id);
                 if (b.onHand === 0 && b.reserved === 0) return false;
             }
+            if (stockMode === 'belowmin' && !isBelowMin(item)) return false;
             return true;
         });
-    }, [items, externalSearch, rootCategoryFilter, stockMode, shownBalance]);
+    }, [items, archived, archiveMode, externalSearch, rootCategoryFilter, stockMode, shownBalance, isBelowMin]);
 
     const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
     const paged = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
     useEffect(() => { setCurrentPage(1); setExpandedId(null); },
-        [externalSearch, rootCategoryFilter, warehouseFilter, stockMode]);
+        [externalSearch, rootCategoryFilter, warehouseFilter, stockMode, archiveMode]);
+
+    const restoreItem = async (item) => {
+        setBusy(true);
+        try {
+            await restoreNomenclature(item.id, employee?.id);
+            toast('Позицію повернуто в довідник');
+            setArchived(prev => prev.filter(i => i.id !== item.id));
+            loadData();
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally { setBusy(false); }
+    };
 
     const pickWarehouse = (value) => {
         setWarehouseFilter(value);
@@ -228,7 +287,7 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
         setStockMode(value === 'all' ? 'all' : 'instock');
     };
 
-    const activeFilterCount = (isScoped ? 1 : 0) + (rootCategoryFilter ? 1 : 0) + (stockMode === 'instock' ? 1 : 0);
+    const activeFilterCount = (isScoped ? 1 : 0) + (rootCategoryFilter ? 1 : 0) + (stockMode !== 'all' ? 1 : 0);
 
     /* ---------------- ЕКСПОРТ ---------------- */
 
@@ -386,7 +445,7 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
         setReserveInfo({ item, loading: true, rows: [] });
         try {
             let q = supabase.from('reservations')
-                .select('id, warehouse_id, reserved_quantity, released_quantity, notes, created_at, installation:installations(name)')
+                .select('id, warehouse_id, reserved_quantity, released_quantity, notes, created_at, installation:installations(name), client:clients(name, company_name)')
                 .eq('nomenclature_id', item.id).eq('status', 'active');
             if (isScoped) q = q.eq('warehouse_id', scopedId);
             const { data, error } = await q;
@@ -463,11 +522,11 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
         <div className="flex items-center gap-1">
             <IconBtn variant="ghost" icon={FaHistory} label={`Рух по складу «${wh.name}»`}
                 onClick={() => setHistory({ item, warehouseId: wh.id })} />
-            <IconBtn variant="softOk" icon={FaPlus} label="Ручний прихід"
-                onClick={() => openAdjust(item, wh, 'purchase')} />
-            <IconBtn variant="softDanger" icon={FaMinus} label="Списання"
-                onClick={() => openAdjust(item, wh, 'writeoff')} />
-            {activeWarehouses.length > 1 && (
+            {canStock && <IconBtn variant="softOk" icon={FaPlus} label="Ручний прихід"
+                onClick={() => openAdjust(item, wh, 'purchase')} />}
+            {canStock && <IconBtn variant="softDanger" icon={FaMinus} label="Списання"
+                onClick={() => openAdjust(item, wh, 'writeoff')} />}
+            {canStock && activeWarehouses.length > 1 && (
                 <IconBtn variant="soft" icon={FaExchangeAlt} label="Переміщення"
                     onClick={() => openAdjust(item, wh, 'transfer')} />
             )}
@@ -551,15 +610,14 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                         {rootCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
 
-                    <Segmented
-                        className="hidden md:inline-flex flex-none"
-                        value={stockMode}
-                        onChange={setStockMode}
-                        options={[
-                            { value: 'instock', label: 'Із залишком' },
-                            { value: 'all', label: 'Усі позиції' },
-                        ]}
-                    />
+                    {!archiveMode && (
+                        <Segmented
+                            className="hidden md:inline-flex flex-none"
+                            value={stockMode}
+                            onChange={setStockMode}
+                            options={stockOptions}
+                        />
+                    )}
 
                     <Btn
                         variant={filtersOpen || activeFilterCount > 1 ? 'primary' : 'outline'}
@@ -572,6 +630,19 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
 
                     {/* Дії. На вузькому десктопі згортаються в іконки, щоб не тиснути фільтри */}
                     <div className="hidden md:flex items-center gap-1.5 ml-auto flex-none">
+                        {rulesReady && (
+                            <>
+                                <Btn variant="outline" icon={FaCompressArrowsAlt} onClick={() => setDupOpen(true)}
+                                    title="Знайти й обʼєднати дублікати позицій">
+                                    <span className="hidden xl:inline">Дублікати</span>
+                                </Btn>
+                                <Btn variant={archiveMode ? 'primary' : 'outline'} icon={FaArchive}
+                                    onClick={() => setArchiveMode(v => !v)}
+                                    title={archiveMode ? 'Повернутись до довідника' : 'Прибрані й обʼєднані позиції'}>
+                                    <span className="hidden xl:inline">Архів</span>
+                                </Btn>
+                            </>
+                        )}
                         <Btn variant="outline" icon={FaWarehouse} onClick={() => setWhModal(true)}>
                             <span className="hidden xl:inline">Склади</span>
                         </Btn>
@@ -595,22 +666,46 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                             <option value="">Всі категорії</option>
                             {rootCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                         </select>
-                        <Segmented
-                            className="w-full"
-                            value={stockMode}
-                            onChange={setStockMode}
-                            options={[
-                                { value: 'instock', label: 'Із залишком' },
-                                { value: 'all', label: 'Усі позиції' },
-                            ]}
-                        />
+                        {!archiveMode && (
+                            <Segmented
+                                className="w-full overflow-x-auto"
+                                value={stockMode}
+                                onChange={setStockMode}
+                                options={stockOptions}
+                            />
+                        )}
                         <div className="grid grid-cols-3 gap-1.5">
                             <Btn variant="outline" icon={FaWarehouse} onClick={() => setWhModal(true)}>Склади</Btn>
                             <Btn variant="softOk" icon={FaFileExcel} onClick={exportBalances}>Excel</Btn>
                             <Btn variant="softWarn" icon={FaClipboardList} onClick={exportInventory} disabled={pdfBusy}>
                                 Відомість
                             </Btn>
+                            {rulesReady && (
+                                <>
+                                    <Btn variant="outline" icon={FaCompressArrowsAlt} onClick={() => setDupOpen(true)}>Дублікати</Btn>
+                                    <Btn variant={archiveMode ? 'primary' : 'outline'} icon={FaArchive}
+                                        onClick={() => setArchiveMode(v => !v)}>
+                                        Архів
+                                    </Btn>
+                                </>
+                            )}
                         </div>
+                    </div>
+                )}
+
+                {archiveMode && (
+                    <div className="mt-2 pt-2 border-t border-slate-100 flex items-center gap-2">
+                        <FaArchive className="text-slate-500 flex-shrink-0" size={11} />
+                        <span className="text-[12px] font-bold text-slate-800">Архів позицій</span>
+                        <span className="text-[11px] text-slate-400 truncate hidden sm:inline">
+                            прибрані з довідника й обʼєднані дублікати — історія збережена
+                        </span>
+                        <button
+                            onClick={() => setArchiveMode(false)}
+                            className="ml-auto text-[11px] font-bold text-slate-500 hover:text-slate-900 flex items-center gap-1 flex-shrink-0"
+                        >
+                            <FaTimes size={9} /> до довідника
+                        </button>
                     </div>
                 )}
 
@@ -644,20 +739,70 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                         {stockMode === 'instock' && (
                             <Btn variant="soft" onClick={() => setStockMode('all')}>Показати всі позиції</Btn>
                         )}
-                        <Btn variant="accent" icon={FaPlus} onClick={() => setNomModal({ open: true, item: null })}>
-                            Додати позицію
-                        </Btn>
+                        {can('stock', 'add') && (
+                            <Btn variant="accent" icon={FaPlus} onClick={() => setNomModal({ open: true, item: null })}>
+                                Додати позицію
+                            </Btn>
+                        )}
                     </EmptyState>
-                ) : isMobile ? (
-                    /* ---------- ТЕЛЕФОН: КАРТКИ ---------- */
+                ) : archiveMode ? (
+                    /* ---------- АРХІВ: і на телефоні, і на ПК — простий список ---------- */
                     <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                        {paged.map(item => {
+                            const t = totalsOf(item.id);
+                            // Історія обʼєднаної позиції вже переїхала — показуємо її там, де вона тепер
+                            const mergedTarget = item.merged_into_id
+                                ? items.find(i => i.id === item.merged_into_id) || null
+                                : null;
+                            return (
+                                <div key={item.id} className="px-3 py-2.5 flex items-center gap-2">
+                                    <div className="min-w-0 flex-1">
+                                        <div className="text-[13px] font-semibold text-slate-700 leading-snug">{item.fullName}</div>
+                                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                            {item.sku && <span className={T.mono}>{item.sku}</span>}
+                                            <Chip tone={item.merged_into_id ? 'accent' : 'neutral'}>
+                                                {item.merged_into_id ? 'обʼєднано' : 'в архіві'}
+                                            </Chip>
+                                            {item.archive_reason && (
+                                                <span className="text-[11px] text-slate-500">{item.archive_reason}</span>
+                                            )}
+                                            {item.archived_at && (
+                                                <span className="text-[10.5px] text-slate-400">
+                                                    {new Date(item.archived_at).toLocaleDateString('uk-UA')}
+                                                </span>
+                                            )}
+                                            {t.onHand !== 0 && <Chip tone="danger">на складі {num(t.onHand)}</Chip>}
+                                        </div>
+                                    </div>
+                                    {mergedTarget && (
+                                        <span className="hidden sm:inline text-[11px] text-slate-500 truncate max-w-[220px]">
+                                            → {mergedTarget.fullName}
+                                        </span>
+                                    )}
+                                    <IconBtn variant="ghost" icon={FaHistory}
+                                        label={mergedTarget ? `Історія — тепер у «${mergedTarget.fullName}»` : 'Історія руху'}
+                                        onClick={() => setHistory({ item: mergedTarget || item, warehouseId: null })} />
+                                    {/* Обʼєднану не відновлюємо: її історія вже живе в іншій позиції */}
+                                    {!item.merged_into_id && (
+                                        <Btn size="sm" variant="softOk" icon={FaUndo} disabled={busy}
+                                            onClick={() => restoreItem(item)}>
+                                            Відновити
+                                        </Btn>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                ) : isMobile ? (
+                    /* ---------- ТЕЛЕФОН: КАРТКИ (в альбомній орієнтації — у дві колонки) ---------- */
+                    <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 content-start">
                         {paged.map(item => {
                             const b = shownBalance(item.id);
                             return (
                                 <button
                                     key={item.id}
                                     onClick={() => setSheetItem(item)}
-                                    className="w-full text-left px-3 py-2.5 active:bg-slate-50 transition-colors"
+                                    className="w-full text-left px-3 py-2.5 border-b border-slate-100 sm:odd:border-r active:bg-slate-50 transition-colors"
                                 >
                                     <div className="flex items-start gap-2 mb-1.5">
                                         <span className="text-[13px] font-bold text-slate-900 leading-snug flex-1">
@@ -669,6 +814,9 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                                         </span>
                                     </div>
                                     <div className="flex items-center gap-1.5 flex-wrap">
+                                        {rulesReady && isBelowMin(item) && (
+                                            <Chip tone="danger" icon={FaArrowDown}>мін. {num(item.min_stock)}</Chip>
+                                        )}
                                         {item.isLot && <Chip tone="info" icon={FaLayerGroup}>{item.lot_unit_name || 'бухти'}</Chip>}
                                         {b.reserved > 0 && <Chip tone="warn" icon={FaLock}>резерв {num(b.reserved)}</Chip>}
                                         <Chip tone={b.available > 0 ? 'ok' : 'danger'}>вільно {num(b.available)}</Chip>
@@ -715,6 +863,9 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                                                     <span className="inline-flex items-center gap-1.5 ml-2 align-middle">
                                                         {item.sku && <span className={T.mono}>{item.sku}</span>}
                                                         {item.isLot && <Chip tone="info" icon={FaLayerGroup}>{item.lot_unit_name || 'бухти'}</Chip>}
+                                                        {rulesReady && isBelowMin(item) && (
+                                                            <Chip tone="danger" icon={FaArrowDown}>мін. {num(item.min_stock)}</Chip>
+                                                        )}
                                                     </span>
                                                 </td>
 
@@ -744,8 +895,8 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                                                 </td>
 
                                                 <td className={`${T.td} text-right whitespace-nowrap`}>
-                                                    <IconBtn variant="ghost" icon={FaEdit} label="Редагувати позицію"
-                                                        onClick={() => setNomModal({ open: true, item })} />
+                                                    {canStock && <IconBtn variant="ghost" icon={FaEdit} label="Редагувати позицію"
+                                                        onClick={() => setNomModal({ open: true, item })} />}
                                                     {item.isLot ? (
                                                         <Btn
                                                             size="sm"
@@ -805,10 +956,10 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                         onClick={() => { setHistory({ item: sheetItem, warehouseId: isScoped ? scopedId : null }); setSheetItem(null); }}>
                         Історія
                     </Btn>
-                    <Btn variant="soft" icon={FaEdit}
+                    {canStock && <Btn variant="soft" icon={FaEdit}
                         onClick={() => { setNomModal({ open: true, item: sheetItem }); setSheetItem(null); }}>
                         Редагувати
-                    </Btn>
+                    </Btn>}
                 </>}
             >
                 {sheetItem && <ItemDetails item={sheetItem} />}
@@ -898,7 +1049,7 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                                 <FaHardHat className="text-slate-400 flex-shrink-0" size={12} />
                                 <div className="min-w-0 flex-1">
                                     <div className="text-[12.5px] font-bold text-slate-900 truncate">
-                                        {r.installation?.name || "Невідомий об'єкт"}
+                                        {r.installation?.name || (r.client ? `Клієнт: ${r.client.company_name || r.client.name}` : "Невідомий об'єкт")}
                                     </div>
                                     <div className="text-[10.5px] text-slate-400">
                                         {r.whName} · {new Date(r.created_at).toLocaleDateString('uk-UA')}
@@ -979,6 +1130,16 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                 showToast={toast}
                 editingItem={nomModal.item}
             />
+
+            {rulesReady && (
+                <DuplicatesModal
+                    isOpen={dupOpen}
+                    onClose={() => setDupOpen(false)}
+                    items={items}
+                    totalsOf={totalsOf}
+                    onChanged={loadData}
+                />
+            )}
 
             <ItemMovementHistoryModal
                 isOpen={!!history}

@@ -8,6 +8,10 @@ import {
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
 import { useAuth } from "./AuthProvider"; // 1. ІМПОРТУЄМО AUTH CONTEXT
+import ClientDuplicatesModal from "./ClientDuplicatesModal";
+import { hasClientMerge } from "./utils/features";
+import { COMPANIES } from "./domain/objects";
+import { FaCompressArrowsAlt } from "react-icons/fa";
 
 // Debounce hook
 const useDebounce = (value, delay) => {
@@ -53,47 +57,46 @@ const ClientCard = memo(({ client, onEdit, canEdit, onOpen }) => {
   };
   const { icon: ObjectIcon, color, label } = typeMap[client.object_type] || { icon: FaBuilding, color: 'text-gray-600 bg-gray-50', label: client.object_type || 'Інше' };
 
-  const formatDate = (dateString) => dateString ? new Date(dateString).toLocaleDateString('uk-UA') : 'N/A';
+  const place = [client.populated_place, client.oblast].filter(Boolean).join(', ');
 
+  // Компактна картка: назва повністю, далі тип, місто й телефон одним рядком.
+  // Порожніх рядків «---» немає — на телефоні вміщається втричі більше клієнтів.
   return (
     <div onClick={() => onOpen(client)}
-      className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 hover:shadow-md hover:border-indigo-200 transition-shadow flex flex-col h-full cursor-pointer">
-      <div className="flex-grow">
-        <div className="flex justify-between items-start mb-3">
-          <div className="flex-1 min-w-0 pr-2">
-            <h3 className="font-bold text-slate-800 text-lg truncate leading-tight" title={client.company_name || client.name}>
-                {client.company_name || client.name}
-            </h3>
-            {client.company_name && <p className="text-sm text-slate-500 truncate mt-0.5">{client.name}</p>}
-          </div>
-          <span className="text-[10px] text-slate-500 bg-slate-100 px-2 py-1 rounded-md font-mono flex-shrink-0 border border-slate-200">
-              #{client.custom_id}
-          </span>
+      className="bg-white rounded-xl px-3.5 py-3 sm:p-4 shadow-sm border border-slate-200 hover:shadow-md hover:border-indigo-200 transition-shadow flex flex-col gap-2 h-full cursor-pointer">
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <h3 className="font-bold text-slate-800 text-[15px] sm:text-base leading-snug break-words">
+            {client.company_name || client.name}
+          </h3>
+          {client.company_name && <p className="text-[12.5px] text-slate-500 break-words">{client.name}</p>}
         </div>
-        
-        <div className="space-y-2.5 text-sm">
-          <div className={`flex items-center gap-2 p-1.5 rounded-lg w-fit ${color}`}>
-            <ObjectIcon className="w-3.5 h-3.5"/> <span className="font-semibold text-xs">{label}</span>
-          </div>
-          <div className="flex items-center gap-2 text-slate-600">
-              <FaMapMarkerAlt className="text-slate-400 flex-shrink-0 text-xs"/> 
-              <span className="truncate text-xs sm:text-sm">{[client.populated_place, client.oblast].filter(Boolean).join(', ') || '---'}</span>
-          </div>
-          <div className="flex items-center gap-2 text-slate-600">
-              <FaPhone className="text-slate-400 flex-shrink-0 text-xs"/> 
-              <a href={`tel:${client.phone}`} onClick={(e) => e.stopPropagation()} className="hover:text-indigo-600 truncate text-xs sm:text-sm font-medium">{client.phone || '---'}</a>
-          </div>
-        </div>
-      </div>
-      
-      <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center">
-        <span className="text-[10px] text-slate-400">Створено: {formatDate(client.created_at)}</span>
-        
-        {/* 3. УМОВА ВІДОБРАЖЕННЯ КНОПКИ РЕДАГУВАННЯ */}
+        <span className="text-[10.5px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-md font-mono flex-shrink-0 border border-slate-200 mt-0.5">
+          #{client.custom_id}
+        </span>
         {canEdit && (
-          <button onClick={(e) => { e.stopPropagation(); onEdit(client); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 rounded-lg text-xs font-bold transition-colors border border-slate-200 hover:border-indigo-200">
-            <FaEdit/> Редагувати
+          <button onClick={(e) => { e.stopPropagation(); onEdit(client); }}
+            aria-label="Редагувати клієнта" title="Редагувати клієнта"
+            className="w-8 h-8 -mt-1 -mr-1 flex items-center justify-center rounded-lg text-slate-400 hover:text-indigo-700 hover:bg-indigo-50 flex-shrink-0">
+            <FaEdit size={13} />
           </button>
+        )}
+      </div>
+
+      <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap text-[12.5px] text-slate-600">
+        <span className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md ${color}`}>
+          <ObjectIcon className="w-3 h-3" /> <span className="font-semibold text-[11.5px]">{label}</span>
+        </span>
+        {place && (
+          <span className="inline-flex items-center gap-1.5 min-w-0">
+            <FaMapMarkerAlt className="text-slate-400 flex-shrink-0" size={11} /> {place}
+          </span>
+        )}
+        {client.phone && (
+          <a href={`tel:${client.phone}`} onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1.5 font-medium text-indigo-700 hover:underline">
+            <FaPhone className="flex-shrink-0" size={10} /> {client.phone}
+          </a>
         )}
       </div>
     </div>
@@ -113,14 +116,18 @@ const Pagination = memo(({ currentPage, totalPages, onPageChange }) => {
 
 export default function ClientsPage() {
   // 4. ОТРИМУЄМО РОЛЬ КОРИСТУВАЧА
-  const { role } = useAuth();
+  const { can } = useAuth();
   const navigate = useNavigate();
   const openClient = (client) => navigate(`/clients/${client.custom_id}`);
   
-  // 5. ВИЗНАЧАЄМО ПРАВА ДОСТУПУ
-  // Create доступно всім (згідно з таблицею), тому canCreate окремо не потрібен, кнопка просто відображається.
-  // Edit доступно тільки Адміну та Офісу.
-  const canEdit = role === 'admin' || role === 'super_admin' || role === 'office';
+  // 5. ПРАВА — Доступи → «Клієнти»
+  const canAdd = can('clients', 'add');
+  const canEdit = can('clients', 'edit');
+
+  // Об'єднання дублікатів — після міграції db/2026-10_client_merge.sql
+  const [mergeReady, setMergeReady] = useState(false);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  useEffect(() => { hasClientMerge().then(setMergeReady); }, []);
 
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -298,10 +305,18 @@ export default function ClientsPage() {
                     <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 tracking-tight">Клієнти</h1>
                     <p className="text-slate-500 text-sm mt-1">База замовників та об'єктів</p>
                 </div>
-                {/* КНОПКА СТВОРЕННЯ (Доступна всім ✅) */}
-                <button onClick={handleAddClient} className="flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all w-full sm:w-auto">
-                    <FaPlus/> <span>Новий клієнт</span>
-                </button>
+                <div className="flex gap-2 w-full sm:w-auto">
+                    {canEdit && mergeReady && (
+                        <button onClick={() => setShowDuplicates(true)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold shadow-sm hover:bg-slate-50 transition-colors">
+                            <FaCompressArrowsAlt/> <span>Дублікати</span>
+                        </button>
+                    )}
+                    {canAdd && (
+                        <button onClick={handleAddClient} className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all">
+                            <FaPlus/> <span>Новий клієнт</span>
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Search & Filters Bar */}
@@ -330,7 +345,7 @@ export default function ClientsPage() {
                     <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
                         <div className="bg-white p-4 rounded-xl border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4 shadow-sm">
                             {[
-                                { label: 'Компанія', key: 'company', opts: [{v:'all', l:'Всі'}, {v:'Кайрос', l:'Кайрос'}, {v:'Розумне збереження енергії', l:'РЗЕ'}] },
+                                { label: 'Компанія', key: 'company', opts: [{v:'all', l:'Всі'}, ...COMPANIES.map(c => ({ v: c.key, l: c.short }))] },
                                 { label: 'Тип об\'єкта', key: 'type', opts: [{v:'all', l:'Всі'}, {v:'private', l:'Приватний'}, {v:'business', l:'Бізнес'}] },
                                 { label: 'Співпраця', key: 'subcontract', opts: [{v:'all', l:'Всі'}, {v:'direct', l:'Прямі'}, {v:'subcontract', l:'Субпідряд'}] }
                             ].map((group, idx) => (
@@ -355,7 +370,7 @@ export default function ClientsPage() {
         {/* Content Grid */}
         <div className="min-h-[300px]">
             {loading ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5 sm:gap-4">
                     {Array.from({ length: 6 }).map((_, i) => <div key={i} className="bg-white h-40 rounded-2xl animate-pulse border border-slate-100"></div>)}
                 </div>
             ) : clients.length === 0 ? (
@@ -365,7 +380,7 @@ export default function ClientsPage() {
                     <p className="text-slate-400 text-sm">Спробуйте змінити фільтри</p>
                 </div>
             ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5 sm:gap-4">
                     {clients.map(client => (
                         <ClientCard
                             key={client.custom_id}
@@ -414,8 +429,7 @@ export default function ClientsPage() {
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Компанія-виконавець <span className="text-red-500">*</span></label>
                                 <select value={formData.working_company} onChange={e => handleInputChange('working_company', e.target.value)} className={`w-full border rounded-xl px-4 py-3 bg-slate-50 focus:bg-white outline-none ${formErrors.working_company ? 'border-red-500' : 'border-slate-200'}`}>
                                     <option value="">Оберіть...</option>
-                                    <option value="Кайрос">Кайрос</option>
-                                    <option value="Розумне збереження енергії">РЗЕ</option>
+                                    {COMPANIES.map(c => <option key={c.key} value={c.key}>{c.key}</option>)}
                                 </select>
                             </div>
 
@@ -481,6 +495,12 @@ export default function ClientsPage() {
             </div>
         )}
       </AnimatePresence>
+
+      <ClientDuplicatesModal
+        isOpen={showDuplicates}
+        onClose={() => setShowDuplicates(false)}
+        onChanged={() => loadClients(currentPage)}
+      />
     </Layout>
   );
 }

@@ -15,6 +15,7 @@ import {
     FaChevronDown, FaTruckLoading, FaEdit,
 } from 'react-icons/fa';
 import { supabase } from '../../supabaseClient';
+import { SUPPLY_TARGET_STATUSES, supplyTargetOptions } from '../../domain/objects';
 import { useAuth } from '../../AuthProvider';
 import {
     T, Btn, IconBtn, Chip, Card, Field, Picker, Bar, EmptyState,
@@ -47,7 +48,8 @@ export default function IssueOrdersPage({ externalSearch = '', externalActionTri
     const { employee } = useAuth();
     const toast = useToast();
     const confirm = useConfirm();
-    const isMobile = useIsMobile();
+    // Картки замість таблиці на всьому, що вужче за ноутбук (і телефон в альбомній орієнтації)
+    const isMobile = useIsMobile(1024);
 
     const [orders, setOrders] = useState([]);
     const [readiness, setReadiness] = useState({});   // item_id → рядок готовності
@@ -71,7 +73,7 @@ export default function IssueOrdersPage({ externalSearch = '', externalActionTri
     const loadDicts = useCallback(async () => {
         const [whRes, instRes, clRes, nomRes, catRes] = await Promise.all([
             supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
-            supabase.from('installations').select('custom_id, name').in('status', ['planning', 'in_progress', 'pending']),
+            supabase.from('installations').select('custom_id, name, status').in('status', SUPPLY_TARGET_STATUSES),
             supabase.from('clients').select('id, name, phone').order('name'),
             supabase.from('nomenclature').select('id, name, sku, category_id, unit:units(name)').eq('is_active', true),
             supabase.from('categories').select('id, name, parent_id'),
@@ -149,7 +151,7 @@ export default function IssueOrdersPage({ externalSearch = '', externalActionTri
     );
     const whOptions = useMemo(() => warehouses.map(w => ({ id: w.id, label: w.name })), [warehouses]);
     const instOptions = useMemo(
-        () => installations.map(i => ({ id: i.custom_id, label: `#${i.custom_id} ${i.name}` })),
+        () => supplyTargetOptions(installations),
         [installations]
     );
     const clientOptions = useMemo(
@@ -611,7 +613,7 @@ export default function IssueOrdersPage({ externalSearch = '', externalActionTri
 
                                             <div className="flex items-center gap-4 flex-shrink-0">
                                                 <div className="text-right w-28">
-                                                    <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">
+                                                    <div className="text-[11px] font-semibold text-slate-400">
                                                         Позицій {(order.items || []).length}
                                                     </div>
                                                     {isOpen ? (
@@ -704,6 +706,11 @@ export default function IssueOrdersPage({ externalSearch = '', externalActionTri
                                         onChange={v => setEditor(e => ({ ...e, installation_custom_id: v }))}
                                         placeholder="Оберіть об'єкт…" icon={FaHardHat}
                                         searchPlaceholder="Назва або номер…" />
+                                    {instOptions.find(o => String(o.id) === String(editor.installation_custom_id))?.completed && (
+                                        <p className="mt-1.5 text-[12px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                                            Об'єкт завершено — це довидача. Відкривати його знову не потрібно, статус не зміниться.
+                                        </p>
+                                    )}
                                 </Field>
                                 <Field label="Клієнт">
                                     <Picker options={[{ id: '', label: '— не вказано —' }, ...clientOptions]}

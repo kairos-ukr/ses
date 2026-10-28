@@ -103,7 +103,8 @@ const thisMonthValue = () => {
 export default function StockMovementsPage({ externalSearch = '', externalActionTrigger = 0 }) {
     const { employee, loading: authLoading } = useAuth();
     const toast = useToast();
-    const isMobile = useIsMobile();
+    // Картки замість таблиці на всьому, що вужче за ноутбук (і телефон в альбомній орієнтації)
+    const isMobile = useIsMobile(1024);
     const autoFocus = useAutoFocus();
 
     const [movements, setMovements] = useState([]);
@@ -569,7 +570,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
     /* ---------------- ЧАСТИНИ ІНТЕРФЕЙСУ ---------------- */
 
     const OpChip = ({ conf }) => (
-        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-black uppercase tracking-wide whitespace-nowrap ${CHIP_TONE[conf.tone]}`}>
+        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] font-semibold whitespace-nowrap ${CHIP_TONE[conf.tone]}`}>
             <conf.icon size={9} />{conf.label}
         </span>
     );
@@ -871,11 +872,8 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             >
                 {editModal && (
                     <div className="space-y-3">
-                        <p className="text-[11.5px] text-slate-500 leading-relaxed">
-                            Кількість і склади змінити не можна — для цього проведіть повернення
-                            або нову операцію. Тут правляться лише документ, дата й коментар.
-                        </p>
-                        <Field label="Дата та час операції">
+                        <Field label="Дата та час операції"
+                            hint="Кількість і склади змінити не можна — для цього проведіть повернення або нову операцію. Тут правляться лише документ, дата й коментар.">
                             <input type="datetime-local" className={T.input} value={editForm.operation_date}
                                 onChange={e => setEditForm(f => ({ ...f, operation_date: e.target.value }))} />
                         </Field>

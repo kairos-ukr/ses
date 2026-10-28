@@ -282,6 +282,8 @@ export default function DocumentsPage() {
         const formData = new FormData();
         formData.append('object_number', selectedObject.custom_id);
         formData.append('doc_type', finalDocType);
+        // Хто завантажив — у підписі в гілці Telegram
+        formData.append('uploaded_by', employee?.name || '');
 
         uploadFiles.forEach((file) => {
             formData.append('files', file);

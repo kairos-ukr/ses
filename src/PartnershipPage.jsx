@@ -6,116 +6,29 @@ import {
   FaBolt, FaSearch, FaFilter, FaTools, 
   FaClock, FaCheckCircle, FaExclamationTriangle, FaPause, FaTimes,
   FaChevronLeft, FaChevronRight, FaCheck, FaInfoCircle, FaTrash, FaHardHat,
-  FaUserTie, FaBuilding, FaPhoneAlt, FaListUl, FaMapMarkerAlt, FaDraftingCompass, FaFileInvoiceDollar,
-  FaTruckLoading, FaBoxOpen, FaSolarPanel,FaFileSignature, FaBroadcastTower
+  FaUserTie, FaBuilding, FaPhoneAlt, FaListUl
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
-import { useAuth } from "./AuthProvider"; 
+import { useAuth } from "./AuthProvider";
+import { TASKS, tasksOfGroup, normalizeGroupKey, getStageGroup, taskStatusMeta, taskDefaultStatus } from "./domain/stages";
+import { ACTIVE_OBJECT_STATUSES, getObjectStatus, COMPANY_NAMES } from "./domain/objects";
 
 // --- CONSTANTS ---
 const PROJECTS_PER_PAGE = 6;
-const ALLOWED_COMPANIES = ['Кайрос', 'Розумне збереження енергії'];
+const ALLOWED_COMPANIES = COMPANY_NAMES;
 
-const WORKFLOW_STAGES = [
-    { value: 'tech_review', label: 'Заміри', icon: FaMapMarkerAlt, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
-    { value: 'project', label: 'Проект', icon: FaDraftingCompass, color: 'bg-orange-50 text-orange-700 border-orange-200' },
-    { value: 'proposal', label: 'КП', icon: FaFileInvoiceDollar, color: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' },
-    { value: 'equipment', label: 'Обладнання', icon: FaTruckLoading, color: 'bg-amber-50 text-amber-700 border-amber-200' },
-    { value: 'complectation', label: 'Комплектація', icon: FaBoxOpen, color: 'bg-blue-50 text-blue-700 border-blue-200' },
-    { value: 'installation', label: 'Монтаж', icon: FaSolarPanel, color: 'bg-blue-100 text-blue-800 border-blue-300' },
-    { value: 'grid_connection', label: 'Мережа', icon: FaFileSignature, color: 'bg-purple-100 text-purple-800 border-purple-300' },
-    { value: 'monitoring_setup', label: 'Запуск', icon: FaBroadcastTower, color: 'bg-cyan-50 text-cyan-800 border-cyan-300' },
-];
-
-const DETAILED_TASKS = {
-  tech_review: [{ id: "tech_review", title: "Проведення замірів" }],
-  project: [
-    { id: "project_design", title: "3D візуалізація" }, 
-    { id: "project_approval", title: "Затвердження дизайну" },
-    { id: "tech_project", title: "Технічний проект" }
-  ],
-  proposal: [{ id: "commercial_proposal", title: "Комерційна пропозиція" }],
-  equipment: [{ id: "equipment", title: "Закупівля обладнання" }],
-  complectation: [
-    { id: "complectation", title: "Матеріали" }, 
-    { id: "comp_protection", title: "Ел. захист" } 
-  ],
-  installation: [
-    { id: "inst_structure", title: "Конструкція" },
-    { id: "inst_panels", title: "Панелі" },
-    { id: "inst_cabling", title: "Траса DC" },
-    { id: "inst_grounding", title: "Заземлення" },
-    { id: "inst_inverter", title: "Інвертор" }
-  ],
-  grid_connection: [{ id: "grid_connection", title: "Заведення потужності" }],
-  monitoring_setup: [{ id: "monitoring_setup", title: "Запуск станції" }]
+// Етапи й статуси — зі спільного списку (src/domain/stages.js).
+// Тут короткі назви підетапів, бо картка партнерського об'єкта вузька.
+// Для старого етапу «Мережа» показуємо його підетап, щоб картка не була порожньою.
+const tasksForStage = (groupKey) => {
+    const key = normalizeGroupKey(groupKey);
+    const current = tasksOfGroup(key);
+    const list = current.length ? current : TASKS.filter(t => t.group === key);
+    return list.map(t => ({ id: t.key, title: t.short || t.title }));
 };
 
-const STATUS_CONFIG = {
-  default: [
-    { key: "todo", label: "Не почато", color: "bg-slate-50 text-slate-500 border-slate-200" }, 
-    { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" }, 
-    { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" }, 
-  ],
-  tech_project_group: [
-    { key: "todo", label: "Не почато", color: "bg-slate-50 text-slate-500 border-slate-200" },
-    { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-    { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  proposal: [
-    { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "in_progress", label: "В процесі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-    { key: "created", label: "Зроблено", color: "bg-blue-50 text-blue-700 border-blue-200" }, 
-    { key: "approved", label: "Погоджено", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  project: [
-    { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "in_progress", label: "В розробці", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-    { key: "created", label: "Зроблено", color: "bg-blue-50 text-blue-700 border-blue-200" }, 
-    { key: "approved", label: "Затверджено", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  equipment: [
-    { key: "waiting", label: "Не почато", color: "bg-slate-50 text-slate-500 border-slate-200" }, 
-    { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-    { key: "ordered", label: "Замовлено", color: "bg-purple-50 text-purple-700 border-purple-200" },
-    { key: "arrived", label: "Прибуло", color: "bg-emerald-50 text-emerald-700 border-emerald-200" }, 
-  ],
-  tech_review: [
-    { key: "waiting_client", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "done_on_site", label: "На виїзді", color: "bg-blue-50 text-blue-700 border-blue-200" }, 
-    { key: "completed", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" }, 
-  ],
-  installation: [
-    { key: "waiting_start", label: "Очікуємо", color: "bg-slate-50 text-slate-500 border-slate-200" }, 
-    { key: "started", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" }, 
-    { key: "completed", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" }, 
-  ],
-  project_selector: [
-    { key: "selection_needed", label: "Треба обрати", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "selected", label: "Обрано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ]
-};
-
-const getMicroStageMeta = (stageGroupKey, statusKey, taskId) => {
-    let config = STATUS_CONFIG.default;
-    if (taskId === "project_approval") config = STATUS_CONFIG.project_selector;
-    else if (taskId === "tech_project") config = STATUS_CONFIG.tech_project_group;
-    else if (STATUS_CONFIG[stageGroupKey]) config = STATUS_CONFIG[stageGroupKey];
-    else if (stageGroupKey === "installation") config = STATUS_CONFIG.installation;
-
-    const item = config.find(i => i.key === statusKey);
-    return item || { label: statusKey || "Не почато", color: "bg-slate-50 text-slate-500 border-slate-200" };
-};
-
-const STAGE_ALIASES = {
-    'project_design': 'project',
-    'commercial_proposal': 'proposal',
-    'advance_payment': 'proposal', 
-    'tech_measurements': 'tech_review',
-    'mon_launch_station': 'monitoring_setup'
-};
+const getMicroStageMeta = (taskId, statusKey) => taskStatusMeta(taskId, statusKey);
 
 const useDebounce = (value, delay) => {
   const [debouncedValue, setDebouncedValue] = useState(value);
@@ -172,8 +85,8 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => {
 
 // --- MAIN PAGE ---
 export default function PartnershipPage() {
-    const { role } = useAuth();
-    const canDelete = role === 'admin' || role === 'super_admin' || role === 'office';
+    const { can } = useAuth();
+    const canDelete = can('partners', 'delete');   // Доступи → «Партнерство»
 
     const [searchTerm, setSearchTerm] = useState(() => sessionStorage.getItem('part_search') || "");
     const debouncedSearchTerm = useDebounce(searchTerm, 400);
@@ -224,19 +137,16 @@ export default function PartnershipPage() {
     const showToast = useCallback((message, type = 'success') => setToast({ isVisible: true, message, type }), []);
     const hideToast = useCallback(() => setToast(prev => ({ ...prev, isVisible: false })), []);
 
-    const getStageConfig = (val) => {
-        const normalizedKey = STAGE_ALIASES[val] || val;
-        const config = WORKFLOW_STAGES.find(s => s.value === normalizedKey);
-        return config || { label: val || 'Не визначено', color: 'bg-gray-50 text-gray-500 border border-gray-200' };
-    };
+    const getStageConfig = (val) => getStageGroup(val) || { label: val || 'Не визначено' };
 
+    const STATUS_BADGE = {
+        planning: 'bg-blue-500', in_progress: 'bg-yellow-500', on_hold: 'bg-orange-500',
+        completed: 'bg-teal-500', lost: 'bg-slate-500', cancelled: 'bg-red-500',
+    };
     const getStatusInfo = (status) => ({
-        'planning': { label: 'Планування', color: 'bg-blue-500' },
-        'in_progress': { label: 'В роботі', color: 'bg-yellow-500' },
-        'on_hold': { label: 'Призупинено', color: 'bg-orange-500' },
-        'completed': { label: 'Завершено', color: 'bg-teal-500' },
-        'cancelled': { label: 'Скасовано', color: 'bg-red-500' }
-    }[status] || { label: 'Невідомо', color: 'bg-gray-500' });
+        label: getObjectStatus(status).label,
+        color: STATUS_BADGE[status] || 'bg-gray-500',
+    });
 
     useEffect(() => {
         const identifyEmployee = async () => {
@@ -295,7 +205,7 @@ export default function PartnershipPage() {
                 }
             } else {
                 if (statusFilter === 'active') {
-                    query = query.in('status', ['planning', 'in_progress', 'on_hold']);
+                    query = query.in('status', ACTIVE_OBJECT_STATUSES);
                 } else if (statusFilter !== 'all') {
                     query = query.eq('status', statusFilter);
                 }
@@ -533,7 +443,7 @@ export default function PartnershipPage() {
                                     <div>
                                         <span className="text-xs font-bold text-slate-400 uppercase mb-2 block">Статус робіт</span>
                                         <div className="flex flex-wrap gap-2">
-                                            {[{ v: 'active', l: 'Активні' }, { v: 'all', l: 'Всі' }, { v: 'planning', l: 'План' }, { v: 'in_progress', l: 'Робота' }, { v: 'on_hold', l: 'Пауза' }, { v: 'completed', l: 'Фініш' }, { v: 'cancelled', l: 'Відміна' }].map((s) => (
+                                            {[{ v: 'active', l: 'Активні' }, { v: 'all', l: 'Всі' }, { v: 'planning', l: 'План' }, { v: 'in_progress', l: 'Робота' }, { v: 'on_hold', l: 'Пауза' }, { v: 'completed', l: 'Фініш' }, { v: 'lost', l: 'Втрачено' }, { v: 'cancelled', l: 'Відміна' }].map((s) => (
                                                 <button key={s.v} onClick={() => setStatusFilter(s.v)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${statusFilter === s.v ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{s.l}</button>
                                             ))}
                                         </div>
@@ -569,10 +479,10 @@ export default function PartnershipPage() {
                             {projects.map((project) => {
                                 const statusInfo = getStatusInfo(project.status);
                                 
-                                const currentMacroStageKey = project.workflow_stage || 'tech_review';
+                                const currentMacroStageKey = normalizeGroupKey(project.workflow_stage || 'tech_review');
                                 const currentMacroStageInfo = getStageConfig(currentMacroStageKey);
-                                
-                                const activeTasks = DETAILED_TASKS[currentMacroStageKey] || [];
+
+                                const activeTasks = tasksForStage(currentMacroStageKey);
                                 const stagesFromDb = project.project_stages || [];
 
                                 return (
@@ -629,7 +539,7 @@ export default function PartnershipPage() {
 
                                             {/* ДИНАМІЧНИЙ БЛОК: ЗАВДАННЯ ПОТОЧНОГО ЕТАПУ */}
                                             <div className="bg-slate-50/50 rounded-xl border border-slate-100 p-4 mt-auto">
-                                                <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-1.5 border-b border-slate-200 pb-2">
+                                                <h4 className="text-[11px] font-semibold text-slate-500 mb-3 flex items-center gap-1.5 border-b border-slate-200 pb-2">
                                                     <FaListUl className="text-indigo-400" /> 
                                                     Етап: <span className="text-indigo-600">{currentMacroStageInfo.label}</span>
                                                 </h4>
@@ -638,16 +548,12 @@ export default function PartnershipPage() {
                                                     {activeTasks.length > 0 ? activeTasks.map(taskTemplate => {
                                                         const stageRecord = stagesFromDb.find(s => s.stage_key === taskTemplate.id);
                                                         
-                                                        let currentStatus = stageRecord?.status;
-                                                        if (!currentStatus) {
-                                                            if (taskTemplate.id === "equipment" || taskTemplate.id === "project_design" || taskTemplate.id === "commercial_proposal") currentStatus = "waiting";
-                                                            else currentStatus = "todo";
-                                                        }
+                                                        let currentStatus = stageRecord?.status || taskDefaultStatus(taskTemplate.id);
                                                         if (taskTemplate.id === "project_approval" && !stageRecord?.status) {
                                                             currentStatus = "selection_needed";
                                                         }
 
-                                                        const meta = getMicroStageMeta(currentMacroStageKey, currentStatus, taskTemplate.id);
+                                                        const meta = getMicroStageMeta(taskTemplate.id, currentStatus);
                                                         
                                                         const stageEvents = project.workflow_events?.filter(
                                                             event => event.stage_key === taskTemplate.id && event.new_responsible !== null

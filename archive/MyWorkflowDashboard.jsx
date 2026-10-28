@@ -27,155 +27,25 @@ import { useAuth } from "./AuthProvider";
 import { useToast } from "./ui";
 import { ingestOfferInBackground } from "./utils/commercialOffer";
 import Layout from "./Layout";
+import {
+  TASKS, taskHasUploads, isTaskDone, getTaskLabel, taskStatusMeta, taskStatusOptions, normalizeTaskStatus,
+} from "./domain/stages";
 
 const WORKFLOW_UPLOADER_URL = "https://quiet-water-a1ad.kairosost38500.workers.dev";
 
 /* =====================================================================================
- * 1) Конфіг етапів / статусів
+ * 1) Етапи / статуси — зі спільного списку (src/domain/stages.js)
+ *    Тут лише тонкі обгортки під назви, якими користується ця сторінка.
  * ===================================================================================== */
 
-const STAGE_META = {
-  tech_review: "Проведення замірів",
-  project: "Проект",
-  proposal: "КП",
-  equipment: "Обладнання",
-  complectation: "Комплектація",
-  installation: "Монтаж",
-  grid_connection: "Мережа",
-  monitoring_setup: "Запуск",
-  project_design: "Розробка 3D візуалізації (Завантаження)",
-  project_approval: "Вибір та затвердження варіанту",
-  tech_project: "Технічний проект", 
-  commercial_proposal: "Комерційна пропозиція",
-  advance_payment: "Авансовий платіж",
-  inst_structure: "Монтаж конструкції",
-  inst_panels: "Встановлення панелей",
-  inst_cabling: "Прокладання траси DC",
-  inst_grounding: "Заземлення",
-  inst_inverter: "Підключення інвертора",
-  comp_protection: "Комплектація ел. захисту",
-};
+// Порядок підетапів для групування (старі — в кінці)
+const STAGE_ORDER = TASKS.map((t) => t.key);
 
-const STAGE_ORDER = [
-  "tech_review",
-  "project_design",
-  "project_approval",
-  "tech_project",
-  "commercial_proposal",
-  "advance_payment",
-  "equipment",
-  "complectation",
-  "comp_protection",
-  "inst_structure",
-  "inst_panels",
-  "inst_cabling",
-  "inst_grounding",
-  "inst_inverter",
-  "grid_connection",
-  "monitoring_setup",
-];
+const STAGES_WITH_UPLOADS = { has: (stageKey) => taskHasUploads(stageKey) };
 
-const STAGES_WITH_UPLOADS = new Set([
-  "commercial_proposal",
-  "tech_project",
-  "complectation",
-  "comp_protection",
-]);
-
-const STAGE_TO_GROUP = {
-  tech_review: "tech_review",
-  project: "project",
-  project_design: "project",
-  project_approval: "project_selector",
-  tech_project: "tech_project_group",
-  proposal: "proposal",
-  commercial_proposal: "proposal",
-  equipment: "equipment",
-  installation: "installation",
-  inst_structure: "installation",
-  inst_panels: "installation",
-  inst_cabling: "installation",
-  inst_grounding: "installation",
-  inst_inverter: "installation",
-  complectation: "default",
-  comp_protection: "default",
-  grid_connection: "default",
-  monitoring_setup: "default",
-  advance_payment: "default",
-};
-
-const STATUS_CONFIG = {
-  default: [
-    { key: "todo", label: "Не почато", color: "bg-slate-50 text-slate-600 border-slate-200" },
-    { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-    { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  tech_project_group: [
-    { key: "todo", label: "Не почато", color: "bg-slate-50 text-slate-600 border-slate-200" },
-    { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "in_progress", label: "В роботі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-    { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  proposal: [
-    { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "in_progress", label: "В процесі", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-    { key: "created", label: "Зроблено", color: "bg-blue-50 text-blue-700 border-blue-200" },
-    { key: "approved", label: "Погоджено", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  project: [
-    { key: "waiting", label: "Очікуємо", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "in_progress", label: "В розробці", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-    { key: "created", label: "Зроблено", color: "bg-blue-50 text-blue-700 border-blue-200" },
-    { key: "approved", label: "Затверджено", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  equipment: [
-    { key: "waiting", label: "Не розпочато", color: "bg-slate-50 text-slate-600 border-slate-200" },
-    { key: "ordered", label: "Замовлено", color: "bg-purple-50 text-purple-700 border-purple-200" },
-    { key: "arrived", label: "Прибуло", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  tech_review: [
-    { key: "waiting_client", label: "Очікуємо від клієнта", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "done_on_site", label: "Виконали на виїзді", color: "bg-blue-50 text-blue-700 border-blue-200" },
-    { key: "completed", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  project_selector: [
-    { key: "selection_needed", label: "Необхідно обрати", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { key: "selected", label: "Обрано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-  installation: [
-    { key: "waiting_start", label: "Очікуємо старт", color: "bg-slate-50 text-slate-600 border-slate-200" },
-    { key: "started", label: "Розпочато", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-    { key: "completed", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-    { key: "done", label: "Виконано", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  ],
-};
-
-const ALL_STATUS_LABELS = {
-  waiting: "Очікуємо",
-  waiting_start: "Очікуємо старт",
-  not_started: "Не розпочато",
-  started: "Розпочато",
-  created: "Зроблено",
-  arrived: "Прибуло",
-  done_on_site: "Виконали на виїзді",
-  completed: "Виконано",
-  todo: "Не почато",
-  in_progress: "В роботі",
-  done: "Виконано",
-  ordered: "Замовлено",
-  approved: "Погоджено",
-  waiting_client: "Очікуємо від клієнта",
-  selection_needed: "Очікує вибору",
-  selected: "Варіант обрано",
-  "виконано": "Виконано",
-  "завершено": "Завершено",
-};
-
-// --- СПИСОК СТАТУСІВ ОБ'ЄКТА, ЯКІ ОЗНАЧАЮТЬ "НЕАКТИВНИЙ" ---
-const INACTIVE_PROJECT_STATUSES = new Set([
-  "completed", "done", "cancelled", "paused", "closed", 
-  "скасовано", "завершено", "призупинено"
-]);
+// Завдання об'єктів у цих статусах не показуємо: об'єкт закритий, втрачений
+// або на паузі — працювати над ним зараз не треба.
+const INACTIVE_PROJECT_STATUSES = new Set(["completed", "cancelled", "lost", "on_hold"]);
 
 function normalizeStatus(status) {
   return String(status || "").trim().toLowerCase();
@@ -187,56 +57,24 @@ function normalizeEmployeeCustomId(val) {
   return Number.isFinite(n) ? n : null;
 }
 
-const DONE_BY_GROUP = {
-  default: new Set(["completed", "done", "виконано", "завершено"]),
-  tech_project_group: new Set(["done", "completed", "виконано"]),
-  project: new Set(["created", "approved", "completed", "done", "project_done", "project_approved", "kp_done", "kp_approved"]),
-  proposal: new Set(["created", "approved", "completed", "done", "kp_done", "kp_approved"]),
-  project_selector: new Set(["selected"]),
-  equipment: new Set(["arrived", "completed", "done"]),
-  installation: new Set(["completed", "done"]),
-  tech_review: new Set(["done_on_site", "completed", "done", "виконано", "завершено"]),
-};
-
 function isCompletedForStage(stageKey, status) {
-  const s = normalizeStatus(status);
-  const groupKey = STAGE_TO_GROUP[stageKey] || "default";
-  const set = DONE_BY_GROUP[groupKey] || DONE_BY_GROUP.default;
-  return set.has(s);
+  return isTaskDone(stageKey, status);
 }
 
 function getStageLabel(stageKey) {
-  return STAGE_META[stageKey] || stageKey;
+  return getTaskLabel(stageKey);
 }
 
 function getStatusMetaByStage(stageKey, statusKey) {
-  const groupKey = STAGE_TO_GROUP[stageKey] || "default";
-  const config = STATUS_CONFIG[groupKey] || STATUS_CONFIG.default;
-  const found = config.find((s) => s.key === statusKey);
-  if (found) return found;
-
-  return {
-    key: statusKey,
-    label: ALL_STATUS_LABELS[statusKey] || statusKey || "—",
-    color: "bg-slate-100 text-slate-700 border-slate-200",
-  };
+  return taskStatusMeta(stageKey, statusKey);
 }
 
 function getStatusOptionsByStage(stageKey, currentStatus) {
-  const groupKey = STAGE_TO_GROUP[stageKey] || "default";
-  let options = STATUS_CONFIG[groupKey] || STATUS_CONFIG.default;
-
-  if (currentStatus && !options.some((o) => o.key === currentStatus)) {
-    options = [
-      {
-        key: currentStatus,
-        label: ALL_STATUS_LABELS[currentStatus] || currentStatus,
-        color: "bg-slate-100 text-slate-700 border-slate-200",
-      },
-      ...options,
-    ];
+  const options = taskStatusOptions(stageKey);
+  const current = normalizeTaskStatus(stageKey, currentStatus);
+  if (current && !options.some((o) => o.key === current)) {
+    return [taskStatusMeta(stageKey, current), ...options];
   }
-
   return options;
 }
 
@@ -278,7 +116,7 @@ async function resolveActorName({ user, employee }) {
   return actorName;
 }
 
-async function uploadWorkflowFiles({ files, installationId, stageKey }) {
+async function uploadWorkflowFiles({ files, installationId, stageKey, uploadedBy }) {
   if (!files || files.length === 0) return { links: [], fileIds: [] };
 
   const fd = new FormData();
@@ -286,6 +124,7 @@ async function uploadWorkflowFiles({ files, installationId, stageKey }) {
   fd.append("object_number", String(installationId));
   fd.append("doc_type", "Файли етапу");
   if (stageKey) fd.append("stage_key", stageKey);
+  if (uploadedBy) fd.append("uploaded_by", uploadedBy);
 
   const res = await fetch(`${WORKFLOW_UPLOADER_URL}/workflow/upload`, {
     method: "POST",
@@ -534,7 +373,7 @@ function HistoryTimeline({ logs, stageKey, getEmployeeName }) {
             <div key={log.id} className="flex gap-3 relative group">
               <div className="absolute left-[15px] top-8 bottom-[-20px] w-0.5 bg-slate-100 group-last:hidden" />
               <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center shrink-0 z-10 border border-slate-200 shadow-sm">
-                <span className="text-[10px] font-black text-slate-600 uppercase">
+                <span className="text-[11px] font-semibold text-slate-600">
                   {log.actor?.[0] || "U"}
                 </span>
               </div>
@@ -733,7 +572,7 @@ function QuickStageModal({
       <div className="bg-white w-full max-w-2xl h-[92vh] sm:h-auto sm:max-h-[92vh] sm:rounded-2xl rounded-t-2xl flex flex-col shadow-2xl overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex justify-between items-start bg-white shrink-0">
           <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+            <div className="text-[11px] font-semibold text-slate-400 mb-1">
               Швидке оновлення етапу
             </div>
             <h3 className="font-extrabold text-lg text-slate-900 leading-tight">{item.stage_label}</h3>
@@ -1064,7 +903,7 @@ export default function MyWorkflowDashboard() {
 
             stage_key: s.stage_key,
             stage_label: getStageLabel(s.stage_key),
-            status: s.status || "todo",
+            status: normalizeTaskStatus(s.stage_key, s.status) || "todo",
             updated_at: s.updated_at,
             responsible_emp_custom_id: s.responsible_emp_custom_id,
           };
@@ -1191,6 +1030,7 @@ export default function MyWorkflowDashboard() {
           files: payload.rawFiles,
           installationId: quickItem.installation_custom_id,
           stageKey: quickItem.stage_key,
+          uploadedBy: employee?.name,
         });
         uploadedLinks = up.links || [];
         uploadedFileIds = up.fileIds || [];
@@ -1273,14 +1113,14 @@ export default function MyWorkflowDashboard() {
     <Layout>
       <div className="min-h-full bg-slate-50">
         <div className="max-w-[1500px] mx-auto p-4 sm:p-6 space-y-5">
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm">
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div>
-                <h1 className="text-2xl font-extrabold text-slate-900 flex items-center gap-2">
+                <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 flex items-center gap-2">
                   <FaClipboardList className="text-indigo-600" />
                   Мої завдання та етапи
                 </h1>
-                <p className="text-sm text-slate-600 mt-1">
+                <p className="hidden sm:block text-sm text-slate-600 mt-1">
                   Показані лише активні завдання для проектів, які знаходяться в роботі.
                 </p>
               </div>
@@ -1295,18 +1135,18 @@ export default function MyWorkflowDashboard() {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-5">
-              <div className="rounded-xl border border-slate-100 p-4 bg-slate-50 flex flex-col justify-center">
-                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Активні об’єкти</div>
-                <div className="text-3xl font-black text-slate-800">{stats.objects}</div>
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 mt-3 sm:mt-5">
+              <div className="rounded-xl border border-slate-100 px-3 py-2 sm:p-4 bg-slate-50 flex flex-col justify-center">
+                <div className="text-[11px] sm:text-xs font-semibold sm:font-bold sm:uppercase sm:tracking-wider text-slate-400 mb-0.5 sm:mb-1">Активні об’єкти</div>
+                <div className="text-xl sm:text-3xl font-black text-slate-800">{stats.objects}</div>
               </div>
-              <div className="rounded-xl border border-slate-100 p-4 bg-slate-50 flex flex-col justify-center">
-                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Очікують виконання</div>
-                <div className="text-3xl font-black text-indigo-600">{stats.assignments}</div>
+              <div className="rounded-xl border border-slate-100 px-3 py-2 sm:p-4 bg-slate-50 flex flex-col justify-center">
+                <div className="text-[11px] sm:text-xs font-semibold sm:font-bold sm:uppercase sm:tracking-wider text-slate-400 mb-0.5 sm:mb-1">Очікують виконання</div>
+                <div className="text-xl sm:text-3xl font-black text-indigo-600">{stats.assignments}</div>
               </div>
             </div>
 
-            <div className="mt-5">
+            <div className="mt-3 sm:mt-5">
               <div className="relative w-full md:max-w-xl">
                 <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
@@ -1368,7 +1208,7 @@ export default function MyWorkflowDashboard() {
                             <div className="flex items-start justify-between gap-3 mb-3">
                               <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-md">
                                 <FaHardHat className="text-slate-400 text-[10px]" />
-                                <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">
+                                <span className="text-[11px] font-semibold text-slate-600">
                                   Об'єкт #{item.installation_custom_id}
                                 </span>
                               </div>
@@ -1389,10 +1229,10 @@ export default function MyWorkflowDashboard() {
                             </button>
 
                             <div className="space-y-1.5 mb-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                              <div className="flex items-center gap-2 text-xs">
-                                <FaUserTie className="text-slate-400" />
-                                <span className="text-slate-500 font-medium w-16">Клієнт:</span>
-                                <span className="font-bold text-slate-700 truncate">{item.client_name || "—"}</span>
+                              <div className="flex items-start gap-2 text-xs">
+                                <FaUserTie className="text-slate-400 shrink-0 mt-0.5" />
+                                <span className="text-slate-500 font-medium w-16 shrink-0">Клієнт:</span>
+                                <span className="font-bold text-slate-700 min-w-0 break-words">{item.client_name || "—"}</span>
                               </div>
                               <div className="flex items-center gap-2 text-xs">
                                 <FaClock className="text-slate-400" />

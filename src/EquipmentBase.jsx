@@ -1,310 +1,242 @@
-import React, { useEffect, useState } from "react";
-import { supabase } from "./supabaseClient";
+// =====================================================================
+//  Прайс обладнання.
+//
+//  Раніше це був окремий довідник (таблиця equipments) зі своїми
+//  назвами й ручним статусом «в наявності». Тепер це вигляд на
+//  складську номенклатуру: ті самі моделі, що на складі й в
+//  обладнанні об'єктів, наявність — з реальних залишків, а тут
+//  ведеться лише ціна продажу (nomenclature.sale_price).
+// =====================================================================
+
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { FaPlus, FaPen, FaCheck, FaTimes, FaBoxes } from 'react-icons/fa';
+
+import { supabase } from './supabaseClient';
+import { useAuth } from './AuthProvider';
+import {
+    T, Btn, IconBtn, Chip, SearchInput, Segmented, EmptyState, Skeleton, Tip, useToast, humanError, num,
+} from './ui';
+import { NomenclatureModal } from './pages/NomenclatureModal';
+import { EQUIPMENT_GROUPS, loadEquipmentCatalog } from './utils/equipmentCatalog';
+import { CURRENCIES, formatMoney } from './domain/objects';
 
 export default function EquipmentBase() {
-  const [equipments, setEquipments] = useState([]);
-  const [filteredEquipments, setFilteredEquipments] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [editingId, setEditingId] = useState(null);
+    const toast = useToast();
+    // Змінювати ціни продажу — Доступи → «Прайс обладнання»
+    const isOffice = useAuth().can('price', 'edit');
 
-  const [filters, setFilters] = useState({
-    type: "всі",
-    phase: "всі",
-    search: ""
-  });
-  
-  // Додано power_kw
-  const [formData, setFormData] = useState({
-    brand: "",
-    model: "",
-    price: "",
-    power_kw: "", // Нове поле
-    phase_count: "1-фазний",
-    system_type: "звичайний гібрид",
-    status: "в наявності"
-  });
+    const [items, setItems] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [group, setGroup] = useState('all');
+    const [search, setSearch] = useState('');
+    const [editing, setEditing] = useState(null);          // { id, price, currency }
+    const [saving, setSaving] = useState(false);
+    const [modal, setModal] = useState({ open: false, item: null });
 
-  useEffect(() => {
-    fetchEquipments();
-  }, []);
+    const load = useCallback(async () => {
+        setLoading(true);
+        try {
+            setItems(await loadEquipmentCatalog({ withStock: true }));
+        } catch (e) {
+            toast(humanError(e), 'error');
+        } finally {
+            setLoading(false);
+        }
+    }, [toast]);
 
-  useEffect(() => {
-    let result = equipments;
-    if (filters.type !== "всі") result = result.filter(item => item.system_type === filters.type);
-    if (filters.phase !== "всі") result = result.filter(item => item.phase_count === filters.phase);
-    if (filters.search) {
-      const q = filters.search.toLowerCase();
-      result = result.filter(item => item.brand.toLowerCase().includes(q) || item.model.toLowerCase().includes(q));
-    }
-    setFilteredEquipments(result);
-  }, [filters, equipments]);
+    useEffect(() => { load(); }, [load]);
 
-  async function fetchEquipments() {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("equipments")
-      .select("*")
-      .order("brand", { ascending: true });
-    
-    if (!error) {
-      setEquipments(data || []);
-      setFilteredEquipments(data || []);
-    }
-    setLoading(false);
-  }
+    const counts = useMemo(() => {
+        const c = { all: items.length };
+        items.forEach(i => { c[i.kind] = (c[i.kind] || 0) + 1; });
+        return c;
+    }, [items]);
 
-  const handleTypeChange = (e) => {
-    const newType = e.target.value;
-    let newPhase = formData.phase_count;
-    
-    if (newType === 'акб' || newType === 'панелі') {
-      newPhase = '—';
-    } else if (newPhase === '—') {
-      newPhase = '1-фазний';
-    }
-    
-    setFormData({ ...formData, system_type: newType, phase_count: newPhase });
-  };
+    const visible = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        return items
+            .filter(i => group === 'all' || i.kind === group)
+            .filter(i => !q || `${i.label} ${i.sku || ''} ${i.categoryPath}`.toLowerCase().includes(q));
+    }, [items, group, search]);
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    
-    // Перетворюємо порожній рядок на null або залишаємо числом
-    const payload = { ...formData, power_kw: formData.power_kw ? parseFloat(formData.power_kw) : 0 };
+    const startEdit = (i) => setEditing({ id: i.id, price: i.sale_price ?? '', currency: i.sale_currency || 'USD' });
 
-    if (editingId) {
-      const { error } = await supabase.from("equipments").update(payload).eq("id", editingId);
-      if (!error) setEditingId(null);
-    } else {
-      await supabase.from("equipments").insert([payload]);
-    }
-    
-    setFormData({ brand: "", model: "", price: "", power_kw: "", phase_count: "1-фазний", system_type: "звичайний гібрид", status: "в наявності" });
-    fetchEquipments();
-  }
+    const savePrice = async () => {
+        const raw = String(editing.price).trim();
+        const price = raw === '' ? null : Number(raw);
+        if (price != null && (!Number.isFinite(price) || price < 0)) {
+            toast('Вкажіть ціну числом', 'error');
+            return;
+        }
+        setSaving(true);
+        const patch = { sale_price: price, sale_currency: editing.currency, sale_price_updated_at: new Date().toISOString() };
+        const { error } = await supabase.from('nomenclature').update(patch).eq('id', editing.id);
+        setSaving(false);
+        if (error) { toast(humanError(error), 'error'); return; }
+        setItems(prev => prev.map(i => i.id === editing.id ? { ...i, ...patch } : i));
+        setEditing(null);
+        toast('Ціну збережено');
+    };
 
-  async function deleteItem(id) {
-    if (window.confirm("Видалити цю позицію назавжди?")) {
-      const { error } = await supabase.from("equipments").delete().eq("id", id);
-      if (!error) fetchEquipments();
-    }
-  }
-
-  const startEdit = (item) => {
-    setEditingId(item.id);
-    setFormData({
-      brand: item.brand, model: item.model, price: item.price, power_kw: item.power_kw || "",
-      phase_count: item.phase_count, system_type: item.system_type, status: item.status
-    });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  return (
-    <div style={styles.container}>
-      <header style={styles.header}>
-        <div>
-          <h1 style={styles.h1}>📦 База обладнання</h1>
-          <p style={styles.subtitle}>Управління прайс-листами та характеристиками</p>
-        </div>
-        <button onClick={() => window.history.back()} style={styles.backBtn}>← Назад до КП</button>
-      </header>
-
-      <section style={styles.card}>
-        <h3 style={styles.cardTitle}>{editingId ? "📝 Редагування позиції" : "➕ Додати нове обладнання"}</h3>
-        <form onSubmit={handleSubmit} style={styles.formGrid}>
-          
-          <Field label="Категорія (Тип)">
-            <select value={formData.system_type} onChange={handleTypeChange} style={styles.input}>
-              <option value="звичайний гібрид">Інвертор: Звичайний гібрид</option>
-              <option value="високовольтний">Інвертор: Високовольтний</option>
-              <option value="мережевий">Інвертор: Мережевий</option>
-              <option value="акб">Акумулятор (АКБ)</option>
-              <option value="панелі">Сонячні панелі</option>
-            </select>
-          </Field>
-
-          <Field label="Бренд">
-            <input value={formData.brand} onChange={e => setFormData({...formData, brand: e.target.value})} required style={styles.input} placeholder="Deye, Jinko..."/>
-          </Field>
-          
-          <Field label="Модель">
-            <input value={formData.model} onChange={e => setFormData({...formData, model: e.target.value})} required style={styles.input} placeholder="Назва моделі"/>
-          </Field>
-          
-          <Field label="Потужність (кВт)">
-            <input 
-              type="number" step="0.001" 
-              value={formData.power_kw} 
-              onChange={e => setFormData({...formData, power_kw: e.target.value})} 
-              required style={styles.input} 
-              placeholder="Напр. 6.0 або 0.545"
-            />
-          </Field>
-
-          <Field label="Ціна (USD, $)">
-            <input type="number" step="0.01" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required style={styles.input} placeholder="0.00"/>
-          </Field>
-          
-          <Field label="Фазність">
-            <select 
-              value={formData.phase_count} 
-              onChange={e => setFormData({...formData, phase_count: e.target.value})} 
-              style={{...styles.input, background: formData.phase_count === '—' ? '#F2F4F7' : '#fff'}}
-              disabled={formData.system_type === 'акб' || formData.system_type === 'панелі'}
-            >
-              <option value="1-фазний">1-фазний</option>
-              <option value="3-фазний">3-фазний</option>
-              <option value="—">— (не застосовується)</option>
-            </select>
-          </Field>
-
-          <Field label="Статус наявності">
-            <select value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})} style={styles.input}>
-              <option value="в наявності">В наявності</option>
-              <option value="очікуємо">Очікуємо постачання</option>
-              <option value="під замовлення">Під замовлення</option>
-              <option value="немає">Немає на складі</option>
-            </select>
-          </Field>
-
-          <div style={{display: 'flex', gap: 12, gridColumn: '1 / -1', marginTop: 12}}>
-            <button type="submit" style={styles.primaryBtn}>{editingId ? "Зберегти зміни" : "Додати в базу"}</button>
-            {editingId && (
-              <button type="button" onClick={() => {setEditingId(null); setFormData({brand:"", model:"", price:"", power_kw: "", phase_count:"1-фазний", system_type:"звичайний гібрид", status:"в наявності"})}} style={styles.secondaryBtn}>Скасувати</button>
+    // Залишок: вільно / усього на складах
+    const stockCell = (i) => (i.stock.onHand > 0 ? (
+        <span className="font-semibold text-slate-900 tabular-nums">
+            {num(i.stock.available)}
+            {i.stock.available !== i.stock.onHand && (
+                <span className="font-normal text-slate-400"> / {num(i.stock.onHand)}</span>
             )}
-          </div>
-        </form>
-      </section>
+        </span>
+    ) : <Chip tone="neutral">немає</Chip>);
 
-      <section style={{...styles.card, padding: '16px 24px', marginBottom: 24}}>
-        <div style={{display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap'}}>
-          <span style={{fontWeight: 600, fontSize: 14, color: '#344054'}}>Фільтри:</span>
-          <input placeholder="🔍 Пошук бренду чи моделі..." style={{...styles.input, width: '280px'}} value={filters.search} onChange={e => setFilters({...filters, search: e.target.value})}/>
-          <select style={styles.input} value={filters.type} onChange={e => setFilters({...filters, type: e.target.value})}>
-            <option value="всі">Усі категорії</option>
-            <option value="звичайний гібрид">Гібридні інвертори</option>
-            <option value="високовольтний">Високовольтні інвертори</option>
-            <option value="мережевий">Мережеві інвертори</option>
-            <option value="акб">АКБ</option>
-            <option value="панелі">Панелі</option>
-          </select>
-          <select style={styles.input} value={filters.phase} onChange={e => setFilters({...filters, phase: e.target.value})}>
-            <option value="всі">Усі фази</option>
-            <option value="1-фазний">1-фазний</option>
-            <option value="3-фазний">3-фазний</option>
-            <option value="—">Без фаз</option>
-          </select>
-          <button style={styles.ghostBtn} onClick={() => setFilters({type: 'всі', phase: 'всі', search: ''})}>Скинути</button>
+    // Ціна продажу: кнопка, а під час редагування — поле, валюта і «зберегти»
+    const priceCell = (i, isEditing) => (isEditing ? (
+        <div className="flex items-center justify-end gap-1.5">
+            <input
+                autoFocus type="number" min="0" step="0.01"
+                className={`${T.input} h-9 w-28 text-right tabular-nums`}
+                value={editing.price}
+                onChange={e => setEditing(ed => ({ ...ed, price: e.target.value }))}
+                onKeyDown={e => {
+                    if (e.key === 'Enter') savePrice();
+                    if (e.key === 'Escape') setEditing(null);
+                }}
+            />
+            <select
+                className={`${T.select} h-9 w-16 px-2`}
+                value={editing.currency}
+                onChange={e => setEditing(ed => ({ ...ed, currency: e.target.value }))}
+            >
+                {CURRENCIES.map(c => <option key={c.key} value={c.key}>{c.symbol}</option>)}
+            </select>
+            <IconBtn variant="ok" icon={FaCheck} label="Зберегти" onClick={savePrice} disabled={saving} />
+            <IconBtn variant="ghost" icon={FaTimes} label="Скасувати" onClick={() => setEditing(null)} />
         </div>
-      </section>
+    ) : (
+        <button
+            type="button"
+            disabled={!isOffice}
+            onClick={() => startEdit(i)}
+            className={`text-[14px] font-bold tabular-nums ${i.sale_price != null ? 'text-emerald-700' : 'text-slate-400'} ${isOffice ? 'hover:underline' : 'cursor-default'}`}
+        >
+            {i.sale_price != null ? formatMoney(i.sale_price, i.sale_currency) : 'ціну не вказано'}
+        </button>
+    ));
 
-      <section style={{...styles.card, padding: 0, overflow: 'hidden'}}>
-        <div style={{padding: '20px 24px', borderBottom: '1px solid #EAECF0', background: '#fff'}}>
-          <h3 style={{margin: 0, fontSize: 16, color: '#101828', fontWeight: 600}}>Каталог обладнання <span style={{color: '#667085', fontWeight: 400}}>({filteredEquipments.length})</span></h3>
-        </div>
-        
-        {loading ? (
-          <div style={{padding: 60, textAlign: 'center', color: '#667085'}}>🔄 Завантаження даних...</div>
-        ) : (
-          <div style={{overflowX: 'auto'}}>
-            <table style={styles.table}>
-              <thead>
-                <tr style={styles.tableHeader}>
-                  <th style={styles.th}>Бренд</th>
-                  <th style={styles.th}>Модель</th>
-                  <th style={styles.th}>Характеристики</th>
-                  <th style={styles.th}>Ціна</th>
-                  <th style={styles.th}>Статус</th>
-                  <th style={{...styles.th, textAlign: 'right'}}>Дії</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredEquipments.map(item => (
-                  <tr key={item.id} style={styles.tableRow} className="hover-row">
-                    <td style={{...styles.td, fontWeight: 600, color: '#101828'}}>{item.brand}</td>
-                    <td style={{...styles.td, color: '#344054', fontWeight: 500}}>{item.model}</td>
-                    <td style={styles.td}>
-                      <div style={{fontSize: 13, color: '#101828', fontWeight: 500, textTransform: 'capitalize'}}>{item.system_type}</div>
-                      <div style={{fontSize: 12, color: '#667085', marginTop: 2}}>
-                        {item.power_kw ? <strong style={{color: '#344054'}}>{item.power_kw} кВт</strong> : ''}
-                        {item.power_kw && item.phase_count !== '—' ? ' • ' : ''}
-                        {item.phase_count !== '—' ? item.phase_count : ''}
-                      </div>
-                    </td>
-                    <td style={{...styles.td, fontWeight: 700, color: '#039855', fontSize: 15}}>{fmtMoney(item.price)} $</td>
-                    <td style={styles.td}><StatusBadge status={item.status} /></td>
-                    <td style={{...styles.td, textAlign: 'right'}}>
-                      <button onClick={() => startEdit(item)} style={styles.actionBtn} title="Редагувати">✏️</button>
-                      <button onClick={() => deleteItem(item.id)} style={{...styles.actionBtn, marginLeft: 8}} title="Видалити">🗑️</button>
-                    </td>
-                  </tr>
-                ))}
-                {filteredEquipments.length === 0 && (
-                  <tr><td colSpan="6" style={{padding: '60px 20px', textAlign: 'center', color: '#667085'}}>Нічого не знайдено.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+    const specLine = (i) => [
+        i.power_kw ? `${num(i.power_kw)} кВт` : null,
+        i.phases || null,
+        i.technical_characteristics || null,
+    ].filter(Boolean).join(' · ');
 
-      <style>{`.hover-row:hover { background-color: #F9FAFB; }`}</style>
-    </div>
-  );
+    return (
+        <>
+            <div className="p-3 sm:p-5 space-y-4 max-w-[1400px] w-full mx-auto pb-safe">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-[13px] text-slate-500">
+                        Ціни продажу моделей обладнання
+                        <Tip width={300} text="Ті самі моделі, що на складі й в обладнанні об'єктів. Наявність — з реальних залишків складу, тут ведеться лише ціна продажу." />
+                    </div>
+                    {isOffice && (
+                        <Btn variant="accent" icon={FaPlus} onClick={() => setModal({ open: true, item: null })}>
+                            Нова модель
+                        </Btn>
+                    )}
+                </div>
+
+                <div className={`${T.card} p-2.5 space-y-2.5`}>
+                    <SearchInput value={search} onChange={setSearch} placeholder="Модель, бренд або SKU…" />
+                    <div className="overflow-x-auto">
+                        <Segmented
+                            value={group}
+                            onChange={setGroup}
+                            options={[
+                                { value: 'all', label: `Усе · ${counts.all || 0}` },
+                                ...EQUIPMENT_GROUPS.map(g => ({ value: g.key, label: `${g.label} · ${counts[g.key] || 0}` })),
+                            ]}
+                        />
+                    </div>
+                </div>
+
+                <div className={`${T.card} overflow-hidden`}>
+                    {loading ? <Skeleton rows={8} /> : visible.length === 0 ? (
+                        <EmptyState icon={FaBoxes} title="Нічого не знайдено" />
+                    ) : (
+                        <>
+                            {/* Телефон і планшет: картки — модель, характеристики, залишок і ціна видно одразу */}
+                            <ul className="lg:hidden divide-y divide-slate-100">
+                                {visible.map(i => {
+                                    const isEditing = editing?.id === i.id;
+                                    return (
+                                        <li key={i.id} className="px-3 py-3">
+                                            <div className="flex items-start gap-2">
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="text-[14px] font-semibold text-slate-900 leading-snug break-words">{i.label}</div>
+                                                    <div className="text-[12px] text-slate-400">{i.categoryPath}</div>
+                                                    {specLine(i) && <div className="text-[12.5px] text-slate-600 mt-0.5">{specLine(i)}</div>}
+                                                </div>
+                                                {isOffice && !isEditing && (
+                                                    <IconBtn icon={FaPen} label="Картка моделі" onClick={() => setModal({ open: true, item: i })} />
+                                                )}
+                                            </div>
+                                            <div className="mt-2 flex items-center justify-between gap-2 flex-wrap">
+                                                <span className="text-[12.5px] text-slate-500 inline-flex items-center gap-1.5">
+                                                    На складі {stockCell(i)}
+                                                </span>
+                                                {priceCell(i, isEditing)}
+                                            </div>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+
+                            <div className="hidden lg:block overflow-x-auto">
+                                <table className="w-full text-left">
+                                    <thead>
+                                        <tr className="border-b border-slate-200">
+                                            <th className={T.th}>Модель</th>
+                                            <th className={T.th}>Характеристики</th>
+                                            <th className={`${T.th} text-right`}>На складі</th>
+                                            <th className={`${T.th} text-right`}>Ціна продажу</th>
+                                            <th className={T.th} />
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {visible.map(i => {
+                                            const isEditing = editing?.id === i.id;
+                                            return (
+                                                <tr key={i.id} className="hover:bg-slate-50/60">
+                                                    <td className={T.td}>
+                                                        <div className="font-semibold text-slate-900">{i.label}</div>
+                                                        <div className="text-[11.5px] text-slate-400">{i.categoryPath}</div>
+                                                    </td>
+                                                    <td className={`${T.td} text-slate-600`}>{specLine(i) || '—'}</td>
+                                                    <td className={`${T.td} text-right tabular-nums`}>{stockCell(i)}</td>
+                                                    <td className={`${T.td} text-right`}>{priceCell(i, isEditing)}</td>
+                                                    <td className={`${T.td} text-right w-10`}>
+                                                        {isOffice && !isEditing && (
+                                                            <IconBtn icon={FaPen} label="Картка моделі" onClick={() => setModal({ open: true, item: i })} />
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {modal.open && (
+                <NomenclatureModal
+                    isOpen={modal.open}
+                    editingItem={modal.item}
+                    onClose={() => setModal({ open: false, item: null })}
+                    onSuccess={() => { setModal({ open: false, item: null }); load(); }}
+                    onPickExisting={() => { setModal({ open: false, item: null }); load(); }}
+                />
+            )}
+        </>
+    );
 }
-
-const fmtMoney = (n) => {
-  if (!n) return "0.00";
-  return Number(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-};
-
-function Field({ label, children }) {
-  return (
-    <label style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-      <span style={{fontSize: 13, fontWeight: 600, color: '#344054'}}>{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function StatusBadge({ status }) {
-  const colors = {
-    'в наявності': { bg: '#ECFDF3', text: '#027A48', border: '#ABEFC6' },
-    'очікуємо': { bg: '#FFFAEB', text: '#B54708', border: '#FEDF89' },
-    'під замовлення': { bg: '#F9F5FF', text: '#6941C6', border: '#D6BBFB' },
-    'немає': { bg: '#FEF3F2', text: '#B42318', border: '#FECDCA' }
-  };
-  const style = colors[status] || { bg: '#F2F4F7', text: '#344054', border: '#EAECF0' };
-  
-  return (
-    <span style={{
-      padding: '4px 10px', borderRadius: '16px', fontSize: 12, fontWeight: 600,
-      background: style.bg, color: style.text, border: `1px solid ${style.border}`,
-      whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 4
-    }}>
-      <div style={{width: 6, height: 6, borderRadius: '50%', background: style.text}}></div>
-      {status}
-    </span>
-  );
-}
-
-const styles = {
-  container: { padding: "40px 20px", maxWidth: "1200px", margin: "0 auto", fontFamily: "'Inter', system-ui, sans-serif", background: '#F2F4F7', minHeight: '100vh' },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "32px" },
-  h1: { margin: 0, fontSize: 24, color: '#101828', fontWeight: 700, letterSpacing: '-0.02em' },
-  subtitle: { color: '#475467', margin: '6px 0 0 0', fontSize: 14 },
-  backBtn: { background: "#fff", border: "1px solid #D0D5DD", padding: "10px 16px", borderRadius: "8px", cursor: "pointer", fontWeight: 600, color: '#344054', boxShadow: '0 1px 2px rgba(16,24,40,0.05)', transition: 'all 0.2s' },
-  card: { background: "#fff", padding: "24px", borderRadius: "12px", border: '1px solid #EAECF0', boxShadow: "0 1px 3px rgba(16,24,40,0.1)", marginBottom: "24px" },
-  cardTitle: { marginTop: 0, marginBottom: 20, fontSize: 18, color: '#101828', fontWeight: 600 },
-  formGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "20px" },
-  input: { padding: "10px 14px", borderRadius: "8px", border: "1px solid #D0D5DD", outline: "none", fontSize: 14, fontFamily: 'inherit', color: '#101828', boxShadow: '0 1px 2px rgba(16,24,40,0.05)', transition: 'border-color 0.2s', width: '100%', boxSizing: 'border-box' },
-  primaryBtn: { background: "#1E6FEB", color: "#fff", padding: "10px 20px", borderRadius: "8px", border: "none", cursor: "pointer", fontWeight: "600", fontSize: 14, boxShadow: '0 1px 2px rgba(16,24,40,0.05)' },
-  secondaryBtn: { background: "#fff", color: "#344054", padding: "10px 20px", borderRadius: "8px", border: "1px solid #D0D5DD", cursor: "pointer", fontSize: 14, fontWeight: "600" },
-  ghostBtn: { background: 'none', border: 'none', color: '#475467', cursor: 'pointer', fontSize: 14, fontWeight: 600, padding: '8px 12px', borderRadius: '6px' },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 14 },
-  tableHeader: { background: "#F9FAFB", borderBottom: '1px solid #EAECF0' },
-  th: { padding: '12px 24px', textAlign: 'left', fontWeight: 500, color: '#475467', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' },
-  tableRow: { borderBottom: "1px solid #EAECF0", transition: 'background 0.2s' },
-  td: { padding: '16px 24px', verticalAlign: 'middle' },
-  actionBtn: { background: "#fff", border: "1px solid #EAECF0", cursor: "pointer", fontSize: 14, padding: '8px', borderRadius: '6px', transition: 'all 0.2s', boxShadow: '0 1px 2px rgba(16,24,40,0.05)' }
-};

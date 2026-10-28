@@ -6,24 +6,13 @@ import {
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
 import Layout from "./Layout";
-import { T, Chip, Card, EmptyState, Skeleton, useToast, humanError } from "./ui";
-
-const STATUS_INFO = {
-  planning: { label: 'Планування', tone: 'info' },
-  in_progress: { label: 'Виконується', tone: 'accent' },
-  on_hold: { label: 'Призупинено', tone: 'warn' },
-  completed: { label: 'Завершено', tone: 'ok' },
-  cancelled: { label: 'Скасовано', tone: 'danger' },
-};
-
-const PAYMENT_INFO = {
-  pending: { label: 'Очікує оплати', tone: 'warn' },
-  partial: { label: 'Часткова оплата', tone: 'info' },
-  paid: { label: 'Оплачено', tone: 'ok' },
-  overdue: { label: 'Прострочено', tone: 'danger' },
-};
+import { T, Chip, Card, EmptyState, Skeleton, Linkify, useToast, humanError } from "./ui";
+import { getObjectStatus, PAYMENT_STATUSES, canSeeMoney } from "./domain/objects";
+import { useAuth } from "./AuthProvider";
+import ClientDeals from "./pages/ClientDeals";
 
 export default function ClientDetailsPage() {
+  const auth = useAuth();
   const { id } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
@@ -43,7 +32,7 @@ export default function ClientDetailsPage() {
 
       const { data: objData, error: objError } = await supabase
         .from('installations')
-        .select('custom_id, name, status, workflow_stage, capacity_kw, total_cost, paid_amount, payment_status, created_at')
+        .select('custom_id, name, status, workflow_stage, capacity_kw, payment_status, responsible_emp_id, currency, created_at')
         .eq('client_id', clientData.custom_id)
         .order('created_at', { ascending: false });
       if (objError) throw objError;
@@ -119,8 +108,8 @@ export default function ClientDetailsPage() {
           </div>
 
           {client.notes && (
-            <div className={`${T.inset} px-3 py-2.5 mt-3 text-[12.5px] text-slate-600 whitespace-pre-wrap`}>
-              {client.notes}
+            <div className={`${T.inset} px-3 py-2.5 mt-3 text-[12.5px] text-slate-600 whitespace-pre-wrap break-words`}>
+              <Linkify>{client.notes}</Linkify>
             </div>
           )}
         </Card>
@@ -138,8 +127,9 @@ export default function ClientDetailsPage() {
           ) : (
             <div className="divide-y divide-slate-100">
               {objects.map(o => {
-                const statusInfo = STATUS_INFO[o.status] || { label: o.status || '—', tone: 'neutral' };
-                const paymentInfo = PAYMENT_INFO[o.payment_status] || null;
+                const statusInfo = getObjectStatus(o.status);
+                // Стан оплати — лише по угодах, гроші яких людині відкриті
+                const paymentInfo = canSeeMoney(auth, o) ? PAYMENT_STATUSES[o.payment_status] || null : null;
                 return (
                   <a key={o.custom_id} href={`#/project/${o.custom_id}`} target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors">
@@ -165,6 +155,9 @@ export default function ClientDetailsPage() {
             </div>
           )}
         </Card>
+
+        {/* Гроші, резерв і продажі — напряму на клієнта, без об'єкта */}
+        <ClientDeals client={client} objects={objects} />
       </div>
     </Layout>
   );

@@ -1,12 +1,22 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { useAuth } from "./AuthProvider";
+import { useToast } from "./ui";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  FaSearch, FaPlus, FaEllipsisV, FaPhone, FaBirthdayCake,
-  FaUserTie, FaHardHat, FaTruck, FaBuilding, FaUser, FaTimes,
-  FaCheck, FaSave, FaStickyNote, FaCalendarDay, FaCalendarCheck, FaTags,
-  FaEyeSlash, FaEye, FaUserClock
+  FaSearch, FaPlus, FaPhone, FaBirthdayCake, FaUserTie, FaHardHat, FaUser, FaTimes,
+  FaSave, FaTags, FaEyeSlash, FaEye, FaUserClock, FaTelegramPlane, FaBell, FaThLarge, FaList, FaCar, FaShuttleVan,
 } from "react-icons/fa";
 import { supabase } from "./supabaseClient";
+import { hasTelegramIds, hasNotificationSubscriptions, hasLeadTaking } from "./utils/features";
+
+// Що бот надсилає людині особисто понад її власні задачі й нагадування
+const NOTIFY_TOPICS = [
+  { key: "low_stock", label: "Низькі залишки на складі", hint: "Коли позиція опускається нижче мінімуму, і ранкове зведення о 9:00" },
+  { key: "system", label: "Системні повідомлення", hint: "Оцифровка специфікацій, помилки бота, підключення людей до бота" },
+  // Після міграції db/2026-10_site_leads.sql; приходить ще й у дзвіночок і пушем
+  { key: "site_leads", label: "Нові заявки з сайту", hint: "Щойно клієнт залишив заявку на сайті: ім'я, телефон і що хоче", siteLeads: true },
+];
+const NO_TOPICS = [];
 // --- HELPER FUNCTIONS ---
 
 const getAge = (dateString) => {
@@ -28,111 +38,87 @@ const formatDateToYYYYMMDD = (date) => {
     return adjustedDate.toISOString().split("T")[0];
 };
 
-const getInitials = (name) => {
-    if (!name) return "??";
-    const parts = name.trim().split(" ");
-    if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-};
-
-const getDepartmentColor = (deps) => {
-    if (!deps || deps.length === 0) return "bg-slate-500";
-    if (deps.includes("Офіс")) return "bg-purple-600";
-    if (deps.includes("Монтаж")) return "bg-blue-600";
-    if (deps.includes("Водії")) return "bg-orange-500";
-    if (deps.includes("Проектування")) return "bg-teal-600";
-    return "bg-indigo-500";
-};
-
 // --- COMPONENTS ---
 
-// 1. КАРТКА ПРАЦІВНИКА
-const EmployeeCard = ({ employee, status, onClick }) => {
+const DEPT_ACCENT = (deps) => {
+    if (!deps || deps.length === 0) return "border-l-slate-300";
+    if (deps.includes("Офіс")) return "border-l-violet-500";
+    if (deps.includes("Монтаж")) return "border-l-indigo-500";
+    if (deps.includes("Водії")) return "border-l-orange-500";
+    if (deps.includes("Проектування")) return "border-l-teal-500";
+    return "border-l-sky-500";
+};
+
+const ABSENCE = { OFF: "Вихідний", VACATION: "Відпустка", SICK_LEAVE: "Лікарняний" };
+
+/** Своє авто / в ремонті і сьогоднішня поїздка — з розділу «Транспорт» */
+const CarBadges = ({ car, trip, km }) => (
+    <>
+        {km > 0 && <span className="h-7 px-2 rounded-lg bg-slate-100 text-slate-700 inline-flex items-center gap-1 font-semibold text-[12px] tabular-nums"><FaCar size={10} className="text-slate-400" /> {Math.round(km).toLocaleString('uk-UA')} км за місяць</span>}
+        {car?.status === 'own' && <span className="h-7 px-2 rounded-lg bg-emerald-50 text-emerald-700 inline-flex items-center gap-1 font-semibold text-[12px]"><FaCar size={10} /> своє авто</span>}
+        {car?.status === 'repair' && (
+            <span className="h-7 px-2 rounded-lg bg-amber-50 text-amber-800 inline-flex items-center gap-1 font-semibold text-[12px]">
+                <FaCar size={10} /> авто в ремонті{car.until ? ` до ${new Date(car.until).toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' })}` : ''}
+            </span>
+        )}
+        {trip && <span className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 inline-flex items-start gap-1 font-semibold text-[12px] leading-snug break-words"><FaShuttleVan size={10} className="mt-0.5 flex-shrink-0" /> {trip}</span>}
+    </>
+);
+
+/** Де людина сьогодні: відсутня / на об'єкті / вільна */
+const TodayBadge = ({ today }) => {
+    if (today?.absence) return <span className="inline-flex items-center gap-1 h-6 px-2 rounded-md bg-rose-50 text-rose-700 border border-rose-100 text-[11.5px] font-semibold">{ABSENCE[today.absence] || today.absence}</span>;
+    if (today?.work) return <span className="inline-flex items-start gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-100 text-[11.5px] font-semibold leading-snug break-words"><FaHardHat size={10} className="mt-0.5 flex-shrink-0" /> {today.work}</span>;
+    return <span className="inline-flex items-center gap-1 h-6 px-2 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-100 text-[11.5px] font-semibold">Вільний сьогодні</span>;
+};
+
+// 1. КАРТКА ПРАЦІВНИКА — повне ім'я, без скорочень до літер
+const EmployeeCard = ({ employee, today, hasTelegram, car, trip, km, onClick }) => {
     const age = getAge(employee.date_birth);
-    const initials = getInitials(employee.name);
-    const badgeColor = getDepartmentColor(employee.department);
-    const isAvailable = status !== 'OFF' && status !== 'VACATION' && status !== 'SICK_LEAVE';
     const isTemporary = employee.employment_type === 'temporary';
     const isHidden = !!employee.hidden_from_list;
-
-    const departmentStr = employee.department && employee.department.length > 0
-        ? employee.department.join(", ")
-        : "";
+    const deps = employee.department || [];
 
     return (
-        <motion.div
-            layout
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.15 }}
+        <div
             onClick={() => onClick(employee)}
-            className={`bg-white rounded-2xl p-4 shadow-sm border relative overflow-visible flex items-center gap-4 active:scale-[0.98] transition-transform cursor-pointer group ${isHidden ? 'border-dashed border-gray-300 opacity-70' : 'border-gray-100'}`}
+            className={`bg-white rounded-xl border border-l-4 ${DEPT_ACCENT(deps)} p-3.5 cursor-pointer transition-shadow hover:shadow-md flex flex-col gap-2 ${isHidden ? 'border-dashed opacity-70' : 'border-slate-200'}`}
         >
-            <div className="relative">
-                <div className={`w-14 h-14 rounded-2xl ${badgeColor} flex items-center justify-center text-white font-bold text-xl shadow-sm flex-shrink-0`}>
-                    {initials}
-                </div>
-                <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${isAvailable ? 'bg-green-500' : 'bg-red-500'}`} />
-            </div>
-
-            <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-start">
-                    <h3 className="font-bold text-gray-800 truncate text-base pr-6">
-                        {employee.name}
-                        <span className="text-gray-400 font-normal ml-1 text-sm">#{employee.custom_id}</span>
-                    </h3>
-                </div>
-
-                <div className="text-xs text-gray-500 font-medium truncate mb-1">
-                    {employee.position || 'Посада не вказана'}
-                    {departmentStr && <span className="text-gray-400 mx-1">•</span>}
-                    <span className="text-indigo-500">{departmentStr}</span>
-                </div>
-
-                {(isTemporary || isHidden) && (
-                    <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                        {isTemporary && (
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md flex items-center gap-1">
-                                <FaUserClock className="text-[9px]" /> Тимчасовий
-                            </span>
-                        )}
-                        {isHidden && (
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-md flex items-center gap-1">
-                                <FaEyeSlash className="text-[9px]" /> Прихований
-                            </span>
-                        )}
+            <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                    <div className="text-[15px] font-bold text-slate-900 leading-snug break-words">{employee.name}</div>
+                    <div className="text-[12.5px] text-slate-500 leading-snug">
+                        {employee.position || 'Посада не вказана'}
+                        {deps.length > 0 && <span className="text-slate-400"> · {deps.join(', ')}</span>}
                     </div>
-                )}
-
-                <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                    {employee.phone && (
-                        <a href={`tel:${employee.phone}`} onClick={e => e.stopPropagation()} className="text-xs text-slate-600 bg-slate-100 px-2 py-1 rounded-lg flex items-center gap-1 hover:bg-slate-200 transition-colors">
-                            <FaPhone className="text-[10px]" /> {employee.phone}
-                        </a>
-                    )}
-                    {age !== null && (
-                        <span className="text-xs text-slate-500 flex items-center gap-1 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
-                            <FaBirthdayCake className="text-pink-400 text-[10px]" /> {age} р.
-                        </span>
-                    )}
                 </div>
+                <span className="text-[11px] text-slate-400 font-mono flex-shrink-0">#{employee.custom_id}</span>
             </div>
 
-            <button 
-                onClick={(e) => { e.stopPropagation(); onClick(employee); }}
-                className="absolute top-4 right-4 p-2 -mr-2 -mt-2 text-gray-300 hover:text-gray-600 transition-colors"
-            >
-                <FaEllipsisV size={16} />
-            </button>
-        </motion.div>
+            <TodayBadge today={today} />
+
+            <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
+                {employee.phone && (
+                    <a href={`tel:${employee.phone}`} onClick={e => e.stopPropagation()}
+                        className="h-7 px-2 rounded-lg bg-slate-100 text-slate-700 font-semibold inline-flex items-center gap-1.5 hover:bg-slate-200">
+                        <FaPhone size={9} /> {employee.phone}
+                    </a>
+                )}
+                {hasTelegram && <span className="h-7 px-2 rounded-lg bg-sky-50 text-sky-700 inline-flex items-center gap-1 font-semibold"><FaTelegramPlane size={10} /> бот</span>}
+                {age !== null && <span className="h-7 px-2 rounded-lg bg-slate-50 text-slate-500 inline-flex items-center gap-1"><FaBirthdayCake size={10} className="text-pink-400" /> {age} р.</span>}
+                {isTemporary && <span className="h-7 px-2 rounded-lg bg-amber-50 text-amber-700 inline-flex items-center gap-1 font-semibold"><FaUserClock size={10} /> тимчасовий</span>}
+                {isHidden && <span className="h-7 px-2 rounded-lg bg-slate-100 text-slate-500 inline-flex items-center gap-1 font-semibold"><FaEyeSlash size={10} /> прихований</span>}
+                <CarBadges car={car} trip={trip} km={km} />
+            </div>
+        </div>
     );
 };
 
 // 2. МОДАЛКА
-const EmployeeModal = ({ isOpen, onClose, employee, onSave }) => {
+const EmployeeModal = ({ isOpen, onClose, employee, onSave, telegramReady = false, subscriptionsReady = false, siteLeadsReady = false, subscriptions = NO_TOPICS }) => {
     const [formData, setFormData] = useState({
         name: "", phone: "+380", position: "", department: [], skills: [], date_birth: "", notes: "",
-        employment_type: "staff", hidden_from_list: false
+        employment_type: "staff", hidden_from_list: false, telegram_user_id: ""
     });
     const [skillInput, setSkillInput] = useState("");
     const [saving, setSaving] = useState(false);
@@ -150,15 +136,27 @@ const EmployeeModal = ({ isOpen, onClose, employee, onSave }) => {
                 date_birth: employee.date_birth || "",
                 notes: employee.notes || "",
                 employment_type: employee.employment_type || "staff",
-                hidden_from_list: !!employee.hidden_from_list
+                hidden_from_list: !!employee.hidden_from_list,
+                telegram_user_id: employee.telegram_user_id ? String(employee.telegram_user_id) : "",
+                subscriptions: [...subscriptions]
             });
         } else {
             setFormData({
                 name: "", phone: "+380", position: "", department: [], skills: [], date_birth: "", notes: "",
-                employment_type: "staff", hidden_from_list: false
+                employment_type: "staff", hidden_from_list: false, telegram_user_id: "", subscriptions: []
             });
         }
-    }, [employee, isOpen]);
+    }, [employee, isOpen, subscriptions]);
+
+    const toggleSubscription = (topic) => {
+        setFormData(prev => {
+            const current = prev.subscriptions || [];
+            return {
+                ...prev,
+                subscriptions: current.includes(topic) ? current.filter(t => t !== topic) : [...current, topic]
+            };
+        });
+    };
 
     const setEmploymentType = (type) => {
         setFormData(prev => ({
@@ -169,12 +167,17 @@ const EmployeeModal = ({ isOpen, onClose, employee, onSave }) => {
         }));
     };
 
+    // Telegram ID — лише цифри; порожньо — бот цій людині не пише
+    const telegramInvalid = telegramReady && formData.telegram_user_id.trim() !== ""
+        && !/^\d{5,15}$/.test(formData.telegram_user_id.trim());
+
     const handleSave = async () => {
-        if (!formData.name.trim()) return;
+        if (!formData.name.trim() || telegramInvalid) return;
         setSaving(true);
-        await onSave({ ...formData, id: employee?.id, custom_id: employee?.custom_id });
+        const ok = await onSave({ ...formData, id: employee?.id, custom_id: employee?.custom_id });
         setSaving(false);
-        onClose();
+        // Не вдалося зберегти — форму не закриваємо, щоб не втратити введене
+        if (ok !== false) onClose();
     };
 
     const toggleDepartment = (dep) => {
@@ -259,6 +262,55 @@ const EmployeeModal = ({ isOpen, onClose, employee, onSave }) => {
                             />
                         </div>
                     </div>
+
+                    {telegramReady && (
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                <FaTelegramPlane className="text-sky-500" /> Telegram ID
+                            </label>
+                            <input
+                                type="text"
+                                inputMode="numeric"
+                                value={formData.telegram_user_id}
+                                onChange={e => setFormData({ ...formData, telegram_user_id: e.target.value.replace(/\D/g, "") })}
+                                className={`w-full px-4 py-3 rounded-xl border outline-none transition-all ${telegramInvalid ? "border-rose-400 bg-rose-50" : "border-gray-200 focus:border-indigo-500"}`}
+                                placeholder="Напр. 123456789"
+                            />
+                            <p className={`text-[11px] ${telegramInvalid ? "text-rose-600" : "text-gray-400"}`}>
+                                {telegramInvalid
+                                    ? "Telegram ID — від 5 до 15 цифр"
+                                    : "Найпростіше: людина відкриває бота, натискає Start і ділиться номером — ID підставиться сам. Вручну — число, а не @нік."}
+                            </p>
+
+                            {subscriptionsReady && (
+                                <div className="pt-2 space-y-2">
+                                    <div className="text-xs font-bold text-gray-500 flex items-center gap-1.5">
+                                        <FaBell className="text-sky-500" /> Також надсилати особисто
+                                    </div>
+                                    {NOTIFY_TOPICS.filter(topic => !topic.siteLeads || siteLeadsReady).map(topic => (
+                                        <label key={topic.key} className="flex items-start gap-2.5 cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                checked={(formData.subscriptions || []).includes(topic.key)}
+                                                onChange={() => toggleSubscription(topic.key)}
+                                                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                            />
+                                            <span className="text-xs text-gray-700 leading-snug">
+                                                <b>{topic.label}</b>
+                                                <span className="block text-[11px] text-gray-400">{topic.hint}</span>
+                                            </span>
+                                        </label>
+                                    ))}
+                                    {!formData.telegram_user_id && (formData.subscriptions || []).length > 0 && (
+                                        <p className="text-[11px] text-amber-600">Без Telegram ID ці повідомлення не дійдуть.</p>
+                                    )}
+                                    <p className="text-[11px] text-gray-400">
+                                        Власні задачі, призначення на етапи й нагадування забезпечення людина отримує завжди.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* Робота */}
                     <div className="p-4 bg-slate-50 rounded-xl space-y-5 border border-slate-100">
@@ -381,15 +433,46 @@ const EmployeeModal = ({ isOpen, onClose, employee, onSave }) => {
 
 // 3. ГОЛОВНА СТОРІНКА СПИСКУ ПРАЦІВНИКІВ
 export default function EmployeeList() {
+    const toast = useToast();
     const [employees, setEmployees] = useState([]);
     const [timeOffEntries, setTimeOffEntries] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
     const [activeTab, setActiveTab] = useState("Всі");
     const [showHidden, setShowHidden] = useState(false);
-    const [statsDate, setStatsDate] = useState(new Date());
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingEmployee, setEditingEmployee] = useState(null);
+    const [view, setView] = useState(() => { try { return localStorage.getItem('kcore.team.view') || 'cards'; } catch { return 'cards'; } });
+    const [todayWork, setTodayWork] = useState(() => new Map()); // custom_id → де працює сьогодні
+    const [cars, setCars] = useState(() => new Map());           // employees.id → { status, until }
+    const [monthKm, setMonthKm] = useState(() => new Map());     // employees.id → км по роботі за місяць
+    const [todayTrips, setTodayTrips] = useState(() => new Map()); // custom_id → «водій · Бус» / «у поїздці»
+    // Поле Telegram ID з'являється після міграції supply_alerts_bot_ready
+    const [telegramReady, setTelegramReady] = useState(false);
+    // Що людина отримує від бота особисто — після міграції bot_personal_notifications
+    const [subsReady, setSubsReady] = useState(false);
+    const [subscriptionRows, setSubscriptionRows] = useState([]);
+    // «Нові заявки з сайту» — після міграції site_leads
+    const [siteLeadsReady, setSiteLeadsReady] = useState(false);
+
+    useEffect(() => { hasTelegramIds().then(setTelegramReady); }, []);
+    useEffect(() => { hasNotificationSubscriptions().then(setSubsReady); }, []);
+    useEffect(() => { hasLeadTaking().then(setSiteLeadsReady); }, []);
+
+    useEffect(() => {
+        if (!subsReady) return;
+        supabase.from("notification_subscriptions").select("employee_id, topic")
+            .then(({ data, error }) => { if (!error) setSubscriptionRows(data || []); });
+    }, [subsReady]);
+
+    const subscriptionsByEmployee = useMemo(() => {
+        const map = new Map();
+        subscriptionRows.forEach(row => {
+            if (!map.has(row.employee_id)) map.set(row.employee_id, []);
+            map.get(row.employee_id).push(row.topic);
+        });
+        return map;
+    }, [subscriptionRows]);
 
     const fetchData = async () => {
         try {
@@ -406,6 +489,34 @@ export default function EmployeeList() {
 
             setEmployees(empData || []);
             setTimeOffEntries(timeOffData || []);
+
+            // Хто де сьогодні за графіком
+            const { data: workToday } = await supabase.from('installation_workers')
+                .select('employee_custom_id, installation_custom_id, notes').eq('work_date', formatDateToYYYYMMDD(today));
+            const ids = [...new Set((workToday || []).map(w => w.installation_custom_id).filter(Boolean))];
+            const { data: insts } = ids.length ? await supabase.from('installations').select('custom_id, name').in('custom_id', ids) : { data: [] };
+            const nameOf = new Map((insts || []).map(i => [i.custom_id, i.name]));
+            setTodayWork(new Map((workToday || []).map(w => [w.employee_custom_id, w.installation_custom_id ? (nameOf.get(w.installation_custom_id) || `Об'єкт #${w.installation_custom_id}`) : (w.notes || 'Завдання')])));
+
+            // Транспорт: власні авто й сьогоднішні поїздки («Працівники → Транспорт»)
+            const monthFrom = `${formatDateToYYYYMMDD(today).slice(0, 7)}-01`;
+            const [carRes, tripRes, kmRes] = await Promise.all([
+                supabase.from('employee_cars').select('employee_id, status, until'),
+                supabase.from('trips').select('driver_custom_id, crew, own_car_custom_id, vehicle:vehicles(name), stops:trip_stops(id)')
+                    .eq('trip_date', formatDateToYYYYMMDD(today)).neq('status', 'cancelled'),
+                supabase.from('car_mileage').select('employee_id, work_km').gte('log_date', monthFrom),
+            ]);
+            setCars(new Map((carRes.data || []).map(c => [c.employee_id, c])));
+            const kmMap = new Map();
+            (kmRes.data || []).forEach(r => kmMap.set(r.employee_id, (kmMap.get(r.employee_id) || 0) + (Number(r.work_km) || 0)));
+            setMonthKm(kmMap);
+            const tripMap = new Map();
+            (tripRes.data || []).forEach(t => {
+                const what = `${t.vehicle?.name || (t.own_car_custom_id ? 'власне авто' : 'поїздка')} · ${t.stops?.length || 0} зуп.`;
+                if (t.driver_custom_id != null) tripMap.set(Number(t.driver_custom_id), `за кермом: ${what}`);
+                (t.crew || []).forEach(c => { if (!tripMap.has(Number(c))) tripMap.set(Number(c), `у поїздці: ${what}`); });
+            });
+            setTodayTrips(tripMap);
         } catch (error) {
             console.error("Error:", error);
         } finally {
@@ -428,20 +539,58 @@ export default function EmployeeList() {
                 employment_type: data.employment_type || "staff",
                 hidden_from_list: !!data.hidden_from_list
             };
-
-            if (data.id) {
-                await supabase.from("employees").update(payload).eq("id", data.id);
-            } else {
-                await supabase.from("employees").insert([payload]);
+            // Поле надсилаємо лише після міграції — інакше «column does not exist»
+            if (telegramReady) {
+                const tg = (data.telegram_user_id || "").trim();
+                payload.telegram_user_id = tg ? Number(tg) : null;
             }
+
+            const { data: saved, error } = data.id
+                ? await supabase.from("employees").update(payload).eq("id", data.id).select("id").single()
+                : await supabase.from("employees").insert([payload]).select("id").single();
+            if (error) {
+                toast(error.code === "23505" && /telegram/i.test(error.message || "")
+                    ? "Цей Telegram ID уже вказано в іншого працівника."
+                    : "Помилка: " + error.message, 'error');
+                return false;
+            }
+
+            // Сповіщення живуть в окремій таблиці: новому працівнику — лише коли вже є його id
+            const employeeId = saved?.id ?? data.id;
+            if (subsReady && employeeId) {
+                const wanted = data.subscriptions || [];
+                const keep = wanted.length ? `(${wanted.map(t => `"${t}"`).join(",")})` : '("")';
+                const { error: delError } = await supabase.from("notification_subscriptions")
+                    .delete().eq("employee_id", employeeId).not("topic", "in", keep);
+                const { error: addError } = wanted.length
+                    ? await supabase.from("notification_subscriptions")
+                        .upsert(wanted.map(topic => ({ employee_id: employeeId, topic })),
+                            { onConflict: "employee_id,topic", ignoreDuplicates: true })
+                    : { error: null };
+
+                if (delError || addError) {
+                    toast("Працівника збережено, але не вдалося оновити сповіщення: " + (delError || addError).message, 'error');
+                } else {
+                    setSubscriptionRows(prev => [
+                        ...prev.filter(r => r.employee_id !== employeeId),
+                        ...wanted.map(topic => ({ employee_id: employeeId, topic })),
+                    ]);
+                }
+            }
+
             fetchData();
+            return true;
         } catch (e) {
-            alert("Помилка: " + e.message);
+            toast("Помилка: " + e.message, 'error');
+            return false;
         }
     };
 
-    const openAddModal = () => { setEditingEmployee(null); setIsModalOpen(true); };
-    const openEditModal = (emp) => { setEditingEmployee(emp); setIsModalOpen(true); };
+    // Доступи → «Команда»: додавати й змінювати працівників
+    const { can } = useAuth();
+    const canAddEmp = can('team', 'add');
+    const openAddModal = () => { if (!canAddEmp) return; setEditingEmployee(null); setIsModalOpen(true); };
+    const openEditModal = (emp) => { if (!can('team', 'edit')) return; setEditingEmployee(emp); setIsModalOpen(true); };
 
     const hiddenCount = useMemo(
         () => employees.filter(emp => emp.hidden_from_list).length,
@@ -468,39 +617,6 @@ export default function EmployeeList() {
         });
     }, [employees, searchTerm, activeTab, showHidden]);
 
-    const stats = useMemo(() => {
-        const targetDateStr = formatDateToYYYYMMDD(statsDate);
-        
-        // Фільтруємо людей, що відповідають поточній вкладці
-        const relevantEmployees = employees.filter(emp => {
-            if (activeTab === "Всі") return true;
-            const empDeps = emp.department || [];
-            if (activeTab === "Інше") return empDeps.length === 0;
-            return empDeps.includes(activeTab);
-        });
-
-        const relevantIds = new Set(relevantEmployees.map(e => e.custom_id));
-        const offList = timeOffEntries.filter(e => 
-            e.work_date === targetDateStr && relevantIds.has(e.employee_custom_id)
-        );
-        
-        const totalActive = relevantEmployees.length;
-        const totalOff = offList.length;
-        return { totalAvailable: Math.max(0, totalActive - totalOff), totalOff };
-    }, [employees, timeOffEntries, statsDate, activeTab]);
-
-    const toggleStatsDate = () => {
-        const today = new Date();
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        if (formatDateToYYYYMMDD(statsDate) === formatDateToYYYYMMDD(today)) {
-            setStatsDate(tomorrow);
-        } else {
-            setStatsDate(today);
-        }
-    };
-    
-    const isTodayStats = formatDateToYYYYMMDD(statsDate) === formatDateToYYYYMMDD(new Date());
 
     const getEmployeeStatus = (empId) => {
         const todayStr = formatDateToYYYYMMDD(new Date());
@@ -508,136 +624,162 @@ export default function EmployeeList() {
         return entry ? entry.status : 'ACTIVE';
     };
 
-    // Оновлені таби без скролу
+    // Де кожен сьогодні: відсутній / на якому об'єкті
+    const todayOf = (emp) => {
+        const st = getEmployeeStatus(emp.custom_id);
+        if (st !== 'ACTIVE') return { absence: st };
+        const w = todayWork.get(emp.custom_id);
+        return w ? { work: w } : {};
+    };
+
+    const deptCount = (id) => employees.filter(emp => (showHidden || !emp.hidden_from_list) && (
+        id === "Всі" ? true : id === "Інше" ? !(emp.department || []).length : (emp.department || []).includes(id)
+    )).length;
+
     const tabs = [
-        { id: "Всі", icon: FaUser },
-        { id: "Монтаж", icon: FaHardHat },
-        { id: "Офіс", icon: FaUserTie },
-        { id: "Інше", icon: FaBuilding },
+        { id: "Всі", label: "Усі" },
+        { id: "Монтаж", label: "Монтаж" },
+        { id: "Офіс", label: "Офіс" },
+        { id: "Інше", label: "Інше" },
     ];
 
+    const setViewMode = (v) => { setView(v); try { localStorage.setItem('kcore.team.view', v); } catch { /* немає сховища */ } };
+
+    // Підсумок дня по видимих людях
+    const summary = useMemo(() => {
+        const list = employees.filter(e => !e.hidden_from_list);
+        let atWork = 0, absent = 0, free = 0;
+        list.forEach(e => {
+            const t = todayOf(e);
+            if (t.absence) absent += 1; else if (t.work) atWork += 1; else free += 1;
+        });
+        return { atWork, absent, free };
+    }, [employees, timeOffEntries, todayWork]); // eslint-disable-line react-hooks/exhaustive-deps
+
     return (
-        <div className="min-h-full bg-slate-50 pb-24">
-            <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-200/50 shadow-sm">
-                <div className="px-4 pt-4 pb-2">
-                    <div className="flex justify-between items-center mb-4">
-                        <h1 className="text-2xl font-bold text-gray-800">Команда</h1>
-                        
-                        {/* Кнопка статистики */}
-                        <button 
-                            onClick={toggleStatsDate}
-                            className={`flex items-center gap-3 px-3 py-2 rounded-xl transition-all border active:scale-95 ${isTodayStats ? 'bg-indigo-50 border-indigo-200' : 'bg-orange-50 border-orange-200'}`}
-                        >
-                            <div className="text-left">
-                                <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1">
-                                    {isTodayStats ? <FaCalendarCheck/> : <FaCalendarDay/>} 
-                                    {isTodayStats ? 'План на сьогодні' : 'План на завтра'}
-                                </div>
-                                <div className="flex items-center gap-2 text-sm font-semibold">
-                                    <span className="text-green-600">{stats.totalAvailable}</span>
-                                    <span className="text-gray-300">/</span>
-                                    <span className="text-red-500">{stats.totalOff}</span>
-                                </div>
-                            </div>
-                        </button>
+        <div className="min-h-full bg-slate-50 pb-24 lg:pb-8">
+            <div className="max-w-[1500px] mx-auto p-3 sm:p-5 space-y-3">
+                {/* Заголовок і підсумок дня */}
+                <div className="flex flex-wrap items-center gap-3">
+                    <h1 className="text-2xl font-bold text-slate-900 tracking-tight mr-auto">Команда</h1>
+                    <div className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
+                        <span className="h-8 px-3 rounded-lg bg-indigo-50 border border-indigo-100 text-indigo-800 font-semibold inline-flex items-center gap-1.5"><FaHardHat size={11} /> на об'єктах {summary.atWork}</span>
+                        <span className="h-8 px-3 rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-800 font-semibold inline-flex items-center">вільні {summary.free}</span>
+                        <span className="h-8 px-3 rounded-lg bg-rose-50 border border-rose-100 text-rose-700 font-semibold inline-flex items-center">відсутні {summary.absent}</span>
                     </div>
+                    {canAddEmp && <button onClick={openAddModal}
+                        className="hidden sm:inline-flex h-9 px-3.5 rounded-lg bg-indigo-600 text-white text-[13px] font-bold items-center gap-2 hover:bg-indigo-700">
+                        <FaPlus size={11} /> Додати
+                    </button>}
+                </div>
 
-                    <div className="relative mb-2">
-                        <FaSearch className="absolute left-3.5 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                        <input
-                            type="text"
-                            placeholder="Пошук (ім'я, ID, посада)..."
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full bg-slate-100 border-none rounded-xl pl-10 pr-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all shadow-inner"
-                        />
-                        {searchTerm && (
-                            <button onClick={() => setSearchTerm("")} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                                <FaTimes />
+                {/* Панель: відділ, пошук, вигляд */}
+                <div className="bg-white rounded-xl border border-slate-200 p-2 flex flex-wrap items-center gap-2">
+                    <div className="inline-flex bg-slate-100 rounded-lg p-0.5 border border-slate-200">
+                        {tabs.map(tab => (
+                            <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)}
+                                className={`h-8 px-3 rounded-md text-[12.5px] font-bold inline-flex items-center gap-1.5 ${activeTab === tab.id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                                {tab.label}<span className="text-[11px] font-semibold text-slate-400 tabular-nums">{deptCount(tab.id)}</span>
                             </button>
-                        )}
-                    </div>
-
-                    {hiddenCount > 0 && (
-                        <button
-                            onClick={() => setShowHidden(v => !v)}
-                            className={`flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg border transition-colors mb-2 ${showHidden ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-500 border-gray-200 hover:border-slate-300'}`}
-                        >
-                            {showHidden ? <FaEye size={12} /> : <FaEyeSlash size={12} />}
-                            Приховані ({hiddenCount})
-                        </button>
-                    )}
-                </div>
-
-                {/* ВИПРАВЛЕНО: ТАБИ БЕЗ СКРОЛУ (FLEX-1) */}
-                <div className="px-4 pb-2">
-                    <div className="flex w-full bg-slate-100 p-1 rounded-xl">
-                        {tabs.map((tab) => {
-                            const isActive = activeTab === tab.id;
-                            return (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setActiveTab(tab.id)}
-                                    className={`
-                                        flex-1 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all duration-200
-                                        ${isActive 
-                                            ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5' 
-                                            : 'text-gray-500 hover:text-gray-700 hover:bg-slate-200/50'}
-                                    `}
-                                >
-                                    <tab.icon className={isActive ? 'text-indigo-600' : 'text-gray-400'} size={14} />
-                                    <span>{tab.id}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
-            </header>
-
-            <main className="p-4">
-                {loading ? (
-                    <div className="space-y-3">
-                        {Array.from({ length: 6 }).map((_, i) => (
-                            <div key={i} className="h-20 bg-white rounded-2xl animate-pulse shadow-sm" />
                         ))}
                     </div>
+                    <div className="relative flex-1 min-w-[180px]">
+                        <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
+                        <input type="text" placeholder="Ім'я, телефон, посада або ID" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full h-9 pl-8 pr-8 rounded-lg border border-slate-200 bg-white text-[13px] outline-none focus:border-indigo-400" />
+                        {searchTerm && (
+                            <button onClick={() => setSearchTerm("")} aria-label="Очистити" className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center text-slate-400 hover:text-slate-700"><FaTimes size={11} /></button>
+                        )}
+                    </div>
+                    {hiddenCount > 0 && (
+                        <button onClick={() => setShowHidden(v => !v)}
+                            className={`h-9 px-3 rounded-lg border text-[12.5px] font-semibold inline-flex items-center gap-1.5 ${showHidden ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'}`}>
+                            {showHidden ? <FaEye size={11} /> : <FaEyeSlash size={11} />} Приховані {hiddenCount}
+                        </button>
+                    )}
+                    <div className="inline-flex bg-slate-100 rounded-lg p-0.5 border border-slate-200">
+                        <button type="button" onClick={() => setViewMode('cards')} aria-label="Картками"
+                            className={`w-8 h-8 rounded-md flex items-center justify-center ${view === 'cards' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}><FaThLarge size={12} /></button>
+                        <button type="button" onClick={() => setViewMode('table')} aria-label="Таблицею"
+                            className={`w-8 h-8 rounded-md flex items-center justify-center ${view === 'table' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}><FaList size={12} /></button>
+                    </div>
+                </div>
+
+                {loading ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+                        {Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-36 bg-white rounded-xl border border-slate-200 animate-pulse" />)}
+                    </div>
                 ) : filteredEmployees.length === 0 ? (
-                    <div className="text-center py-12">
-                        <h3 className="text-lg font-medium text-gray-600">Нікого не знайдено</h3>
+                    <div className="bg-white rounded-xl border border-slate-200 py-12 text-center text-[14px] text-slate-500">Нікого не знайдено</div>
+                ) : view === 'cards' ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+                        {filteredEmployees.map(emp => (
+                            <EmployeeCard key={emp.id} employee={emp} today={todayOf(emp)} hasTelegram={!!emp.telegram_user_id}
+                                car={cars.get(emp.id)} trip={todayTrips.get(Number(emp.custom_id))} km={monthKm.get(emp.id)} onClick={openEditModal} />
+                        ))}
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                        <AnimatePresence>
-                            {filteredEmployees.map((emp) => (
-                                <EmployeeCard 
-                                    key={emp.id} 
-                                    employee={emp} 
-                                    status={getEmployeeStatus(emp.custom_id)}
-                                    onClick={openEditModal} 
-                                />
-                            ))}
-                        </AnimatePresence>
+                    <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+                        <table className="w-full min-w-[820px] text-left">
+                            <thead>
+                                <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500">
+                                    <th className="px-3 py-2">Працівник</th>
+                                    <th className="px-3 py-2">Відділ</th>
+                                    <th className="px-3 py-2">Телефон</th>
+                                    <th className="px-3 py-2">Сьогодні</th>
+                                    <th className="px-3 py-2">Бот</th>
+                                    <th className="px-3 py-2">Оформлення</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {filteredEmployees.map(emp => (
+                                    <tr key={emp.id} onClick={() => openEditModal(emp)} className={`cursor-pointer hover:bg-indigo-50/40 ${emp.hidden_from_list ? 'opacity-60' : ''}`}>
+                                        <td className="px-3 py-2">
+                                            <div className="text-[13.5px] font-semibold text-slate-900">{emp.name} <span className="text-[11px] font-mono text-slate-400">#{emp.custom_id}</span></div>
+                                            <div className="text-[12px] text-slate-500">{emp.position || '—'}</div>
+                                        </td>
+                                        <td className="px-3 py-2 text-[12.5px] text-slate-600">{(emp.department || []).join(', ') || '—'}</td>
+                                        <td className="px-3 py-2 text-[12.5px] whitespace-nowrap">
+                                            {emp.phone ? <a href={`tel:${emp.phone}`} onClick={e => e.stopPropagation()} className="text-indigo-600 font-semibold hover:underline">{emp.phone}</a> : <span className="text-slate-300">—</span>}
+                                        </td>
+                                        <td className="px-3 py-2 max-w-[260px]">
+                                            <div className="flex flex-wrap gap-1"><TodayBadge today={todayOf(emp)} /><CarBadges car={cars.get(emp.id)} trip={todayTrips.get(Number(emp.custom_id))} km={monthKm.get(emp.id)} /></div>
+                                        </td>
+                                        <td className="px-3 py-2">{emp.telegram_user_id ? <FaTelegramPlane className="text-sky-500" /> : <span className="text-slate-300">—</span>}</td>
+                                        <td className="px-3 py-2 text-[12.5px] text-slate-600">{emp.employment_type === 'temporary' ? 'тимчасовий' : 'штат'}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
                 )}
-            </main>
+            </div>
 
-            <button 
-                onClick={openAddModal} 
-                className="fixed bottom-6 right-6 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-2xl shadow-indigo-400/50 flex items-center justify-center hover:bg-indigo-700 active:scale-90 transition-all z-40"
-            >
-                <FaPlus size={24} />
-            </button>
+            {canAddEmp && (
+                <button
+                    onClick={openAddModal}
+                    aria-label="Додати працівника"
+                    className="sm:hidden fixed bottom-20 right-4 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-xl flex items-center justify-center active:scale-90 transition-all z-40"
+                >
+                    <FaPlus size={22} />
+                </button>
+            )}
 
             <AnimatePresence>
                 {isModalOpen && (
-                    <EmployeeModal 
-                        isOpen={isModalOpen} 
-                        onClose={() => setIsModalOpen(false)} 
+                    <EmployeeModal
+                        isOpen={isModalOpen}
+                        onClose={() => setIsModalOpen(false)}
                         employee={editingEmployee}
                         onSave={handleSaveEmployee}
+                        telegramReady={telegramReady}
+                        subscriptionsReady={subsReady}
+                        siteLeadsReady={siteLeadsReady}
+                        subscriptions={subscriptionsByEmployee.get(editingEmployee?.id) || NO_TOPICS}
                     />
                 )}
             </AnimatePresence>
         </div>
     );
+
 }

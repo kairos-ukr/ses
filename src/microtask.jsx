@@ -1,694 +1,545 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  FaTasks, FaPlus, FaCalendarAlt, FaTrash, FaEdit, 
-  FaCheck, FaClock, FaTimes, FaSearch, 
-  FaSortAmountDown, FaSortAmountUp, 
-  FaUserTie, FaLink,
-  FaChevronDown, FaExclamationTriangle,
-  FaUserEdit, FaFire 
+// =====================================================================
+//  K-CORE · «Задачі»
+//
+//  Три вкладки (відкривається «Етапи»):
+//   • Етапи      — етапи об'єктів, де людина відповідальна (StagesView;
+//                  колишня сторінка «Мої етапи»);
+//   • Мій день   — особистий планер (PlannerView); доручення мені — теж тут;
+//   • Доручення  — задачі команди: хто кому що доручив.
+//
+//  Доручення створюються й редагуються прямо в списку — без вікон поверх
+//  сторінки. Щойно змінений рядок коротко підсвічується, тож видно, що
+//  зміну прийнято; зміни інших людей приходять самі (живе оновлення).
+//  Вкладка і відкрите доручення — в адресі (?tab=team&edit=…).
+// =====================================================================
+
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import {
+    FaTasks, FaPlus, FaCalendarAlt, FaTrash, FaEdit, FaCheck, FaTimes, FaFire, FaLink,
+    FaSortAmountDown, FaSortAmountUp, FaHardHat, FaUserTie,
 } from 'react-icons/fa';
-import { supabase } from "./supabaseClient";
-import Layout from "./Layout";
-import { useAuth } from "./AuthProvider";
 
-// --- КОМПОНЕНТИ UI ---
+import { supabase } from './supabaseClient';
+import Layout from './Layout';
+import { useAuth } from './AuthProvider';
+import { T, Btn, IconBtn, Chip, Picker, Segmented, SearchInput, Skeleton, EmptyState, Linkify, useToast, useAutoFocus, humanError } from './ui';
+import PlannerView from './pages/PlannerView';
+import StagesView from './pages/StagesView';
 
-const StatusIcon = ({ status, className = '' }) => {
-  const icons = {
-    'нове': <FaPlus className={`text-amber-500 ${className}`} />,
-    'в процесі': <FaClock className={`text-blue-500 ${className}`} />,
-    'виконано': <FaCheck className={`text-emerald-500 ${className}`} />,
-    'скасовано': <FaTimes className={`text-slate-400 ${className}`} />,
-    'прострочено': <FaFire className={`text-red-500 ${className}`} />,
-  };
-  return icons[status] || <FaTasks className={`text-slate-500 ${className}`} />;
+const STATUSES = [
+    { key: 'нове', label: 'Нове', tone: 'warn' },
+    { key: 'в процесі', label: 'В роботі', tone: 'accent' },
+    { key: 'виконано', label: 'Виконано', tone: 'ok' },
+    { key: 'скасовано', label: 'Скасовано', tone: 'neutral' },
+];
+const statusOf = (key) => STATUSES.find(s => s.key === key) || { key, label: key || '—', tone: 'neutral' };
+const isOpen = (t) => t.status !== 'виконано' && t.status !== 'скасовано';
+
+const FILTERS = [
+    { id: 'open', label: 'Відкриті' },
+    { id: 'нове', label: 'Нові' },
+    { id: 'в процесі', label: 'В роботі' },
+    { id: 'overdue', label: 'Горять', icon: FaFire },
+    { id: 'виконано', label: 'Готово' },
+    { id: 'скасовано', label: 'Скасовано' },
+    { id: 'all', label: 'Усі' },
+];
+
+const SORTS = [
+    { value: 'created_at', label: 'Нові зверху' },
+    { value: 'due_date', label: 'За строком' },
+    { value: 'status', label: 'За статусом' },
+];
+
+const TASK_SELECT = '*, installations(id, name, custom_id)';
+const FLASH_MS = 2600;
+
+const isoDay = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return isoDay(d); };
+const todayStart = () => new Date().setHours(0, 0, 0, 0);
+const isOverdue = (t) => isOpen(t) && t.due_date && new Date(t.due_date).setHours(0, 0, 0, 0) < todayStart();
+const sameId = (a, b) => String(a ?? '').trim() === String(b ?? '').trim();
+
+const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '');
+const fmtDateTime = (s) => {
+    if (!s) return '';
+    let safe = s;
+    if (!safe.includes('Z') && !safe.match(/[+-]\d{2}:\d{2}$/)) safe = `${safe.replace(' ', 'T')}Z`;
+    return new Date(safe).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+};
+const dueText = (d) => {
+    if (!d) return '';
+    if (d === isoDay()) return 'сьогодні';
+    if (d === addDays(1)) return 'завтра';
+    return fmtDate(d);
 };
 
-const StatusBadge = ({ status }) => {
-  const colors = {
-    'виконано': 'bg-emerald-100 text-emerald-800 border-emerald-200',
-    'в процесі': 'bg-blue-100 text-blue-800 border-blue-200',
-    'нове': 'bg-amber-100 text-amber-800 border-amber-200',
-    'скасовано': 'bg-slate-100 text-slate-600 border-slate-200',
-    'default': 'bg-slate-100 text-slate-800 border-slate-200'
-  };
-  return (<span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${colors[status] || colors.default}`}>{status}</span>);
-};
+/* ---------------------------------------------------------------------
+ *  Форма доручення — та сама для нового й для редагування, на місці
+ * ------------------------------------------------------------------- */
+function TaskEditor({ initial, isNew, objectOptions, peopleOptions, onSave, onCancel }) {
+    const autoFocus = useAutoFocus();
+    const [f, setF] = useState(() => ({
+        task_text: initial?.task_text || '',
+        installation_id: initial?.installation_id ?? '',
+        assigned_to: initial?.assigned_to ?? '',
+        due_date: initial?.due_date ? String(initial.due_date).slice(0, 10) : '',
+        status: initial?.status || 'нове',
+    }));
+    const [saving, setSaving] = useState(false);
+    const set = (patch) => setF(p => ({ ...p, ...patch }));
+    const can = f.task_text.trim().length > 0 && !saving;
 
-// --- ДОПОМІЖНІ КОМПОНЕНТИ ---
+    const save = async () => {
+        if (!can) return;
+        setSaving(true);
+        const ok = await onSave(f);
+        setSaving(false);
+        if (ok && isNew) setF(p => ({ ...p, task_text: '', due_date: '' }));
+    };
 
-const LoadingScreen = () => (
-    <div className="flex-1 flex items-center justify-center min-h-[50vh]">
-        <div className="text-center">
-            <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4 animate-pulse mx-auto border border-indigo-100">
-                <FaTasks className="text-3xl" />
-            </div>
-            <p className="text-slate-500 font-medium">Завантаження задач...</p>
-        </div>
-    </div>
-);
-
-const FilterCards = ({ tasks, filter, setFilter }) => {
-  const categories = [
-      { id: 'всі', label: 'Всі', color: 'indigo', icon: FaTasks },
-      { id: 'нове', label: 'Нові', color: 'amber', icon: FaPlus },
-      { id: 'в процесі', label: 'В роботі', color: 'blue', icon: FaClock },
-      { id: 'прострочено', label: 'Горять', color: 'red', icon: FaFire },
-      { id: 'виконано', label: 'Готово', color: 'emerald', icon: FaCheck },
-      { id: 'скасовано', label: 'Скасовано', color: 'slate', icon: FaTimes },
-  ];
-
-  const getCount = (catId) => {
-      if (catId === 'всі') return tasks.length;
-      if (catId === 'прострочено') {
-          const today = new Date().setHours(0,0,0,0);
-          return tasks.filter(t => t.due_date && new Date(t.due_date) < today && t.status !== 'виконано' && t.status !== 'скасовано').length;
-      }
-      return tasks.filter(t => t.status === catId).length;
-  };
-
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-        {categories.map(cat => {
-            const count = getCount(cat.id);
-            const isActive = filter === cat.id;
-            
-            const colorStyles = {
-                indigo:  isActive ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-l-indigo-500 hover:bg-slate-50',
-                amber:   isActive ? 'bg-amber-50 border-amber-500 text-amber-700' : 'border-l-amber-500 hover:bg-slate-50',
-                blue:    isActive ? 'bg-blue-50 border-blue-500 text-blue-700' : 'border-l-blue-500 hover:bg-slate-50',
-                red:     isActive ? 'bg-red-50 border-red-500 text-red-700' : 'border-l-red-500 hover:bg-slate-50',
-                emerald: isActive ? 'bg-emerald-50 border-emerald-500 text-emerald-700' : 'border-l-emerald-500 hover:bg-slate-50',
-                slate:   isActive ? 'bg-slate-100 border-slate-500 text-slate-700' : 'border-l-slate-400 hover:bg-slate-50',
-            };
-
-            return (
-                <div 
-                    key={cat.id} 
-                    onClick={() => setFilter(cat.id)} 
-                    className={`relative overflow-hidden cursor-pointer rounded-xl p-3 sm:p-4 border bg-white border-slate-200 border-l-4 ${colorStyles[cat.color]}`}
-                >
-                    <cat.icon className={`absolute -right-2 -bottom-2 text-4xl opacity-10`} />
-                    <div className="relative z-10">
-                        <p className="text-xs font-bold uppercase tracking-wider opacity-70 mb-1">{cat.label}</p>
-                        <p className="text-2xl font-extrabold">{count}</p>
-                    </div>
-                </div>
-            );
-        })}
-    </div>
-  );
-};
-
-const TaskCard = ({ task, employees, onEdit, onDelete, onUpdateStatus, formatDateTime, formatDate, isOverdue, canEdit, canDelete, canComplete }) => {
-    const creator = task.creator_email ? employees.find(e => e.email === task.creator_email) : null;
-    const creatorName = creator ? creator.name : (task.creator_email || 'Невідомо');
-    
-    const assignee = task.assigned_to ? employees.find(e => e.custom_id === task.assigned_to) : null;
-    const assigneeName = assignee ? assignee.name : null;
+    const QUICK = [{ v: isoDay(), l: 'Сьогодні' }, { v: addDays(1), l: 'Завтра' }, { v: addDays(7), l: 'За тиждень' }];
 
     return (
-        <div className="bg-white rounded-xl border border-slate-200 flex flex-col md:flex-row overflow-hidden mb-3">
-            <div className="p-4 flex-1">
-                <div className="flex justify-between items-start mb-2">
-                     <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded text-xs border border-slate-200">#{task.custom_id}</span>
-                        <StatusBadge status={task.status} />
-                     </div>
-                     
-                     <div className="flex md:hidden items-center gap-2">
-                        {task.status !== 'виконано' && canComplete && (
-                            <button onClick={() => onUpdateStatus(task.custom_id, 'виконано')} className="p-2 text-emerald-600 bg-emerald-50 rounded-lg"><FaCheck size={14}/></button>
-                        )}
-                        {canEdit && (
-                            <button onClick={() => onEdit(task)} className="p-2 text-blue-600 bg-blue-50 rounded-lg"><FaEdit size={14}/></button>
-                        )}
-                     </div>
-                </div>
-                
-                <p className="font-bold text-slate-800 text-lg mb-3 leading-snug">{task.task_text}</p>
-                
-                {task.installation && (
-                    <div className="mb-3 inline-flex items-center gap-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 px-2.5 py-1.5 rounded-lg border border-indigo-100">
-                        <FaLink size={10}/><span>{task.installation.name} <span className="opacity-70">#{task.installation.custom_id}</span></span>
-                    </div>
+        <div className={`${isNew ? `${T.card} p-3` : 'px-3 py-3 bg-indigo-50/40'} space-y-2.5`}
+            onKeyDown={e => { if (e.key === 'Escape') onCancel(); if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); }}>
+            <textarea
+                autoFocus={autoFocus}
+                rows={f.task_text.length > 80 ? 5 : 3}
+                value={f.task_text}
+                onChange={e => set({ task_text: e.target.value })}
+                placeholder="Що треба зробити?"
+                className={`${T.input} h-auto py-2 resize-y text-[14px]`}
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <Picker options={objectOptions} value={f.installation_id} onChange={v => set({ installation_id: v })}
+                    placeholder="Об'єкт (необов'язково)" searchPlaceholder="Номер, назва, місто…" icon={FaHardHat} />
+                <Picker options={peopleOptions} value={f.assigned_to} onChange={v => set({ assigned_to: v })}
+                    placeholder="Кому доручити" searchPlaceholder="Пошук людини…" icon={FaUserTie} />
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+                <span className={`${T.label} mr-0.5`}>Строк</span>
+                {QUICK.map(q => (
+                    <button key={q.l} type="button" onClick={() => set({ due_date: f.due_date === q.v ? '' : q.v })}
+                        className={`h-8 px-2.5 rounded-lg border text-[12px] font-semibold ${f.due_date === q.v ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'}`}>
+                        {q.l}
+                    </button>
+                ))}
+                <input type="date" value={f.due_date} onChange={e => set({ due_date: e.target.value })}
+                    className="h-8 px-2 rounded-lg border border-slate-200 bg-white text-[12.5px] text-slate-700" aria-label="Дата строку" />
+                {f.due_date && (
+                    <button type="button" onClick={() => set({ due_date: '' })} className="h-8 px-2 rounded-lg text-[12px] font-semibold text-slate-500 hover:bg-slate-100">без строку</button>
                 )}
-
-                <div className="flex flex-wrap gap-4 text-xs text-slate-500 border-t border-slate-100 pt-3 mt-1">
-                    <div className="flex items-center gap-1.5">
-                        <FaClock className="text-slate-400"/>
-                        <span>Створено: <span className="font-medium text-slate-700">{formatDateTime(task.created_at)}</span></span>
-                    </div>
-                    {task.due_date && (
-                        <div className={`flex items-center gap-1.5 ${isOverdue(task.due_date, task.status) ? 'text-red-600 bg-red-50 px-2 py-0.5 rounded font-bold' : ''}`}>
-                            {isOverdue(task.due_date, task.status) ? <FaFire className="text-red-500"/> : <FaCalendarAlt className="text-slate-400"/>}
-                            <span>Дедлайн: <span className="font-medium text-slate-700">{formatDate(task.due_date)}</span></span>
-                        </div>
-                    )}
-                    
-                    {task.data_complete && task.status === 'виконано' && (
-                        <div className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded font-bold">
-                            <FaCheck className="text-emerald-500"/>
-                            <span>Виконано: <span className="font-medium text-emerald-700">{formatDateTime(task.data_complete)}</span></span>
-                        </div>
-                    )}
-                </div>
             </div>
-
-            <div className="bg-slate-50/50 p-4 border-t md:border-t-0 md:border-l border-slate-200 w-full md:w-64 flex flex-col justify-center gap-3">
-                <div className="flex items-start gap-2">
-                    <div className="mt-0.5 p-1.5 bg-white rounded-full text-slate-400 border border-slate-200"><FaUserEdit size={10}/></div>
-                    <div>
-                        <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Від кого</p>
-                        <p className="text-xs font-bold text-slate-700">{creatorName}</p>
-                    </div>
+            {!isNew && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={`${T.label} mr-0.5`}>Статус</span>
+                    {STATUSES.map(s => (
+                        <button key={s.key} type="button" onClick={() => set({ status: s.key })}
+                            className={`h-8 px-2.5 rounded-lg border text-[12px] font-semibold ${f.status === s.key ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'}`}>
+                            {s.label}
+                        </button>
+                    ))}
                 </div>
-                
-                <div className="flex items-start gap-2">
-                    <div className={`mt-0.5 p-1.5 rounded-full border ${assigneeName ? 'bg-indigo-100 text-indigo-600 border-indigo-200' : 'bg-white text-slate-300 border-slate-200'}`}><FaUserTie size={10}/></div>
-                    <div>
-                        <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Для кого</p>
-                        <p className={`text-xs font-bold ${assigneeName ? 'text-indigo-700' : 'text-slate-400 italic'}`}>{assigneeName || 'Не призначено'}</p>
-                    </div>
-                </div>
-
-                <div className="hidden md:flex items-center justify-end gap-2 mt-auto pt-2">
-                    {task.status !== 'виконано' && canComplete && (
-                        <button onClick={() => onUpdateStatus(task.custom_id, 'виконано')} className="p-2 text-emerald-600 hover:bg-emerald-100 rounded-lg border border-transparent hover:border-emerald-200" title="Виконано"><FaCheck /></button>
-                    )}
-                    {canEdit && (
-                        <button onClick={() => onEdit(task)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg border border-transparent hover:border-blue-200" title="Редагувати"><FaEdit /></button>
-                    )}
-                    {canDelete && (
-                        <button onClick={() => onDelete(task.custom_id)} className="p-2 text-red-600 hover:bg-red-100 rounded-lg border border-transparent hover:border-red-200" title="Видалити"><FaTrash /></button>
-                    )}
-                </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+                <Btn variant="accent" icon={isNew ? FaPlus : FaCheck} onClick={save} disabled={!can}>
+                    {saving ? 'Зберігаємо…' : isNew ? 'Додати доручення' : 'Зберегти'}
+                </Btn>
+                <Btn variant="ghost" onClick={onCancel} disabled={saving}>{isNew ? 'Згорнути' : 'Скасувати'}</Btn>
             </div>
         </div>
     );
-};
+}
 
-const InstallationSelector = ({ installations, selectedId, onChange }) => { 
-    const [searchTerm, setSearchTerm] = useState(''); 
-    const [isOpen, setIsOpen] = useState(false); 
-    const selectedInstallationName = useMemo(() => installations.find(i => i.id === selectedId)?.name || 'Не вибрано', [selectedId, installations]); 
-    const filteredInstallations = useMemo(() => { 
-        if (!searchTerm) return installations; 
-        const lowerTerm = searchTerm.toLowerCase(); 
-        return installations.filter(inst => inst.name.toLowerCase().includes(lowerTerm) || inst.custom_id.toString().includes(lowerTerm)); 
-    }, [searchTerm, installations]); 
-    
-    return (
-        <div className="relative">
-            <button type="button" onClick={() => setIsOpen(!isOpen)} className="w-full border border-slate-300 rounded-xl p-3 text-left bg-white flex justify-between items-center text-sm outline-none">
-                <span className={!selectedId ? "text-slate-500" : ""}>{selectedInstallationName}</span>
-                <FaChevronDown className={`text-slate-400 ${isOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {isOpen && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
-                    <div className="p-2 sticky top-0 bg-white border-b border-slate-100">
-                        <div className="relative">
-                            <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                            <input type="text" placeholder="Пошук..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm outline-none" autoFocus />
-                        </div>
-                    </div>
-                    <ul>
-                        <li onClick={() => { onChange(''); setIsOpen(false); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-sm text-slate-500 italic">Не вибрано</li>
-                        {filteredInstallations.map(inst => (
-                            <li key={inst.id} onClick={() => { onChange(inst.id); setIsOpen(false); }} className="px-4 py-2 hover:bg-indigo-50 cursor-pointer text-sm border-b border-slate-50 last:border-0">
-                                {inst.name} <span className="text-slate-400 text-xs">(#{inst.custom_id})</span>
-                            </li>
-                        ))}
-                        {filteredInstallations.length === 0 && <li className="px-4 py-3 text-sm text-slate-400 text-center">Нічого не знайдено</li>}
-                    </ul>
-                </div>
-            )}
-        </div>
-    ); 
-};
-
-const EmployeeSelector = ({ employees, selectedCustomId, onChange }) => {
-    const [searchTerm, setSearchTerm] = useState(''); 
-    const [isOpen, setIsOpen] = useState(false);
-    
-    const selectedEmployee = useMemo(() => employees.find(e => e.custom_id === selectedCustomId), [selectedCustomId, employees]);
-    const selectedEmployeeName = selectedEmployee ? selectedEmployee.name : 'Не призначено';
-
-    const filteredEmployees = useMemo(() => { 
-        if (!searchTerm) return employees; 
-        const lowerTerm = searchTerm.toLowerCase(); 
-        return employees.filter(emp => emp.name.toLowerCase().includes(lowerTerm) || emp.custom_id.toString().includes(lowerTerm)); 
-    }, [searchTerm, employees]);
+/* ---------------------------------------------------------------------
+ *  Рядок доручення
+ * ------------------------------------------------------------------- */
+function TaskRow({ task, nameByEmail, nameById, showObject, canManage, canDelete, flash, onEdit, onComplete, onDelete }) {
+    const [askDelete, setAskDelete] = useState(false);
+    const st = statusOf(task.status);
+    const overdue = isOverdue(task);
+    const done = task.status === 'виконано';
+    const creator = nameByEmail(task.creator_email) || task.creator_email || 'невідомо';
+    const assignee = task.assigned_to != null ? nameById(task.assigned_to) : null;
 
     return (
-        <div className="relative">
-            <button type="button" onClick={() => setIsOpen(!isOpen)} className="w-full border border-slate-300 rounded-xl p-3 text-left bg-white flex justify-between items-center text-sm outline-none">
-                <span className={!selectedCustomId ? "text-slate-500" : ""}>{selectedEmployeeName}</span>
-                <FaChevronDown className={`text-slate-400 ${isOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {isOpen && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
-                    <div className="p-2 sticky top-0 bg-white border-b border-slate-100">
-                        <div className="relative">
-                            <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                            <input type="text" placeholder="Ім'я або ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm outline-none" autoFocus />
-                        </div>
-                    </div>
-                    <ul>
-                        <li onClick={() => { onChange(''); setIsOpen(false); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-sm text-slate-500 italic">Не призначено</li>
-                        {filteredEmployees.map(emp => (
-                            <li key={emp.id} onClick={() => { onChange(emp.custom_id); setIsOpen(false); }} className="px-4 py-2 hover:bg-indigo-50 cursor-pointer text-sm border-b border-slate-50 last:border-0">
-                                {emp.name} <span className="text-slate-400 text-xs">(ID: {emp.custom_id})</span>
-                            </li>
-                        ))}
-                        {filteredEmployees.length === 0 && <li className="px-4 py-3 text-sm text-slate-400 text-center">Нічого не знайдено</li>}
-                    </ul>
-                </div>
-            )}
-        </div>
-    );
-};
-
-const formatDateForInput = (date) => { if (!date) return ''; const d = new Date(date); const localDate = new Date(d.getTime() + d.getTimezoneOffset() * 60000); return localDate.toISOString().split('T')[0]; };
-
-const TaskModal = ({ isOpen, onClose, onSubmit, task, installations, employees, submitting }) => {
-  const [formData, setFormData] = useState({ task_text: '', due_date: '', status: 'нове', installation_id: '', assigned_to: '' });
-  
-  useEffect(() => { 
-      if (isOpen) { 
-          if (task) { 
-              setFormData({ 
-                  task_text: task.task_text || '', 
-                  due_date: task.due_date ? formatDateForInput(task.due_date) : '', 
-                  status: task.status || 'нове', 
-                  installation_id: task.installation_id || '',
-                  assigned_to: task.assigned_to || '' 
-              }); 
-          } else { 
-              setFormData({ task_text: '', due_date: '', status: 'нове', installation_id: '', assigned_to: '' }); 
-          } 
-      } 
-  }, [task, isOpen]);
-  
-  const handleChange = (e) => { const { name, value } = e.target; setFormData(p => ({ ...p, [name]: value })); };
-  const handleInstallationChange = (id) => setFormData(p => ({ ...p, installation_id: id }));
-  const handleAssigneeChange = (customId) => setFormData(p => ({ ...p, assigned_to: customId })); 
-
-  const handleSubmit = (e) => { e.preventDefault(); if (formData.task_text.trim()) { onSubmit(formData); } };
-  
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div 
-            className="fixed inset-0 bg-slate-900/60 flex items-end sm:items-center justify-center sm:p-4 z-50" 
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
-            onClick={onClose}
-        >
-          <motion.div 
-            className="bg-white w-full max-w-xl sm:rounded-xl rounded-t-xl flex flex-col max-h-[90vh] sm:max-h-[85vh]" 
-            initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 20, opacity: 0 }} transition={{ duration: 0.15 }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-center p-4 sm:p-5 border-b border-slate-100 shrink-0">
-                <h2 className="text-xl font-bold text-slate-800">{task ? 'Редагувати задачу' : 'Створити задачу'}</h2>
-                <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 bg-slate-50 rounded-full"><FaTimes size={16} /></button>
-            </div>
-            
-            <div className="p-4 sm:p-5 overflow-y-auto shrink">
-                <form id="task-form" onSubmit={handleSubmit} className="space-y-4">
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Опис задачі <span className="text-red-500">*</span></label>
-                        <textarea name="task_text" value={formData.task_text} onChange={handleChange} rows="4" required className="w-full border border-slate-300 rounded-xl p-3 outline-none resize-none" placeholder="Що саме потрібно зробити?"/>
-                    </div>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Об'єкт</label>
-                            <InstallationSelector installations={installations} selectedId={formData.installation_id} onChange={handleInstallationChange}/>
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Виконавець</label>
-                            <EmployeeSelector employees={employees} selectedCustomId={formData.assigned_to} onChange={handleAssigneeChange} />
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Дедлайн</label>
-                            <input type="date" name="due_date" value={formData.due_date} onChange={handleChange} className="w-full border border-slate-300 rounded-xl p-3 outline-none" />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Статус</label>
-                            <select name="status" value={formData.status} onChange={handleChange} className="w-full border border-slate-300 rounded-xl p-3 outline-none bg-white">
-                                <option value="нове">Нове</option>
-                                <option value="в процесі">В процесі</option>
-                                <option value="виконано">Виконано</option>
-                                {task && <option value="скасовано">Скасовано</option>}
-                            </select>
-                        </div>
-                    </div>
-                </form>
-            </div>
-
-            <div className="p-4 sm:p-5 border-t border-slate-100 flex flex-col-reverse sm:flex-row justify-end gap-3 shrink-0 bg-slate-50 sm:bg-white sm:rounded-b-xl">
-                <button type="button" onClick={onClose} className="w-full sm:w-auto px-5 py-2.5 bg-white sm:bg-slate-100 border border-slate-200 sm:border-transparent text-slate-700 rounded-xl font-bold">Скасувати</button>
-                <button type="submit" form="task-form" disabled={submitting} className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold disabled:opacity-60">
-                    {submitting ? 'Збереження...' : (task ? 'Оновити' : 'Створити')}
+        <li className={`px-3 py-2.5 flex items-start gap-3 transition-colors duration-700 ${flash ? 'bg-amber-50' : ''}`}>
+            {canManage && isOpen(task) ? (
+                <button type="button" onClick={() => onComplete(task)} aria-label="Позначити виконаним" title="Виконано"
+                    className="group mt-0.5 w-7 h-7 rounded-full border-2 border-slate-300 hover:border-emerald-500 hover:bg-emerald-50 flex items-center justify-center flex-shrink-0">
+                    <FaCheck size={10} className="text-emerald-600 opacity-0 group-hover:opacity-100" />
                 </button>
+            ) : (
+                <span className={`mt-0.5 w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${done ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500'}`}>
+                    {done ? <FaCheck size={10} /> : <FaTimes size={10} />}
+                </span>
+            )}
+
+            <div className="min-w-0 flex-1">
+                <p className={`text-[14px] font-semibold leading-snug break-words whitespace-pre-wrap ${done ? 'text-slate-500 line-through decoration-slate-300' : 'text-slate-900'}`}><Linkify>{task.task_text}</Linkify></p>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-slate-500">
+                    {task.status !== 'нове' && <Chip tone={st.tone}>{st.label}</Chip>}
+                    {overdue && <Chip tone="danger" icon={FaFire}>прострочено</Chip>}
+                    <span>від <b className="text-slate-700">{creator}</b></span>
+                    <span>для <b className={assignee ? 'text-indigo-700' : 'text-slate-400 font-medium'}>{assignee || 'не призначено'}</b></span>
+                    {task.due_date && (
+                        <span className={overdue ? 'text-rose-700 font-semibold' : ''}><FaCalendarAlt size={9} className="inline mr-1 -mt-0.5" />до {dueText(task.due_date)}</span>
+                    )}
+                    {showObject && task.installation && (
+                        <a href={`#/project/${task.installation.custom_id}`} className="text-indigo-600 font-semibold hover:underline inline-flex items-center gap-1 break-words">
+                            <FaLink size={9} /> СЕС-{task.installation.custom_id} {task.installation.name}
+                        </a>
+                    )}
+                    <span className="text-slate-400">#{String(task.custom_id).trim()} · {fmtDateTime(task.created_at)}</span>
+                    {done && task.data_complete && <span className="text-emerald-700">виконано {fmtDateTime(task.data_complete)}</span>}
+                </div>
             </div>
 
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-};
+            {askDelete ? (
+                <div className="flex items-center gap-1 flex-shrink-0">
+                    <span className="text-[12px] font-semibold text-rose-700 mr-1">Видалити?</span>
+                    <Btn size="sm" variant="danger" onClick={() => { setAskDelete(false); onDelete(task); }}>Так</Btn>
+                    <Btn size="sm" variant="ghost" onClick={() => setAskDelete(false)}>Ні</Btn>
+                </div>
+            ) : (
+                <div className="flex items-center flex-shrink-0">
+                    {canManage && <IconBtn icon={FaEdit} label="Редагувати" onClick={() => onEdit(task)} />}
+                    {canDelete && <IconBtn variant="ghost" icon={FaTrash} label="Видалити" className="hover:!text-rose-600" onClick={() => setAskDelete(true)} />}
+                </div>
+            )}
+        </li>
+    );
+}
 
-const Notification = ({ message, type, onClose }) => { const isError = type === 'error'; return (<motion.div initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} transition={{ duration: 0.15 }} className={`fixed top-20 right-5 z-[100] flex items-center p-4 rounded-xl shadow-lg text-white ${isError ? 'bg-red-500' : 'bg-emerald-500'}`}><div className="text-xl">{isError ? <FaExclamationTriangle /> : <FaCheck />}</div><p className="ml-3 font-medium text-sm">{message}</p><button onClick={onClose} className="ml-4 p-1 rounded-full hover:bg-white/20"><FaTimes /></button></motion.div>); };
-const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => { return (<AnimatePresence>{isOpen && (<motion.div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-[90]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} onClick={onClose}><motion.div className="bg-white rounded-xl p-6 w-full max-w-sm" initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.15 }} onClick={e => e.stopPropagation()}><div className="flex items-start gap-4"><div className="flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-full bg-red-100 text-red-600"><FaExclamationTriangle size={18}/></div><div><h3 className="text-lg font-bold text-slate-800">{title}</h3><p className="text-sm text-slate-500 mt-1">{message}</p></div></div><div className="mt-6 flex flex-col sm:flex-row-reverse gap-3"><button onClick={onConfirm} type="button" className="w-full inline-flex justify-center rounded-xl px-4 py-2 bg-red-600 text-sm font-bold text-white">Видалити</button><button onClick={onClose} type="button" className="w-full inline-flex justify-center rounded-xl border border-slate-200 px-4 py-2 bg-white text-sm font-bold text-slate-700">Скасувати</button></div></motion.div></motion.div>)}</AnimatePresence>); };
+/* ---------------------------------------------------------------------
+ *  Вкладка «Доручення»
+ * ------------------------------------------------------------------- */
+function TeamTasks({ editId, onEditDone }) {
+    const { can, user, employee } = useAuth();
+    const toast = useToast();
+    // Доступи → «Доручення команди»: бачити чужі, доручати, змінювати чужі, видаляти
+    const seeAll = can('tasks');
+    const canAssign = can('tasks', 'add');
+    const isAdminOrOffice = can('tasks', 'edit');
+    const canDeleteTasks = can('tasks', 'delete');
+    const myEmail = user?.email;
+    const myCustomId = employee?.custom_id;
 
-// --- ГОЛОВНИЙ КОМПОНЕНТ ---
+    const [tasks, setTasks] = useState(null);
+    const [installations, setInstallations] = useState([]);
+    const [employees, setEmployees] = useState([]);
+    const [filter, setFilter] = useState('open');
+    const [who, setWho] = useState('all');
+    const [search, setSearch] = useState('');
+    const [sortBy, setSortBy] = useState('created_at');
+    const [sortDir, setSortDir] = useState('desc');
+    const [grouping, setGrouping] = useState(() => { try { return localStorage.getItem('kcore.tasks.group') || 'list'; } catch { return 'list'; } });
+    const [composing, setComposing] = useState(false);
+    const [editing, setEditing] = useState(null);
+    const [flash, setFlash] = useState({});
+    const composerRef = useRef(null);
+
+    const pulse = useCallback((id) => {
+        const k = String(id).trim();
+        setFlash(f => ({ ...f, [k]: true }));
+        setTimeout(() => setFlash(f => { const n = { ...f }; delete n[k]; return n; }), FLASH_MS);
+    }, []);
+
+    const load = useCallback(async () => {
+        const [t, i, e] = await Promise.all([
+            supabase.from('microtasks').select(TASK_SELECT).order('created_at', { ascending: false }),
+            supabase.from('installations').select('id, custom_id, name, status, client:clients(name, populated_place)').order('custom_id', { ascending: false }),
+            supabase.from('employees').select('id, custom_id, name, email, access_blocked_at, hidden_from_list').order('name'),
+        ]);
+        if (t.error) { toast(humanError(t.error), 'error'); setTasks([]); return; }
+        setTasks((t.data || []).map(x => ({ ...x, installation: x.installations })));
+        setInstallations(i.data || []);
+        setEmployees(e.data || []);
+    }, [toast]);
+
+    useEffect(() => { load(); }, [load]);
+
+    // Зміни інших людей приходять самі — рядок коротко підсвічується
+    useEffect(() => {
+        let timer = null;
+        const ch = supabase.channel('tasks-team')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'microtasks' }, (p) => {
+                if (p.new?.custom_id) pulse(p.new.custom_id);
+                clearTimeout(timer); timer = setTimeout(() => load(), 500);
+            })
+            .subscribe();
+        return () => { clearTimeout(timer); supabase.removeChannel(ch); };
+    }, [load, pulse]);
+
+    // Відкрили доручення з «Мого дня» — одразу його редагування
+    useEffect(() => {
+        if (!editId || !tasks) return;
+        const t = tasks.find(x => sameId(x.custom_id, editId));
+        if (t) {
+            setEditing(String(t.custom_id).trim());
+            setFilter('all');
+            setTimeout(() => document.getElementById(`task-${String(t.custom_id).trim()}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80);
+        }
+        onEditDone?.();
+    }, [editId, tasks, onEditDone]);
+
+    const nameById = useCallback((cid) => employees.find(e => Number(e.custom_id) === Number(cid))?.name || null, [employees]);
+    const nameByEmail = useCallback((em) => employees.find(e => e.email && e.email === em)?.name || null, [employees]);
+
+    const objectOptions = useMemo(() => installations
+        .slice()
+        .sort((a, b) => Number(['completed', 'cancelled', 'lost'].includes(a.status)) - Number(['completed', 'cancelled', 'lost'].includes(b.status)) || b.custom_id - a.custom_id)
+        .map(o => ({ id: o.id, label: [`СЕС-${o.custom_id}`, o.name || o.client?.name, o.client?.populated_place].filter(Boolean).join(' · ') })), [installations]);
+    const peopleOptions = useMemo(() => employees
+        .filter(e => !e.access_blocked_at && !e.hidden_from_list)
+        .map(e => ({ id: e.custom_id, label: e.name })), [employees]);
+
+    const canManageTask = useCallback((t) => isAdminOrOffice || t.creator_email === myEmail || Number(t.assigned_to) === Number(myCustomId),
+        [isAdminOrOffice, myEmail, myCustomId]);
+
+    const byWho = useMemo(() => (tasks || []).filter(t => {
+        const fromMe = t.creator_email === myEmail;
+        const toMe = myCustomId != null && Number(t.assigned_to) === Number(myCustomId);
+        if (!seeAll && !fromMe && !toMe) return false;   // чужі доручення закриті
+        if (who === 'from_me') return fromMe;
+        if (who === 'to_me') return toMe;
+        return true;
+    }), [tasks, who, myEmail, myCustomId, seeAll]);
+
+    const countOf = (id) => byWho.filter(t => (id === 'all' ? true : id === 'open' ? isOpen(t) : id === 'overdue' ? isOverdue(t) : t.status === id)).length;
+
+    const shown = useMemo(() => {
+        const q = search.trim().toLowerCase().replace(/^сес-?/, '');
+        const list = byWho.filter(t => {
+            if (filter === 'open' && !isOpen(t)) return false;
+            if (filter === 'overdue' && !isOverdue(t)) return false;
+            if (!['all', 'open', 'overdue'].includes(filter) && t.status !== filter) return false;
+            if (!q) return true;
+            return [t.task_text, t.custom_id, t.installation?.name, t.installation?.custom_id, nameById(t.assigned_to), nameByEmail(t.creator_email)]
+                .some(v => v != null && String(v).toLowerCase().includes(q));
+        });
+        const dir = sortDir === 'asc' ? 1 : -1;
+        return list.sort((a, b) => {
+            let x = a[sortBy] || '', y = b[sortBy] || '';
+            if (sortBy === 'due_date') { x = a.due_date || '9999'; y = b.due_date || '9999'; }
+            if (sortBy === 'status') { x = STATUSES.findIndex(s => s.key === a.status); y = STATUSES.findIndex(s => s.key === b.status); }
+            return x > y ? dir : x < y ? -dir : 0;
+        });
+    }, [byWho, filter, search, sortBy, sortDir, nameById, nameByEmail]);
+
+    const groups = useMemo(() => {
+        if (grouping !== 'object') return [{ key: 'all', items: shown }];
+        const m = new Map();
+        shown.forEach(t => {
+            const k = t.installation?.custom_id ?? 'none';
+            if (!m.has(k)) m.set(k, { key: String(k), obj: t.installation || null, items: [] });
+            m.get(k).items.push(t);
+        });
+        return [...m.values()].sort((a, b) => (a.obj ? 0 : 1) - (b.obj ? 0 : 1)
+            || b.items.filter(isOpen).length - a.items.filter(isOpen).length
+            || (b.obj?.custom_id || 0) - (a.obj?.custom_id || 0));
+    }, [shown, grouping]);
+
+    /* ---- Дії ---- */
+
+    const payloadOf = (f) => ({
+        task_text: f.task_text.trim(),
+        due_date: f.due_date || null,
+        installation_id: f.installation_id === '' ? null : f.installation_id,
+        assigned_to: f.assigned_to === '' ? null : f.assigned_to,
+    });
+
+    const create = async (f) => {
+        const { data: a } = await supabase.auth.getUser();
+        if (!a?.user?.email) { toast('Сесія застаріла — оновіть сторінку', 'error'); return false; }
+        const { data, error } = await supabase.from('microtasks')
+            .insert({ ...payloadOf(f), status: 'нове', creator_email: a.user.email })
+            .select(TASK_SELECT).single();
+        if (error) { toast(humanError(error), 'error'); return false; }
+        setTasks(prev => [{ ...data, installation: data.installations }, ...(prev || [])]);
+        if (filter !== 'open' && filter !== 'нове' && filter !== 'all') setFilter('open');
+        pulse(data.custom_id);
+        toast(f.assigned_to ? `Доручено: ${nameById(f.assigned_to)}` : 'Доручення додано');
+        return true;
+    };
+
+    const update = async (task, f) => {
+        const patch = { ...payloadOf(f), status: f.status };
+        if (f.status !== task.status) {
+            if (f.status === 'виконано') patch.data_complete = new Date().toISOString();
+            else if (f.status === 'нове' || f.status === 'в процесі') patch.data_complete = null;
+        }
+        const { data, error } = await supabase.from('microtasks').update(patch).eq('custom_id', task.custom_id).select(TASK_SELECT).single();
+        if (error) { toast(humanError(error), 'error'); return false; }
+        setTasks(prev => prev.map(t => (sameId(t.custom_id, task.custom_id) ? { ...data, installation: data.installations } : t)));
+        setEditing(null);
+        pulse(task.custom_id);
+        toast('Доручення оновлено');
+        return true;
+    };
+
+    const setStatus = async (task, status, message, undo = true) => {
+        const patch = { status, data_complete: status === 'виконано' ? new Date().toISOString() : null };
+        const { data, error } = await supabase.from('microtasks').update(patch).eq('custom_id', task.custom_id).select(TASK_SELECT).single();
+        if (error) { toast(humanError(error), 'error'); return; }
+        setTasks(prev => prev.map(t => (sameId(t.custom_id, task.custom_id) ? { ...data, installation: data.installations } : t)));
+        pulse(task.custom_id);
+        toast(message, 'success', undo ? { label: 'Повернути', onClick: () => setStatus(task, task.status, 'Повернуто', false) } : undefined);
+    };
+
+    const remove = async (task) => {
+        const { error } = await supabase.from('microtasks').delete().eq('custom_id', task.custom_id);
+        if (error) { toast(humanError(error), 'error'); return; }
+        setTasks(prev => prev.filter(t => !sameId(t.custom_id, task.custom_id)));
+        toast('Доручення видалено', 'info');
+    };
+
+    const openComposer = () => {
+        setComposing(true);
+        setTimeout(() => composerRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 30);
+    };
+
+    const changeGrouping = (g) => { setGrouping(g); try { localStorage.setItem('kcore.tasks.group', g); } catch { /* немає сховища */ } };
+
+    const renderRow = (t, showObject) => {
+        const id = String(t.custom_id).trim();
+        if (editing === id) {
+            return (
+                <li key={id} id={`task-${id}`}>
+                    <TaskEditor initial={t} objectOptions={objectOptions} peopleOptions={peopleOptions}
+                        onSave={(f) => update(t, f)} onCancel={() => setEditing(null)} />
+                </li>
+            );
+        }
+        return (
+            <TaskRow key={id} task={t} nameById={nameById} nameByEmail={nameByEmail} showObject={showObject}
+                canManage={canManageTask(t)} canDelete={canDeleteTasks} flash={!!flash[id]}
+                onEdit={() => setEditing(id)}
+                onComplete={(x) => setStatus(x, 'виконано', 'Виконано')}
+                onDelete={remove} />
+        );
+    };
+
+    return (
+        <div className="space-y-3">
+            {/* Нове доручення — тут же, над списком */}
+            <div ref={composerRef} className="scroll-mt-3">
+                {!canAssign ? null : composing ? (
+                    <TaskEditor isNew objectOptions={objectOptions} peopleOptions={peopleOptions} onSave={create} onCancel={() => setComposing(false)} />
+                ) : (
+                    <button type="button" onClick={openComposer}
+                        className="w-full h-12 px-4 rounded-xl border border-dashed border-slate-300 bg-white text-left text-[14px] font-semibold text-slate-500 hover:border-indigo-300 hover:text-indigo-700 inline-flex items-center gap-2.5">
+                        <FaPlus size={11} /> Нове доручення…
+                    </button>
+                )}
+            </div>
+
+            <div className={`${T.card} p-2.5 space-y-2.5`}>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Segmented value={who} onChange={setWho}
+                        options={[{ value: 'all', label: 'Усі' }, { value: 'from_me', label: 'Від мене' }, { value: 'to_me', label: 'Для мене' }]} />
+                    <SearchInput value={search} onChange={setSearch} placeholder="Текст, номер, об'єкт, людина…" className="flex-1 min-w-[180px]" />
+                    <div className="flex items-center gap-1.5">
+                        <select value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Порядок"
+                            className="h-9 pl-2.5 pr-7 rounded-lg border border-slate-200 bg-white text-[12.5px] font-semibold text-slate-700">
+                            {SORTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                        </select>
+                        <IconBtn variant="outline" icon={sortDir === 'asc' ? FaSortAmountUp : FaSortAmountDown} label="Напрямок сортування"
+                            onClick={() => setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))} />
+                    </div>
+                    <Segmented value={grouping} onChange={changeGrouping}
+                        options={[{ value: 'list', label: 'Списком' }, { value: 'object', label: "По об'єктах" }]} />
+                </div>
+                <div className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-0.5">
+                    {FILTERS.map(c => {
+                        const on = filter === c.id;
+                        const n = tasks ? countOf(c.id) : '';
+                        return (
+                            <button key={c.id} type="button" onClick={() => setFilter(c.id)}
+                                className={`h-9 px-3 rounded-lg border text-[12.5px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap transition-colors
+                                    ${on ? (c.id === 'overdue' ? 'bg-rose-600 border-rose-600 text-white' : 'bg-indigo-600 border-indigo-600 text-white') : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'}`}>
+                                {c.icon && <c.icon size={10} />}{c.label}
+                                <span className={`tabular-nums text-[11.5px] ${on ? 'opacity-80' : 'text-slate-400'}`}>{n}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+
+            {tasks === null ? (
+                <div className={T.card}><Skeleton rows={6} /></div>
+            ) : shown.length === 0 ? (
+                <div className={T.card}>
+                    <EmptyState icon={FaTasks} title={search ? 'Нічого не знайдено' : 'Доручень немає'} hint={search ? 'Спробуйте інший запит або фільтр.' : 'Додайте перше доручення вище.'} />
+                </div>
+            ) : groups.map(g => (
+                <section key={g.key} className={`${T.card} overflow-hidden`}>
+                    {grouping === 'object' && (
+                        <div className="px-3 py-2.5 border-b border-slate-100 bg-slate-50/60 flex items-start gap-2">
+                            <FaHardHat size={12} className="mt-1 text-slate-400 flex-shrink-0" />
+                            {g.obj ? (
+                                <a href={`#/project/${g.obj.custom_id}`} className="min-w-0 flex-1 text-[14px] font-bold text-slate-900 hover:text-indigo-700 break-words">
+                                    <span className="font-mono text-[11.5px] text-slate-400 mr-1.5">СЕС-{g.obj.custom_id}</span>{g.obj.name || `Об'єкт #${g.obj.custom_id}`}
+                                </a>
+                            ) : <span className="flex-1 text-[14px] font-bold text-slate-500">Без об'єкта</span>}
+                            <span className="mt-0.5 text-[12px] font-semibold text-slate-400 tabular-nums">{g.items.length}</span>
+                        </div>
+                    )}
+                    <ul className="divide-y divide-slate-100">
+                        {g.items.map(t => renderRow(t, grouping !== 'object'))}
+                    </ul>
+                </section>
+            ))}
+
+            {/* Телефон: кнопка завжди під рукою */}
+            {!composing && canAssign && (
+                <button type="button" onClick={openComposer} aria-label="Нове доручення"
+                    className="sm:hidden fixed bottom-20 right-4 z-40 w-14 h-14 bg-indigo-600 text-white rounded-full flex items-center justify-center shadow-lg">
+                    <FaPlus size={20} />
+                </button>
+            )}
+        </div>
+    );
+}
+
+/* ---------------------------------------------------------------------
+ *  Сторінка
+ * ------------------------------------------------------------------- */
+const TABS = [
+    { value: 'stages', label: 'Етапи' },
+    { value: 'day', label: 'Мій день' },
+    { value: 'team', label: 'Доручення' },
+];
 
 export default function MicrotasksPage() {
-  const { role, user, employee } = useAuth();
-  
-  const isAdminOrOffice = role === 'admin' || role === 'super_admin' || role === 'office';
-  const myEmail = user?.email;
-  const myCustomId = employee?.custom_id;
+    const [params, setParams] = useSearchParams();
+    const tab = TABS.some(t => t.value === params.get('tab')) ? params.get('tab') : 'stages';
+    const editId = params.get('edit');
 
-  const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingTask, setEditingTask] = useState(null);
-  
-  const [statusFilter, setStatusFilter] = useState('нове');
-  const [roleFilter, setRoleFilter] = useState('all');
-  
-  const [sortBy, setSortBy] = useState('created_at');
-  const [sortOrder, setSortOrder] = useState('desc');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  
-  const [installations, setInstallations] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  
-  const [notification, setNotification] = useState(null);
-  const [taskToDelete, setTaskToDelete] = useState(null);
-  
-  const navigate = useNavigate();
+    const setTab = (t) => setParams(t === 'stages' ? {} : { tab: t }, { replace: true });
+    const clearEdit = useCallback(() => setParams(prev => {
+        const p = new URLSearchParams(prev);
+        p.delete('edit');
+        return p;
+    }, { replace: true }), [setParams]);
 
-  const showNotification = (message, type = 'success', duration = 5000) => {
-    const id = Date.now();
-    setNotification({ id, message, type });
-    setTimeout(() => { setNotification(null); }, duration);
-  };
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [tasksRes, installationsRes, employeesRes] = await Promise.all([
-        supabase.from('microtasks').select('*, installations(id, name, custom_id)').order('created_at', { ascending: false }),
-        supabase.from('installations').select('id, name, custom_id'),
-        supabase.from('employees').select('id, custom_id, name, email, position')
-      ]);
-
-      if (tasksRes.error) throw tasksRes.error;
-      if (installationsRes.error) throw installationsRes.error;
-      if (employeesRes.error) throw employeesRes.error;
-      
-      const formattedTasks = tasksRes.data.map(task => ({
-        ...task,
-        installation: task.installations
-      }));
-
-      setTasks(formattedTasks || []);
-      setInstallations(installationsRes.data || []);
-      setEmployees(employeesRes.data || []);
-    } catch (error) { 
-        showNotification(`Помилка завантаження: ${error.message}`, 'error');
-    } finally { 
-        setLoading(false); 
-    }
-  }, []);
-
-  useEffect(() => { loadData(); }, [loadData]);
-
-  const filteredTasks = useMemo(() => {
-    let result = [...tasks];
-
-    if (statusFilter === 'прострочено') {
-        const today = new Date().setHours(0,0,0,0);
-        result = result.filter(t => t.due_date && new Date(t.due_date) < today && t.status !== 'виконано' && t.status !== 'скасовано');
-    } else if (statusFilter !== 'всі') { 
-        result = result.filter(task => task.status === statusFilter); 
-    }
-
-    if (roleFilter === 'created_by_me') {
-        result = result.filter(task => task.creator_email === myEmail);
-    } else if (roleFilter === 'assigned_to_me') {
-        if (myCustomId) {
-            result = result.filter(task => task.assigned_to === myCustomId);
-        } else {
-            result = []; 
-        }
-    }
-
-    if (searchQuery) {
-      const lowerQuery = searchQuery.toLowerCase();
-      result = result.filter(task => 
-        task.task_text.toLowerCase().includes(lowerQuery) ||
-        (task.custom_id && task.custom_id.toString().includes(lowerQuery)) ||
-        (task.installation && (task.installation.name.toLowerCase().includes(lowerQuery) || task.installation.custom_id.toString().includes(lowerQuery)))
-      );
-    }
-
-    result.sort((a, b) => {
-      let valA = a[sortBy] || ''; let valB = b[sortBy] || '';
-      if (sortBy === 'created_at' || sortBy === 'due_date') { valA = new Date(valA); valB = new Date(valB); }
-      return sortOrder === 'asc' ? (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
-    });
-    return result;
-  }, [tasks, statusFilter, roleFilter, sortBy, sortOrder, searchQuery, myEmail, myCustomId]);
-
-  const handleFormSubmit = async (formData) => {
-    setSubmitting(true);
-    try {
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !authData?.user?.email) {
-          showNotification('Помилка: Ваша сесія застаріла. Будь ласка, оновіть сторінку (F5)!', 'error');
-          setSubmitting(false);
-          return; 
-      }
-
-      const freshEmail = authData.user.email; 
-
-      let result;
-      const taskData = { 
-        task_text: formData.task_text, 
-        status: formData.status, 
-        due_date: formData.due_date || null, 
-        installation_id: formData.installation_id || null,
-        assigned_to: formData.assigned_to || null 
-      };
-
-      if (formData.status === 'виконано') {
-          taskData.data_complete = new Date().toISOString();
-      }
-      
-      if (editingTask) {
-        result = await supabase.from('microtasks').update(taskData).eq('custom_id', editingTask.custom_id).select('*, installations(id, name, custom_id)').single();
-      } else {
-        taskData.creator_email = freshEmail; 
-        result = await supabase.from('microtasks').insert(taskData).select('*, installations(id, name, custom_id)').single();
-      }
-
-      if (result.error) throw result.error;
-
-      const updatedTask = {...result.data, installation: result.data.installations};
-      setTasks(prev => editingTask ? prev.map(t => t.custom_id === editingTask.custom_id ? updatedTask : t) : [updatedTask, ...prev]);
-      closeModal();
-      showNotification(editingTask ? 'Задачу успішно оновлено!' : 'Задачу успішно створено!');
-
-    } catch (error) { 
-      showNotification(`Помилка: ${error.message}`, 'error');
-    } finally { 
-      setSubmitting(false); 
-    }
-  };
-
-  const promptForDelete = (taskCustomId) => { 
-      if (!isAdminOrOffice) {
-          showNotification('У вас немає прав на видалення задач', 'error');
-          return;
-      }
-      setTaskToDelete(taskCustomId); 
-  };
-
-  const confirmDeleteTask = async () => {
-    if (!taskToDelete) return;
-    try {
-      const { error } = await supabase.from('microtasks').delete().eq('custom_id', taskToDelete);
-      if (error) throw error;
-      setTasks(prev => prev.filter(task => task.custom_id !== taskToDelete));
-      showNotification('Задачу успішно видалено.');
-    } catch (error) { 
-      showNotification(`Помилка видалення: ${error.message}`, 'error');
-    } finally {
-      setTaskToDelete(null);
-    }
-  };
-
-  const handleUpdateStatus = async (taskCustomId, newStatus) => {
-    try {
-      const updates = { status: newStatus };
-      if (newStatus === 'виконано') updates.data_complete = new Date().toISOString();
-      else if (newStatus === 'нове' || newStatus === 'в процесі') updates.data_complete = null;
-
-      const { data, error } = await supabase.from('microtasks').update(updates).eq('custom_id', taskCustomId).select('*, installations(id, name, custom_id)').single();
-      if (error) throw error;
-      const updatedTask = {...data, installation: data.installations};
-      setTasks(prev => prev.map(task => (task.custom_id === taskCustomId ? updatedTask : task)));
-      showNotification('Статус задачі оновлено.');
-    } catch (error) { 
-        showNotification(`Помилка: ${error.message}`, 'error');
-    }
-  };
-
-  const openModalForEdit = (task) => { 
-      const isCreator = task.creator_email === myEmail;
-      const isAssignee = task.assigned_to === myCustomId;
-      const canEdit = isAdminOrOffice || isCreator || isAssignee;
-
-      if (!canEdit) {
-          showNotification('У вас немає прав на редагування цієї задачі', 'error');
-          return;
-      }
-
-      setEditingTask(task); 
-      setIsModalOpen(true); 
-  };
-
-  const openModalForCreate = () => { setEditingTask(null); setIsModalOpen(true); };
-  const closeModal = () => { setIsModalOpen(false); };
-
-  const formatDateTime = (dateString) => { 
-      if (!dateString) return 'Не вказано'; 
-      let safeString = dateString;
-      if (!safeString.includes('Z') && !safeString.match(/[+-]\d{2}:\d{2}$/)) {
-          safeString = safeString.replace(' ', 'T') + 'Z';
-      }
-      return new Date(safeString).toLocaleString('uk-UA', { 
-          timeZone: 'Europe/Kyiv', 
-          day: '2-digit', month: '2-digit', year: 'numeric', 
-          hour: '2-digit', minute: '2-digit', hour12: false 
-      }); 
-  };
-
-  const formatDate = (dateString) => { 
-      if (!dateString) return 'Не вказано'; 
-      return new Date(dateString).toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric' }); 
-  };
-  
-  const isOverdue = (dueDate, status) => status !== 'виконано' && dueDate && new Date(dueDate).setHours(0,0,0,0) < new Date().setHours(0,0,0,0);
-  const sortOptions = [ { value: 'created_at', label: 'За датою створення' }, { value: 'due_date', label: 'За дедлайном' }, { value: 'status', label: 'За статусом' } ];
-
-  return (
-    <Layout>
-      <div className="p-4 sm:p-8 space-y-6 max-w-[1600px] mx-auto pb-safe min-h-[calc(100dvh-80px)] flex flex-col">
-        
-        {/* --- HEADER --- */}
-        <div className="flex flex-col gap-4 flex-none">
-            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-                <div>
-                    <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 tracking-tight">Мікрозадачі</h1>
-                    <p className="text-slate-500 text-sm mt-1">Швидкі доручення та нотатки</p>
+    return (
+        <Layout>
+            <div className="p-3 sm:p-6 space-y-3 max-w-[1500px] mx-auto pb-24 lg:pb-8">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <h1 className="text-2xl font-bold text-slate-900 tracking-tight mr-auto">Задачі та етапи</h1>
+                    <Segmented value={tab} onChange={setTab} options={TABS} />
                 </div>
-                <button onClick={openModalForCreate} className="hidden sm:flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold w-full sm:w-auto">
-                    <FaPlus/> <span>Нова задача</span>
-                </button>
+
+                {tab === 'day' && (
+                    <PlannerView onOpenTask={(t) => setParams({ tab: 'team', edit: String(t.custom_id).trim() }, { replace: true })} />
+                )}
+                {tab === 'team' && <TeamTasks editId={editId} onEditDone={clearEdit} />}
+                {tab === 'stages' && <StagesView />}
             </div>
-
-            {/* FILTERS & SEARCH */}
-            <div className="flex flex-col gap-3">
-                <div className="flex bg-slate-100 p-1 rounded-xl w-full sm:w-fit">
-                    <button onClick={() => setRoleFilter('all')} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-bold ${roleFilter === 'all' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}>Всі задачі</button>
-                    <button onClick={() => setRoleFilter('created_by_me')} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 ${roleFilter === 'created_by_me' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}><FaUserEdit className="text-sm"/> Від мене</button>
-                    <button onClick={() => setRoleFilter('assigned_to_me')} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 ${roleFilter === 'assigned_to_me' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}><FaUserTie className="text-sm"/> Для мене</button>
-                </div>
-
-                <FilterCards tasks={tasks} filter={statusFilter} setFilter={setStatusFilter} />
-
-                <div className="flex flex-col sm:flex-row gap-3">
-                    <div className="relative flex-grow">
-                        <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
-                        <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Пошук..." className="w-full pl-11 pr-4 py-3 bg-white border border-slate-300 rounded-xl text-sm outline-none" />
-                    </div>
-                    <div className="flex gap-2">
-                        <div className="relative flex-grow sm:flex-grow-0">
-                            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="w-full sm:w-auto pl-4 pr-9 py-3 bg-white border border-slate-300 rounded-xl outline-none text-sm appearance-none font-bold text-slate-700">
-                                {sortOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                            </select>
-                            <FaChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={12}/>
-                        </div>
-                        <button onClick={() => setSortOrder(p => (p === 'asc' ? 'desc' : 'asc'))} className="p-3 bg-white border border-slate-300 rounded-xl">
-                            {sortOrder === 'asc' ? <FaSortAmountUp className="text-slate-600"/> : <FaSortAmountDown className="text-slate-600"/>}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        {/* --- CONTENT --- */}
-        <div className="flex-1">
-            {loading ? <LoadingScreen /> : 
-             filteredTasks.length === 0 ? (
-                <div className="text-center py-16 bg-white rounded-xl border border-dashed border-slate-300">
-                    <FaTasks className="text-slate-300 text-4xl mx-auto mb-3" />
-                    <p className="text-slate-600 font-bold">Задач не знайдено</p>
-                </div>
-             ) : (
-              <div>
-                  {filteredTasks.map(task => {
-                    const isCreator = task.creator_email === myEmail;
-                    const isAssignee = task.assigned_to === myCustomId;
-                    const canManage = isAdminOrOffice || isCreator || isAssignee;
-                    const canDelete = isAdminOrOffice;
-
-                    return (
-                        <TaskCard 
-                            key={task.custom_id} 
-                            task={task} 
-                            employees={employees} 
-                            onEdit={openModalForEdit} 
-                            onDelete={promptForDelete} 
-                            onUpdateStatus={handleUpdateStatus} 
-                            formatDateTime={formatDateTime} 
-                            formatDate={formatDate} 
-                            isOverdue={isOverdue}
-                            canEdit={canManage}
-                            canComplete={canManage}
-                            canDelete={canDelete}
-                        />
-                    );
-                  })}
-              </div>
-            )}
-        </div>
-
-        {/* Кнопка на мобільному телефоні */}
-        <div className="sm:hidden fixed bottom-6 right-6 z-40">
-            <button onClick={openModalForCreate} className="w-14 h-14 bg-indigo-600 text-white rounded-full flex items-center justify-center shadow-lg">
-                <FaPlus size={24} />
-            </button>
-        </div>
-
-        <TaskModal isOpen={isModalOpen} onClose={closeModal} onSubmit={handleFormSubmit} task={editingTask} installations={installations} employees={employees} submitting={submitting} />
-        <ConfirmationModal isOpen={!!taskToDelete} onClose={() => setTaskToDelete(null)} onConfirm={confirmDeleteTask} title="Підтвердити видалення" message="Видалити цю задачу безповоротно?" />
-        <AnimatePresence>{notification && <Notification key={notification.id} message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}</AnimatePresence>
-      </div>
-    </Layout>
-  );
+        </Layout>
+    );
 }
+

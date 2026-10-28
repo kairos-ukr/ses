@@ -5,7 +5,6 @@ import {
     FaFolderOpen, FaFolder, FaCheck, FaExclamationTriangle, FaTimes, FaInfoCircle, FaUndo
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
-import Layout from '../Layout';
 import { useAuth } from '../AuthProvider';
 
 // --- ДОПОМІЖНІ КОМПОНЕНТИ ---
@@ -146,7 +145,8 @@ const CategoryNode = ({ category, level, onAddChild, onEdit, onDelete, onRestore
 
 // --- ОСНОВНА СТОРІНКА ---
 export default function CategoriesAdminPage() {
-    const { isAdmin, loading: authLoading } = useAuth();
+    const { can, loading: authLoading } = useAuth();
+    const isAdmin = can('settings', 'edit');   // Доступи → «Налаштування»
     
     const [categories, setCategories] = useState([]);
     const [expandedIds, setExpandedIds] = useState([]); // Стейт для збереження розгорнутих папок
@@ -216,15 +216,15 @@ export default function CategoriesAdminPage() {
     if (authLoading) return <div className="p-8 text-center text-slate-500">Завантаження...</div>;
     if (!isAdmin) {
         return (
-            <Layout>
-                <div className="flex items-center justify-center h-full min-h-[calc(100vh-100px)]">
+            <>
+                <div className="flex items-center justify-center h-full min-h-[60vh] p-4">
                     <div className="text-center p-8 bg-red-50 rounded-2xl border border-red-100 max-w-md shadow-sm">
                         <FaExclamationTriangle className="text-red-500 text-5xl mx-auto mb-4" />
                         <h2 className="text-2xl font-bold text-slate-800 mb-2">Доступ заборонено</h2>
                         <p className="text-slate-600 text-sm">Ця сторінка доступна лише для керівництва.</p>
                     </div>
                 </div>
-            </Layout>
+            </>
         );
     }
 
@@ -323,19 +323,16 @@ export default function CategoriesAdminPage() {
     };
 
     return (
-        <Layout>
-            <div className="p-4 sm:p-8 max-w-[1200px] mx-auto pb-safe min-h-[calc(100vh-80px)] flex flex-col text-slate-800">
+        <>
+            <div className="p-3 sm:p-5 max-w-[1200px] w-full mx-auto pb-safe flex flex-col text-slate-800">
                 <Toast {...toast} onClose={() => setToast(prev => ({ ...prev, isVisible: false }))} />
                 
                 {/* Кастомне модальне вікно для підтверджень */}
                 <ConfirmationModal {...confirmModal} onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })} />
 
                 {/* --- HEADER --- */}
-                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-8 flex-none">
-                    <div>
-                        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Довідник категорій</h1>
-                        <p className="text-slate-500 text-sm mt-1">Управління номенклатурними групами складу</p>
-                    </div>
+                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4 flex-none">
+                    <div className="text-[13px] text-slate-500">Групи номенклатури складу</div>
                     <button onClick={handleAddRoot} className="flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all w-full sm:w-auto">
                         <FaPlus /> <span>Створити розділ</span>
                     </button>
@@ -430,6 +427,6 @@ export default function CategoriesAdminPage() {
                     )}
                 </AnimatePresence>
             </div>
-        </Layout>
+        </>
     );
 }

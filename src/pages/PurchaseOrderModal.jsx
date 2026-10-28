@@ -4,7 +4,8 @@ import {
     FaPlus, FaTimes, FaFileInvoiceDollar, FaBuilding, FaHardHat, 
     FaFileExcel, FaUniversity, FaMoneyBillAlt, FaBoxOpen, FaTrash, FaBox, FaChevronDown 
 } from 'react-icons/fa';
-import { supabase } from '../supabaseClient'; // Перевірте шлях до вашого клієнта
+import { supabase } from '../supabaseClient';
+import { supplyTargetOptions } from '../domain/objects';
 import { NomenclatureModal } from './NomenclatureModal';
 import { findBestNomenclatureMatch, normalizeName } from '../utils/nameMatching';
 
@@ -25,10 +26,11 @@ const CURRENCIES = ['UAH', 'USD', 'EUR'];
 // --- ДОПОМІЖНІ КОМПОНЕНТИ ---
 // (алгоритм співставлення назв винесено в utils/nameMatching.js — спільний з оцифруванням специфікацій)
 
-async function uploadInvoiceFile(file, objectId, invoiceNumber, invoiceDate) {
+async function uploadInvoiceFile(file, objectId, invoiceNumber, invoiceDate, uploadedBy) {
     const fd = new FormData();
     fd.append("files", file);
     fd.append("doc_type", "Рахунок постачальника");
+    if (uploadedBy) fd.append("uploaded_by", uploadedBy);
     const folderName = objectId ? String(objectId) : `Склад_Рахунок_${invoiceNumber || 'БН'}_від_${invoiceDate || new Date().toISOString().split('T')[0]}`;
     fd.append("object_number", folderName);
     
@@ -148,7 +150,8 @@ const NomenclatureSelect = ({ options, value, onChange, placeholder = "Обер�
     );
 };
 
-export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initialMode = 'manual', editOrder = null, importFile = null, dictionaries, employee, showToast, onAddSupplier }) {
+// prefillItems / prefillNote — нове замовлення з готовим переліком (напр. поповнення до мінімуму)
+export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initialMode = 'manual', editOrder = null, importFile = null, prefillItems = null, prefillNote = '', dictionaries, employee, showToast, onAddSupplier }) {
     const { suppliers, installations, nomenclatures: baseNoms, categories = [], systemMemory } = dictionaries;
     const [mode, setMode] = useState(initialMode);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -223,7 +226,13 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
             } else {
                 setOrderForm({
                     supplier_id: '', installation_custom_id: '', status: 'draft',
-                    currency: 'UAH', expected_delivery_date: '', notes: '', items: [],
+                    currency: 'UAH', expected_delivery_date: '', notes: prefillNote || '',
+                    items: (prefillItems || []).map(i => ({
+                        nomenclature_id: i.nomenclature_id,
+                        // Форма приймає лише цілу кількість — дробову округлюємо вгору
+                        quantity: Math.ceil(Number(i.quantity) || 1),
+                        unit_price: '', is_package: false,
+                    })),
                     payment_form: 'cash', invoice_number: '', invoice_date: ''
                 });
             }
@@ -232,7 +241,7 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
         if (initialMode === 'import' && importFile) {
             processExcelFile(importFile);
         }
-    }, [isOpen, initialMode, editOrder, importFile]);
+    }, [isOpen, initialMode, editOrder, importFile, prefillItems, prefillNote]);
 
     // Оновлена функція парсингу з підтримкою обробки помилок Worker'а
     const processExcelFile = async (file) => {
@@ -344,7 +353,7 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
         }
         if (changedMappings.length > 0) {
             await supabase.from('supplier_mappings').upsert(changedMappings, { onConflict: 'supplier_item_name' });
-            showToast(`Система запам'ятала ${changedMappings.length} назв(и) від постачальників! 🧠`, 'success');
+            showToast(`Система запам'ятала ${changedMappings.length} назв(и) від постачальників`, 'success');
         }
     };
 
@@ -372,7 +381,7 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
         setIsSubmitting(true);
         try {
             showToast('Завантаження файлу на диск...', 'success');
-            const fileId = await uploadInvoiceFile(importFile, importMeta.installation_custom_id, importMeta.invoice_number, importMeta.invoice_date);
+            const fileId = await uploadInvoiceFile(importFile, importMeta.installation_custom_id, importMeta.invoice_number, importMeta.invoice_date, employee?.name);
 
             showToast('Збереження замовлення...', 'success');
             const importedOrder = {
@@ -390,7 +399,7 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
     };
 
     const supplierOptions = suppliers.map(s => ({ id: s.id, label: s.name }));
-    const instOptions = installations.map(i => ({ id: i.custom_id, label: `[#${i.custom_id}] ${i.name}` }));
+    const instOptions = supplyTargetOptions(installations);
 
     if (!isOpen) return null;
 
@@ -574,9 +583,9 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
                                                         <tr key={item.id} className={`transition-colors ${hasError ? 'bg-red-50/20 hover:bg-red-50/40' : 'bg-white hover:bg-slate-50'}`}>
                                                             <td className="px-4 py-3 align-middle border-r border-slate-100">
                                                                 <div className="text-sm font-bold text-slate-700">{item.supplier_item_name}</div>
-                                                                {item.auto === 'memory' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">🧠 З пам'яті</span>}
-                                                                {item.auto === 'exact' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">= Точна назва</span>}
-                                                                {item.auto === 'fuzzy' && item.nomenclature_id && <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">≈ Схоже — перевірте</span>}
+                                                                {item.auto === 'memory' && item.nomenclature_id && <span className="inline-block mt-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">з пам'яті</span>}
+                                                                {item.auto === 'exact' && item.nomenclature_id && <span className="inline-block mt-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">= Точна назва</span>}
+                                                                {item.auto === 'fuzzy' && item.nomenclature_id && <span className="inline-block mt-1 text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">≈ Схоже — перевірте</span>}
                                                             </td>
                                                             <td className="px-2 py-3 align-middle border-r border-slate-100 text-center">
                                                                 <div className="flex flex-col items-center justify-center h-full gap-1.5">
@@ -627,6 +636,7 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
                 isOpen={quickAdd.open}
                 onClose={() => setQuickAdd({ open: false, name: '', target: null })}
                 onSuccess={handleQuickAddSuccess}
+                onPickExisting={handleQuickAddSuccess}
                 showToast={showToast}
                 initialName={quickAdd.name}
             />

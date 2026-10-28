@@ -25,7 +25,7 @@ import {
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import {
-    T, Chip, Card, Bar, EmptyState, Skeleton, useToast, humanError, num,
+    T, Chip, Card, Bar, EmptyState, Skeleton, Tip, useToast, humanError, num,
 } from '../ui';
 
 /* Основне обладнання — те, за чим стежать окремо і що має довгий строк
@@ -212,12 +212,8 @@ export default function EquipmentDemand({ onOpenObject }) {
                             </span>
                         </button>
                     ))}
+                    <Tip width={320} className="ml-1 flex-shrink-0" text="«Основне» — інвертори, панелі, АКБ і БМС: те, за чим стежать окремо і що довго їде. «З КП» — обладнання, вже продане клієнту, але ще не доведене до комплектації. Метизи, профіль та інша дрібнота — у вкладці «Всі позиції»." />
                 </div>
-                <p className="text-[11.5px] text-slate-500 leading-snug">
-                    «Основне» — інвертори, панелі, АКБ і БМС: те, за чим стежать окремо і що
-                    довго їде. «З КП» — обладнання, вже продане клієнту, але ще не доведене до
-                    комплектації. Метизи, профіль та інша дрібнота — у вкладці «Всі позиції».
-                </p>
             </Card>
 
             <div className={`${T.card} overflow-hidden`}>

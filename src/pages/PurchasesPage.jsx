@@ -14,8 +14,10 @@ import {
     FaPlus, FaEdit, FaInfoCircle, FaFileInvoiceDollar,
     FaBuilding, FaHardHat, FaChevronDown, FaTruckLoading, FaFileExcel,
     FaMoneyBillAlt, FaShoppingCart, FaWarehouse, FaCheck, FaBan,
+    FaShieldAlt, FaArrowDown,
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
+import { SUPPLY_TARGET_STATUSES } from '../domain/objects';
 import { useAuth } from '../AuthProvider';
 import PurchaseOrderModal from './PurchaseOrderModal';
 import {
@@ -41,7 +43,8 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
     const { employee, loading: authLoading } = useAuth();
     const toast = useToast();
     const confirm = useConfirm();
-    const isMobile = useIsMobile();
+    // Картки замість таблиці на всьому, що вужче за ноутбук (і телефон в альбомній орієнтації)
+    const isMobile = useIsMobile(1024);
 
     const [orders, setOrders] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
@@ -56,6 +59,10 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
     const [statusFilter, setStatusFilter] = useState('all');
     const [expandedId, setExpandedId] = useState(null);
     const [requestsOpen, setRequestsOpen] = useState(true);
+    // Позиції, що опустились нижче мінімального залишку (після міграції stock_rules)
+    const [belowMin, setBelowMin] = useState([]);
+    const [belowMinOpen, setBelowMinOpen] = useState(true);
+    const [poPrefill, setPoPrefill] = useState(null);     // { items, note } — нове замовлення з готовим переліком
 
     // Модалка замовлення
     const [poModal, setPoModal] = useState(false);
@@ -83,14 +90,15 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            const [supRes, instRes, nomRes, catRes, whRes, memRes, reqRes] = await Promise.all([
+            const [supRes, instRes, nomRes, catRes, whRes, memRes, reqRes, minRes] = await Promise.all([
                 supabase.from('suppliers').select('id, name').order('name'),
-                supabase.from('installations').select('custom_id, name, status').in('status', ['planning', 'in_progress', 'pending']),
+                supabase.from('installations').select('custom_id, name, status').in('status', SUPPLY_TARGET_STATUSES),
                 supabase.from('nomenclature').select('id, name, sku, brand, model, technical_characteristics, category_id, type, package_name, package_multiplier, unit:units(name)').eq('is_active', true).order('name'),
                 supabase.from('categories').select('*'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
                 supabase.from('supplier_mappings').select('*'),
                 supabase.from('procurement_requests').select('*').eq('status', 'requested').order('created_at', { ascending: true }),
+                supabase.from('v_stock_below_min').select('*').order('to_order', { ascending: false }),
             ]);
 
             setSuppliers(supRes.data || []);
@@ -98,6 +106,8 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
             setWarehouses(whRes.data || []);
             setSystemMemory(memRes.data || []);
             setRequests(reqRes.data || []);
+            // До міграції stock_rules в'юхи немає — блок просто не з'явиться
+            setBelowMin(minRes.error ? [] : (minRes.data || []));
 
             const cats = catRes.data || [];
             setCategories(cats);
@@ -200,6 +210,21 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
         } catch (e) {
             toast(humanError(e), 'error');
         }
+    };
+
+    /* ---------------- НИЖЧЕ МІНІМУМУ ---------------- */
+
+    /** Нове замовлення, в якому вже стоять усі позиції з кількостями до дозамовлення */
+    const orderBelowMin = () => {
+        const items = belowMin
+            .filter(r => Number(r.to_order) > 0)
+            .map(r => ({ nomenclature_id: r.nomenclature_id, quantity: Number(r.to_order) }));
+        if (!items.length) return toast('Дозамовляти нічого — усе вже їде на склад', 'info');
+        setPoEdit(null);
+        setPoFile(null);
+        setPoMode('manual');
+        setPoPrefill({ items, note: 'Поповнення до мінімального залишку' });
+        setPoModal(true);
     };
 
     /* ---------------- ЗАМОВЛЕННЯ ---------------- */
@@ -513,27 +538,88 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
                             {requests.map(r => {
                                 const nom = nomById.get(r.nomenclature_id);
                                 return (
-                                    <div key={r.id} className="px-3 py-2 flex items-center gap-2 flex-wrap hover:bg-orange-50/40 transition-colors">
+                                    // Назва повністю (на телефоні — у кілька рядків), кнопки — окремим рядком під нею
+                                    <div key={r.id} className="px-3 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2 hover:bg-orange-50/40 transition-colors">
+                                        <div className="flex items-start gap-2 min-w-0 flex-1">
                                         <div className="min-w-0 flex-1">
-                                            <div className="text-[12.5px] font-semibold text-slate-900 truncate">
+                                            <div className="text-[13px] font-semibold text-slate-900 leading-snug break-words">
                                                 {nom?.fullName || `Номенклатура #${r.nomenclature_id}`}
                                             </div>
-                                            <div className="text-[10.5px] text-slate-400">
-                                                СЕС-{r.installation_custom_id} · {new Date(r.created_at).toLocaleDateString('uk-UA')}
-                                                {r.note && <span className="italic"> · {r.note}</span>}
+                                            <div className="text-[10.5px] text-slate-400 flex items-center gap-1.5 flex-wrap">
+                                                <span>СЕС-{r.installation_custom_id} · {new Date(r.created_at).toLocaleDateString('uk-UA')}</span>
+                                                {r.source === 'auto_protection' && (
+                                                    <Chip tone="info" icon={FaShieldAlt}>авто · захист</Chip>
+                                                )}
+                                                {r.note && r.source !== 'auto_protection' && <span className="italic">{r.note}</span>}
                                             </div>
                                         </div>
-                                        <span className="text-[13px] font-black tabular-nums text-orange-700 flex-shrink-0">
+                                        <span className="text-[14px] font-black tabular-nums text-orange-700 flex-shrink-0 whitespace-nowrap">
                                             {num(r.quantity)}
-                                            <span className="text-[9px] text-orange-400 ml-0.5">{nom?.unit?.name || 'шт'}</span>
+                                            <span className="text-[10px] text-orange-400 ml-0.5">{nom?.unit?.name || 'шт'}</span>
                                         </span>
-                                        <div className="flex items-center gap-1 flex-shrink-0">
+                                        </div>
+                                        <div className="flex items-center justify-end gap-1 flex-shrink-0">
                                             <IconBtn variant="softOk" icon={FaCheck} label="Є на складі"
                                                 onClick={() => resolveRequest(r.id, 'stock_confirmed')} />
                                             <Btn size="sm" variant="soft" icon={FaShoppingCart}
                                                 onClick={() => resolveRequest(r.id, 'ordered')}>Замовлено</Btn>
-                                            <IconBtn variant="softDanger" icon={FaBan} label="Відхилити"
+                                            <IconBtn variant="softDanger" icon={FaBan}
+                                                label={r.source === 'auto_protection' ? 'Відхилити — автоматично більше не створиться' : 'Відхилити'}
                                                 onClick={() => resolveRequest(r.id, 'rejected')} />
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </Card>
+            )}
+
+            {/* ---------- НИЖЧЕ МІНІМАЛЬНОГО ЗАЛИШКУ ---------- */}
+            {belowMin.length > 0 && (
+                <Card pad="p-0" className="flex-none border-rose-200 overflow-hidden">
+                    <div className="px-3 py-2 bg-rose-50 flex items-center gap-2">
+                        <button onClick={() => setBelowMinOpen(v => !v)}
+                            className="flex items-center gap-2 text-left flex-1 min-w-0 py-0.5">
+                            <FaArrowDown className="text-rose-500 flex-shrink-0" size={12} />
+                            <span className="text-[13px] font-bold text-rose-900 truncate">Нижче мінімального залишку</span>
+                            <Chip tone="danger">{belowMin.length}</Chip>
+                            <span className="text-[11px] text-rose-700/70 hidden lg:inline ml-1">
+                                вільне на складах разом із тим, що вже їде
+                            </span>
+                            <FaChevronDown size={12}
+                                className={`ml-auto text-rose-400 transition-transform flex-shrink-0 ${belowMinOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        <Btn size="sm" variant="danger" icon={FaShoppingCart} onClick={orderBelowMin}
+                            title="Нове замовлення з кількостями до дозамовлення">
+                            <span className="hidden sm:inline">Сформувати замовлення</span>
+                            <span className="sm:hidden">Замовити</span>
+                        </Btn>
+                    </div>
+
+                    {belowMinOpen && (
+                        <div className="divide-y divide-rose-100 sm:max-h-64 sm:overflow-y-auto border-t border-rose-100">
+                            {belowMin.map(r => {
+                                const nom = nomById.get(r.nomenclature_id);
+                                const unit = r.unit_name || nom?.unit?.name || 'шт';
+                                return (
+                                    <div key={r.nomenclature_id} className="px-3 py-2 flex items-center gap-2">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="text-[13px] font-semibold text-slate-900 leading-snug break-words">
+                                                {nom?.fullName || r.name}
+                                            </div>
+                                            <div className="text-[10.5px] text-slate-500 tabular-nums flex items-center gap-x-2 flex-wrap">
+                                                <span>вільно <b className="text-rose-700">{num(r.available)}</b> із мін. <b className="text-slate-800">{num(r.min_stock)}</b></span>
+                                                {Number(r.incoming) > 0 && <span>їде <b className="text-sky-700">{num(r.incoming)}</b></span>}
+                                                {r.sku && <span className={T.mono}>{r.sku}</span>}
+                                            </div>
+                                        </div>
+                                        <div className="text-right flex-shrink-0">
+                                            <div className="text-[11px] font-semibold text-slate-400">дозамовити</div>
+                                            <div className="text-[13px] font-black tabular-nums text-rose-700">
+                                                {num(r.to_order)}
+                                                <span className="text-[9px] text-rose-400 ml-0.5">{unit}</span>
+                                            </div>
                                         </div>
                                     </div>
                                 );
@@ -601,7 +687,7 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
                                             {/* Три показники, які вирішують: чи треба сюди лізти */}
                                             <div className="flex items-center gap-4 flex-shrink-0">
                                                 <div className="text-right">
-                                                    <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">Сума</div>
+                                                    <div className="text-[11px] font-semibold text-slate-400">Сума</div>
                                                     <div className="text-[13px] font-black tabular-nums text-slate-900">
                                                         {money(s.cost, order.currency)}
                                                     </div>
@@ -616,7 +702,7 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
                                                     <Bar className="mt-1" segments={[{ pct: s.paidPct, tone: s.debt > 0 ? 'warn' : 'ok' }]} />
                                                 </div>
                                                 <div className="text-right w-24 hidden sm:block">
-                                                    <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">Приїхало</div>
+                                                    <div className="text-[11px] font-semibold text-slate-400">Приїхало</div>
                                                     <div className="text-[13px] font-black tabular-nums text-slate-900">
                                                         {Math.round(s.recvPct)}%
                                                     </div>
@@ -748,7 +834,7 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
                                                 <div className="min-w-0 flex-1">
                                                     <div className="text-[12.5px] font-bold text-slate-900">
                                                         {money(p.amount, p.currency)}
-                                                        {!p.is_active && <span className="text-rose-500 ml-2 text-[10px] font-black uppercase">анульовано</span>}
+                                                        {!p.is_active && <span className="text-rose-500 ml-2 text-[11px] font-semibold">анульовано</span>}
                                                     </div>
                                                     <div className="text-[10.5px] text-slate-400">
                                                         {PAYMENT_TYPES[p.payment_type] || p.payment_type}
@@ -848,11 +934,13 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
 
             <PurchaseOrderModal
                 isOpen={poModal}
-                onClose={() => { setPoModal(false); setPoEdit(null); setPoFile(null); }}
-                onSuccess={() => { setPoModal(false); setPoEdit(null); setPoFile(null); loadData(); }}
+                onClose={() => { setPoModal(false); setPoEdit(null); setPoFile(null); setPoPrefill(null); }}
+                onSuccess={() => { setPoModal(false); setPoEdit(null); setPoFile(null); setPoPrefill(null); loadData(); }}
                 initialMode={poMode}
                 editOrder={poEdit}
                 importFile={poFile}
+                prefillItems={poPrefill?.items || null}
+                prefillNote={poPrefill?.note || ''}
                 dictionaries={{ suppliers, installations, nomenclatures, categories, systemMemory }}
                 employee={employee}
                 showToast={toast}
