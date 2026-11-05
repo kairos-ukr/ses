@@ -24,9 +24,13 @@ const FullScreen = ({ children }) => (
 );
 
 export default function AccessGate({ children }) {
-    const { user, access } = useAuth();
+    const { user, access, recovery } = useAuth();
     const { pathname } = useLocation();
 
+    // Посилання «новий пароль» — сторінка сама перевіряє ключ і просить пароль
+    if (pathname === '/reset-password') return children;
+    // Прийшла за таким посиланням і ще не задала пароль — спершу пароль
+    if (recovery && user) return <Navigate to="/reset-password" replace />;
     // Сторінка входу сама вирішує, куди вести далі
     if (pathname === '/') return children;
     if (!user) return <Navigate to="/" replace />;

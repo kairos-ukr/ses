@@ -32,10 +32,12 @@ const routeOf = (points) => {
     return `https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=${encodeURIComponent(pts[pts.length - 1])}${way.length ? `&waypoints=${encodeURIComponent(way.join('|'))}` : ''}`;
 };
 
-export default function TripCard({ who, people, canWrite }) {
+/** date — день поїздок (увечері «Монтаж» показує завтрашні); відмічати зупинки й пробіг — лише в сам день */
+export default function TripCard({ who, people, canWrite, date }) {
     const toast = useToast();
     const navigate = useNavigate();
-    const today = isoDay();
+    const today = date || isoDay();
+    const onDay = today === isoDay();
     const [trips, setTrips] = useState([]);
     const [objects, setObjects] = useState(new Map());
     const fresh = useFresh();
@@ -98,7 +100,7 @@ export default function TripCard({ who, people, canWrite }) {
             <Card key={trip.id}>
                 <Label icon={trip.vehicle || !trip.own_car_custom_id ? FaShuttleVan : FaCar}
                     right={isDriver ? <Pill tone="dark">я за кермом</Pill> : <Pill>я в екіпажі</Pill>}>
-                    Транспорт
+                    {onDay ? 'Транспорт' : 'Транспорт завтра'}
                 </Label>
                 <div className="text-[17px] font-bold leading-snug break-words">{trip.title || transport}</div>
                 <div className="text-[14px] text-slate-600 mt-0.5 break-words">
@@ -114,7 +116,7 @@ export default function TripCard({ who, people, canWrite }) {
                             const o = s.installation_custom_id ? objects.get(s.installation_custom_id) : null;
                             return (
                                 <li key={s.id} className={`flex items-start gap-3 py-2.5 ${i ? 'border-t border-slate-100' : ''}`}>
-                                    {isDriver && canWrite ? (
+                                    {isDriver && canWrite && onDay ? (
                                         <Check on={!!s.done_at} label={s.done_at ? 'Повернути зупинку' : 'Зупинку виконано'} onClick={() => toggle(trip, s)} />
                                     ) : (
                                         <span className={`w-6 h-6 mt-0.5 rounded-lg flex items-center justify-center text-[12px] font-bold flex-shrink-0 ${s.done_at ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}>
@@ -135,7 +137,7 @@ export default function TripCard({ who, people, canWrite }) {
                     </ol>
                 )}
                 {route && left > 0 && <Big small icon={FaRoute} href={route} className="mt-2">Маршрут · {left} зуп.</Big>}
-                {isDriver && canWrite && <Big small tone="soft" className="mt-2" onClick={() => navigate('/m/me')}>Внести пробіг</Big>}
+                {isDriver && canWrite && onDay && <Big small tone="soft" className="mt-2" onClick={() => navigate('/m/me')}>Внести пробіг</Big>}
             </Card>
         );
     });

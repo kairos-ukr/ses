@@ -89,25 +89,39 @@ const isLost = (o) => o.status === 'lost' || o.status === 'cancelled';
  * launches  — Map(id → дата запуску)
  * profit    — Map(id → рядок v_object_profit)
  * debts     — Map(id → рядок v_receivables)
+ * usdRate   — поточний курс: лише для старих угод без власного курсу
+ * cur       — у якій валюті показувати гроші ('USD' | 'UAH')
  * inPeriod  — (date) => bool
+ *
+ * Гроші кожного запису — одразу у вибраній валюті й за курсом СВОЄЇ угоди
+ * (v_object_profit.usd_rate = курс угоди, db/2026-11_deal_rate.sql): угода
+ * на $10 000 у доларах — рівно $10 000, хоч який курс зараз.
  */
-export const buildRecords = ({ objects, launches, profit, debts, usdRate, inPeriod }) => objects.map(o => {
+export const buildRecords = ({ objects, launches, profit, debts, usdRate, cur = 'UAH', inPeriod }) => objects.map(o => {
     const p = profit.get(o.custom_id);
     const launchedAt = launches.get(o.custom_id) || null;
     const lost = isLost(o);
-    const revenue = Number(p?.revenue_uah) || 0;
-    const cost = Number(p?.cost_uah) || 0;
+    const rate = Number(p?.usd_rate) || Number(o.exchange_rate) || Number(usdRate) || null;
+    const conv = (uah) => (cur === 'USD' ? (rate ? uah / rate : 0) : uah);
+    const revenueUah = Number(p?.revenue_uah) || 0;
+    const costUah = Number(p?.cost_uah) || 0;
     // Повна собівартість: є матеріали, і в усіх є ціна закупівлі, а в людей — ставка.
     // Інакше прибуток вийде завищеним, тож такі об'єкти в прибуток не йдуть.
-    const complete = !!p && revenue > 0 && cost > 0 && Number(p.materials_items) > 0
+    const complete = !!p && revenueUah > 0 && costUah > 0 && Number(p.materials_items) > 0
         && !Number(p.materials_missing) && !Number(p.labour_missing);
     const missing = !p ? [] : [
         !Number(p.materials_items) && 'немає списаних матеріалів',
         Number(p.materials_missing) > 0 && `без ціни закупівлі: ${p.materials_missing} поз.`,
         Number(p.labour_missing) > 0 && 'немає ставки монтажника',
     ].filter(Boolean);
+    // Борг — у валюті угоди; в іншу валюту — за курсом угоди
     const d = debts.get(o.custom_id);
-    const debtUah = d ? (d.currency === 'UAH' ? Number(d.debt) : Number(d.debt) * usdRate) || 0 : 0;
+    const debtCur = d?.currency || 'USD';
+    const debtRaw = Number(d?.debt) || 0;
+    const debtV = !d ? 0 : debtCur === cur ? debtRaw
+        : cur === 'USD' ? (rate ? debtRaw / rate : 0) : debtRaw * (rate || 0);
+    const revenue = conv(revenueUah);
+    const cost = conv(costUah);
     return {
         id: o.custom_id,
         o,
@@ -121,10 +135,10 @@ export const buildRecords = ({ objects, launches, profit, debts, usdRate, inPeri
         revenue,
         cost,
         profit: complete ? revenue - cost : null,
-        margin: complete && revenue > 0 ? ((revenue - cost) / revenue) * 100 : null,
+        margin: complete && revenueUah > 0 ? ((revenueUah - costUah) / revenueUah) * 100 : null,
         complete,
         missing,
-        debt: debtUah,
+        debt: debtV,
         overdueDays: d && Number(d.overdue_amount) > 0 ? Number(d.days_overdue) || 0 : 0,
     };
 });
@@ -132,7 +146,7 @@ export const buildRecords = ({ objects, launches, profit, debts, usdRate, inPeri
 /** Чи об'єкт стосується періоду: створений, запущений або втрачений у ньому */
 export const touchedInPeriod = (r) => r.createdIn || r.launchedIn || r.lostIn;
 
-/** Підсумки по вибірці. Гроші — у гривнях (як у базі), показ переводить у $ за потреби */
+/** Підсумки по вибірці. Гроші — у вибраній валюті (кожна угода — за своїм курсом) */
 export const stats = (recs) => {
     let created = 0, launched = 0, launchedKw = 0, lost = 0, revenue = 0, profit = 0, completeN = 0, completeRevenue = 0, debt = 0, debtN = 0;
     recs.forEach(r => {

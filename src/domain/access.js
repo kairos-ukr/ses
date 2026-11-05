@@ -54,7 +54,7 @@ export const SECTIONS = [
     { key: 'documents', group: 'Інше', label: 'Документи', acts: ALL4 },
     { key: 'partners', group: 'Інше', label: 'Партнерство', acts: ALL4 },
 
-    { key: 'settings', group: 'Керування', label: 'Налаштування', acts: ['view', 'edit'], hint: 'норми етапів, курс долара, автоматика, категорії складу' },
+    { key: 'settings', group: 'Керування', label: 'Налаштування', acts: ['view', 'edit'], hint: 'курс долара, автоматика забезпечення, категорії складу' },
     { key: 'access', group: 'Керування', label: 'Доступи', acts: ['view', 'edit'], hint: 'люди, шаблони, нові реєстрації, журнал змін' },
 ];
 

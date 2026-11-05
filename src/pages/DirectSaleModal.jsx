@@ -9,15 +9,23 @@
 //  Тому це один екран із перемикачем, а не три схожі модалки.
 //  Позиції проводяться по одній: якщо одна не пройшла, решта лишається
 //  проведеною, а на проблемній видно причину.
+//
+//  Видача під об'єкт: зверху — що за чинною специфікацією ще не видано
+//  (потрібно − видано; свій резерв теж видається) і кнопка «Додати в
+//  документ» — усе, що є на обраному складі. Після зміни специфікації
+//  видно й що чекаємо назад на склад.
+//  presetInstallationId / presetWarehouseId / autoFill — відкрити видачу
+//  на конкретний об'єкт (з «На виїзди») і одразу заповнити позиції.
 // =====================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     FaArrowUp, FaHandshake, FaShoppingCart, FaPlus, FaTrash, FaBox,
-    FaWarehouse, FaHardHat, FaUserTie, FaExclamationTriangle, FaCheckCircle,
+    FaWarehouse, FaHardHat, FaUserTie, FaExclamationTriangle, FaCheckCircle, FaClipboardList, FaUndo,
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { SUPPLY_TARGET_STATUSES, supplyTargetOptions } from '../domain/objects';
+import { nomFullName } from '../domain/nomenclature';
 import { useAuth } from '../AuthProvider';
 import DeliveryNoteModal from './DeliveryNoteModal';
 import { generateDeliveryNoteNumber } from '../utils/deliveryNote';
@@ -35,15 +43,22 @@ const KINDS = {
 
 const CURRENCIES = ['USD', 'UAH', 'EUR'];
 const newKey = () => Math.random().toString(36).slice(2, 10);
+/** Скільки ще видати за специфікацією: потрібно − видано (свій резерв теж видається) */
+const toIssueOf = (need) => Math.max(0, (parseFloat(need?.required_quantity) || 0) - (parseFloat(need?.issued_quantity) || 0));
 const emptyLine = () => ({ key: newKey(), nomenclature_id: '', sellMode: 'base', quantity: '', unit_price: '', error: '' });
 
 // presetClientId — відкрити одразу «Продаж клієнту» з обраним клієнтом (з картки клієнта)
-export default function DirectSaleModal({ isOpen, onClose, onSuccess, presetClientId = null }) {
+export default function DirectSaleModal({
+    isOpen, onClose, onSuccess, presetClientId = null,
+    presetInstallationId = null, presetWarehouseId = null, autoFill = false,
+}) {
     const { employee } = useAuth();
     const toast = useToast();
 
     const [dict, setDict] = useState({ nomenclatures: [], warehouses: [], clients: [], installations: [], stock: [] });
     const [objNeeds, setObjNeeds] = useState([]);
+    const [objBack, setObjBack] = useState([]);   // після зміни специфікації — чекаємо назад
+    const [filled, setFilled] = useState(false);  // автозаповнення вже було
     const [loading, setLoading] = useState(false);
     const [busy, setBusy] = useState(false);
     const [noteDoc, setNoteDoc] = useState(null);
@@ -54,7 +69,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, presetClie
     });
     const [lines, setLines] = useState([emptyLine()]);
 
-    // Курс — з налаштувань програми (той самий, що в платежах і аналітиці)
+    // Курс — поточний з налаштувань; продаж на об'єкт — курс його угоди (нижче)
     useEffect(() => {
         if (!isOpen) return;
         loadUsdRate().then(r => { if (r) setForm(f => (f.exchange_rate === '' ? { ...f, exchange_rate: String(r) } : f)); });
@@ -73,7 +88,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, presetClie
                 supabase.from('categories').select('id, name, parent_id'),
                 supabase.from('warehouses').select('id, name').eq('is_active', true).order('name'),
                 supabase.from('clients').select('id, custom_id, name, phone, is_subcontract').order('name'),
-                supabase.from('installations').select('custom_id, name, status').in('status', SUPPLY_TARGET_STATUSES),
+                supabase.from('installations').select('custom_id, name, status, exchange_rate').in('status', SUPPLY_TARGET_STATUSES),
                 supabase.from('v_warehouse_stock_available').select('warehouse_id, nomenclature_id, quantity_on_hand, quantity_available'),
             ]);
 
@@ -87,7 +102,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, presetClie
                     path.unshift(c.name);
                     id = c.parent_id;
                 }
-                return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim(), unitName: item.unit?.name || 'шт' };
+                return { ...item, fullName: nomFullName(path, item.name), unitName: item.unit?.name || 'шт' };
             });
 
             setDict({
@@ -103,23 +118,38 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, presetClie
     useEffect(() => {
         if (!isOpen) return;
         setForm(f => ({
-            ...f, kind: presetClientId ? 'sale' : 'issue', client_id: presetClientId || '', installation_custom_id: '',
-            warehouse_from_id: '', notes: '', reference_document: '',
+            ...f, kind: presetClientId ? 'sale' : 'issue', client_id: presetClientId || '',
+            installation_custom_id: presetInstallationId ? String(presetInstallationId) : '',
+            warehouse_from_id: presetWarehouseId ? String(presetWarehouseId) : '', notes: '', reference_document: '',
         }));
         setLines([emptyLine()]);
         setObjNeeds([]);
+        setObjBack([]);
+        setFilled(false);
         setNoteDoc(null);
         loadDict();
         generateDeliveryNoteNumber().then(n => setForm(p => ({ ...p, reference_document: n })));
-    }, [isOpen, loadDict, presetClientId]);
+    }, [isOpen, loadDict, presetClientId, presetInstallationId, presetWarehouseId]);
 
-    // Потреба об'єкта — щоб бачити, чи видаємо в межах плану
+    // Обрали об'єкт — курс його угоди (якщо в угоди він є)
     useEffect(() => {
-        if (!form.installation_custom_id) { setObjNeeds([]); return; }
+        const o = (dict.installations || []).find(x => String(x.custom_id) === String(form.installation_custom_id));
+        if (Number(o?.exchange_rate) > 0) setForm(f => ({ ...f, exchange_rate: String(Number(o.exchange_rate)) }));
+    }, [form.installation_custom_id, dict.installations]);
+
+    // Потреба об'єкта — щоб бачити, чи видаємо в межах плану; і що чекаємо назад
+    useEffect(() => {
+        if (!form.installation_custom_id) { setObjNeeds([]); setObjBack([]); return; }
         let alive = true;
-        supabase.from('v_object_material_needs').select('*')
-            .eq('installation_custom_id', form.installation_custom_id)
-            .then(({ data }) => { if (alive) setObjNeeds(data || []); });
+        Promise.all([
+            supabase.from('v_object_material_needs').select('*').eq('installation_custom_id', form.installation_custom_id),
+            supabase.from('v_object_spec_leftovers').select('nomenclature_id, name, unit, to_return')
+                .eq('installation_custom_id', form.installation_custom_id).gt('to_return', 0),
+        ]).then(([need, back]) => {
+            if (!alive) return;
+            setObjNeeds(need.data || []);
+            setObjBack(back.error ? [] : back.data || []);
+        });
         return () => { alive = false; };
     }, [form.installation_custom_id]);
 
@@ -201,16 +231,43 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, presetClie
 
     /* Перевищення плану або позиція поза специфікацією — просимо причину */
     const needsReason = useMemo(() => {
-        if (!form.installation_custom_id) return false;
+        if (!form.installation_custom_id || form.kind !== 'issue') return false;
         return lines.some(l => {
             if (!l.nomenclature_id || !(parseFloat(l.quantity) > 0)) return false;
             const need = needOf(l.nomenclature_id);
             if (!need) return true;
-            return qtyBase(l) > parseFloat(need.outstanding_need);
+            return qtyBase(l) > toIssueOf(need) + 0.0001;
         });
-    }, [form.installation_custom_id, lines, needOf, qtyBase]);
+    }, [form.installation_custom_id, form.kind, lines, needOf, qtyBase]);
 
     const filledLines = lines.filter(l => l.nomenclature_id && parseFloat(l.quantity) > 0);
+
+    /* Що за специфікацією ще не видано — і що з цього є на обраному складі */
+    const specLeft = useMemo(() => (form.kind === 'issue' ? objNeeds : [])
+        .map(n => ({ nomenclature_id: n.nomenclature_id, toIssue: toIssueOf(n) }))
+        .filter(x => x.toIssue > 0), [objNeeds, form.kind]);
+    // Є на складі — усе; ще не в документі — те, що додасть кнопка
+    const specAvail = useMemo(() => specLeft
+        .map(x => ({ ...x, usable: usableOf(x.nomenclature_id) }))
+        .filter(x => x.usable > 0), [specLeft, usableOf]);
+    const specHere = useMemo(() => specAvail
+        .filter(x => !lines.some(l => String(l.nomenclature_id) === String(x.nomenclature_id))), [specAvail, lines]);
+
+    const fillFromSpec = useCallback(() => {
+        if (!specHere.length) return;
+        setLines(ls => [
+            ...ls.filter(l => l.nomenclature_id),
+            ...specHere.map(x => ({ ...emptyLine(), nomenclature_id: x.nomenclature_id, quantity: num(Math.min(x.toIssue, x.usable)) })),
+        ]);
+        toast(`Додано за специфікацією: ${specHere.length} поз. — перевірте кількість`);
+    }, [specHere, toast]);
+
+    // З «На виїзди»: щойно відомі потреба й склад — одразу заповнюємо
+    useEffect(() => {
+        if (!isOpen || !autoFill || filled || loading || !form.warehouse_from_id || !specLeft.length) return;
+        setFilled(true);
+        fillFromSpec();
+    }, [isOpen, autoFill, filled, loading, form.warehouse_from_id, specLeft.length, fillFromSpec]);
 
     /* ---------------- ШВИДКЕ ДОДАВАННЯ КЛІЄНТА ---------------- */
 
@@ -428,12 +485,12 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, presetClie
                             {hasPackage && line.sellMode === 'piece' && (
                                 <Chip tone="neutral">= {num(q)} {nom.unitName}</Chip>
                             )}
-                            {need && (
-                                <Chip tone={q > parseFloat(need.outstanding_need) ? 'warn' : 'info'}>
-                                    потреба об'єкта {num(need.outstanding_need)}
+                            {need && form.kind === 'issue' && (
+                                <Chip tone={q > toIssueOf(need) + 0.0001 ? 'warn' : 'info'}>
+                                    за специфікацією ще {num(toIssueOf(need))}
                                 </Chip>
                             )}
-                            {form.installation_custom_id && !need && (
+                            {form.installation_custom_id && form.kind === 'issue' && !need && (
                                 <Chip tone="warn" icon={FaExclamationTriangle}>поза специфікацією</Chip>
                             )}
                             {isMoney && parseFloat(line.quantity) > 0 && parseFloat(line.unit_price) > 0 && (
@@ -594,6 +651,40 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess, presetClie
                         </div>
 
                         </div>{/* /шапка документа */}
+
+                        {/* Що за специфікацією ще не видано — одним натиском у документ */}
+                        {form.kind === 'issue' && form.installation_custom_id && (specLeft.length > 0 || objBack.length > 0) && (
+                            <div className={`${T.inset} p-3 space-y-2`}>
+                                {specLeft.length > 0 && (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <FaClipboardList size={12} className="text-indigo-500 flex-shrink-0" />
+                                        <span className="text-[13px] font-bold text-slate-900 mr-auto">
+                                            За специфікацією ще видати: {specLeft.length} поз.
+                                            {form.warehouse_from_id && (
+                                                <span className="font-semibold text-slate-500">
+                                                    {' · '}на цьому складі є {specAvail.length}
+                                                    {specAvail.length > specHere.length ? `, у документі ${specAvail.length - specHere.length}` : ''}
+                                                </span>
+                                            )}
+                                        </span>
+                                        <Btn size="sm" variant="soft" icon={FaPlus} onClick={fillFromSpec}
+                                            disabled={!form.warehouse_from_id || !specHere.length}
+                                            title={!form.warehouse_from_id ? 'Спершу оберіть склад' : !specAvail.length ? 'На цьому складі нічого з цього немає' : !specHere.length ? 'Усе, що є на складі, уже в документі' : undefined}>
+                                            Додати в документ
+                                        </Btn>
+                                    </div>
+                                )}
+                                {objBack.length > 0 && (
+                                    <div className="text-[12.5px] text-amber-800 flex items-start gap-1.5 break-words">
+                                        <FaUndo size={10} className="mt-1 flex-shrink-0" />
+                                        <span>
+                                            <b>Чекаємо назад (змінилась специфікація):</b>{' '}
+                                            {objBack.map(b => `${b.name} — ${num(b.to_return)}${b.unit ? ` ${b.unit}` : ''}`).join('; ')}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                         {/* Позиції */}
                         <div className="space-y-2">

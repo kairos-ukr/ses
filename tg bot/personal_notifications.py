@@ -9,7 +9,7 @@
   · нагадування забезпечення (електрозахист), доручені їй;
   · низькі залишки — тим, кому це увімкнули в картці працівника;
   · платежі за графіком по її об'єктах: завтра/сьогодні термін, прострочено;
-  · її об'єкт перевищив норму днів на етап (і щопонеділка — список таких).
+  · «перегляньте свої угоди» — що давно без руху (норм етапів немає з 05.11).
 
 Кожне повідомлення проходить через notifier.send_personal: воно
 записується в bot_personal_messages і вдруге не піде.
@@ -242,24 +242,20 @@ async def send_task_deadlines(bot: Bot):
 # Типові налаштування огляду угод — для тих, хто не налаштовував сам
 DEFAULT_REVIEW = {
     "enabled": True, "frequency": "weekly", "weekday": 1, "hour": 9,
-    "stale_days": 14, "include_over_norm": True, "include_no_cost": False,
+    "stale_days": 14, "include_no_cost": False,
 }
 
 
 def deal_review_reasons(row: dict, s: dict) -> list:
-    """Чому угоду варто переглянути — за налаштуваннями людини."""
+    """Чому угоду варто переглянути — за налаштуваннями людини.
+    Норм етапів немає (власник 05.11): лише «без руху» (жодної дії — етап,
+    платіж, коментар, звіт бригади, день у графіку, «Робота йде») і, за
+    бажанням, «без вартості» — крім угод, де вартість навмисно не вноситься."""
     why = []
-    idle, stage = row.get("idle_days") or 0, row.get("stage_days") or 0
-    stale = idle > s["stale_days"]
-    over = s["include_over_norm"] and row.get("norm_days") and stage > row["norm_days"]
-    if stale and over and abs(stage - idle) <= 7:
-        why.append(f"без руху {idle} дн (норма етапу {row['norm_days']})")
-    else:
-        if stale:
-            why.append(f"без руху {idle} дн")
-        if over:
-            why.append(f"на етапі {stage} дн (норма {row['norm_days']})")
-    if s["include_no_cost"] and not float(row.get("total_cost") or 0):
+    idle = row.get("idle_days") or 0
+    if idle > s["stale_days"]:
+        why.append(f"без руху {idle} дн")
+    if s["include_no_cost"] and not row.get("no_cost") and not float(row.get("total_cost") or 0):
         why.append("без вартості")
     return why
 
@@ -306,7 +302,7 @@ async def send_deal_reviews(bot: Bot):
 
         lines = [
             f"🗂 <b>Перегляньте свої угоди: {len(pick)}</b>",
-            "Оновіть етап чи статус, додайте запис або позначте «Втрачено», якщо угода не відбудеться.",
+            "Оновіть етап чи статус, додайте запис, натисніть «Робота йде», якщо все гаразд, або позначте «Втрачено», якщо угода не відбудеться.",
         ]
         for r, why in pick[:15]:
             lines.append(f"• <b>{esc(r.get('name') or 'без назви')}</b> #{r['custom_id']} — {', '.join(why)}")
@@ -337,13 +333,23 @@ async def send_personal_reminders(bot: Bot):
 
     for r in rows:
         owner = people.get(r["owner_id"])
-        lines = [f"⏰ <b>Нагадування:</b> {esc(r['text'])}"]
+        # Нотатка з «Нотатника» (is_note) — може бути довгою; повна — у програмі
+        if r.get("is_note"):
+            body = r.get("text") or ""
+            if len(body) > 3000:
+                body = body[:3000].rsplit("\n", 1)[0] + "\n…"
+            lines = ["📝 <b>Нотатка</b>", esc(body)]
+        else:
+            lines = [f"⏰ <b>Нагадування:</b> {esc(r['text'])}"]
         if r.get("note"):
             lines.append(esc(r["note"]))
         inst = insts.get(r.get("installation_custom_id"))
         if inst:
             lines.append(object_line(inst))
-        lines.append(site_link("/tasks?tab=day", "Відкрити «Мій день»"))
+        if r.get("is_note"):
+            lines.append(site_link("/tasks?tab=notes", "Відкрити «Нотатник»"))
+        else:
+            lines.append(site_link("/tasks?tab=day", "Відкрити «Мій день»"))
         for pid in [r["owner_id"], *(r.get("shared_with") or [])]:
             person = people.get(pid)
             if not person:
@@ -703,7 +709,7 @@ WHAT_YOU_GET = (
     "• етапи обʼєктів, де вас призначили відповідальним\n"
     "• нагадування забезпечення (електрозахист)\n"
     "• платежі клієнтів по ваших обʼєктах: термін і прострочка\n"
-    "• коли ваш обʼєкт стоїть на етапі довше норми\n"
+    "• які ваші угоди давно без руху — щоб переглянути\n"
     "• низькі залишки — якщо це увімкнули у вашій картці\n\n"
     "/my — мої задачі й нагадування зараз"
 )
@@ -899,6 +905,19 @@ def _job(action: str, func):
     return run
 
 
+async def save_bot_username(bot: Bot):
+    """
+    Назва бота — в налаштування (app_settings.telegram_bot), щоб «Монтаж»
+    міг дати кнопку «Підключити Telegram» прямо на цього бота.
+    """
+    me = await bot.get_me()
+    if me.username:
+        supabase.table("app_settings").upsert(
+            {"key": "telegram_bot", "value": {"username": me.username}},
+            on_conflict="key",
+        ).execute()
+
+
 def register_personal_notifications(dp: Dispatcher, bot: Bot, scheduler: AsyncIOScheduler):
     dp.message.register(cmd_start, CommandStart(), F.chat.type == "private")
     dp.message.register(cmd_my, Command("my"), F.chat.type == "private")
@@ -922,15 +941,20 @@ def register_personal_notifications(dp: Dispatcher, bot: Bot, scheduler: AsyncIO
                       "cron", hour=9, minute=0, id="personal_low_stock_digest", **opts)
     scheduler.add_job(_job("нагадування про дедлайни задач", send_task_deadlines),
                       "cron", hour=8, minute=10, id="personal_task_deadlines", **opts)
+    # Раз на запуск: назва бота для кнопки «Підключити Telegram» у «Монтажі»
+    scheduler.add_job(_job("збереження назви бота", save_bot_username),
+                      "date", id="personal_bot_username", **opts)
     # Графік платежів прибрали (21.10.2026) — нагадувань за ним теж немає.
     # Якщо job уже був у планувальнику, прибираємо його.
     try:
         scheduler.remove_job("personal_payment_reminders")
     except Exception:
         pass
-    scheduler.add_job(_job("перевищення норми етапу", send_stage_norm_alerts),
-                      "cron", hour=9, minute=30, id="personal_stage_norm_alerts", **opts)
-    scheduler.add_job(_job("щотижневий список обʼєктів понад норму", send_stage_norm_digest),
-                      "cron", day_of_week="mon", hour=9, minute=40, id="personal_stage_norm_digest", **opts)
+    # Норми етапів прибрали (02.11.2026) — нагадувань «довше норми» теж немає
+    for job_id in ("personal_stage_norm_alerts", "personal_stage_norm_digest"):
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
 
-    logger.info("📬 Особисті повідомлення: задачі, етапи, норми етапів, забезпечення, платежі, низькі залишки.")
+    logger.info("📬 Особисті повідомлення: задачі, етапи, забезпечення, низькі залишки.")

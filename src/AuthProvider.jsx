@@ -1,7 +1,13 @@
 import React, { createContext, useState, useEffect, useContext, useRef, useCallback, useMemo } from 'react';
-import { supabase } from './supabaseClient';
+import { supabase, RECOVERY_IN_URL } from './supabaseClient';
 import { forgetDevice } from './utils/push';
 import { BUILTIN_TEMPLATES, defaultTemplateKey, effectivePerms, makeCan, makeAll } from './domain/access';
+
+// Людина прийшла за посиланням «новий пароль» і ще не задала його — показуємо
+// екран нового пароля навіть після перезавантаження сторінки (лише в цій вкладці)
+const RECOVERY_KEY = 'kcore.recovery';
+const readRecovery = () => { try { return sessionStorage.getItem(RECOVERY_KEY) === '1'; } catch { return false; } };
+const writeRecovery = (on) => { try { if (on) sessionStorage.setItem(RECOVERY_KEY, '1'); else sessionStorage.removeItem(RECOVERY_KEY); } catch { /* немає сховища */ } };
 
 /** Шаблон доступу людини з бази; до міграції — запасний з коду */
 const loadTemplate = async (emp) => {
@@ -35,6 +41,8 @@ export const AuthProvider = ({ children }) => {
   const [access, setAccess] = useState('none');
   const [loading, setLoading] = useState(true);
   const [template, setTemplate] = useState(null);   // шаблон доступу (domain/access)
+  const [recovery, setRecoveryState] = useState(() => RECOVERY_IN_URL || readRecovery());
+  const setRecovery = useCallback((on) => { writeRecovery(on); setRecoveryState(on); }, []);
 
   // === FIX: Використовуємо ref, щоб слідкувати за юзером без перерендерів ===
   const userRef = useRef(user);
@@ -128,10 +136,19 @@ export const AuthProvider = ({ children }) => {
     initializeAuth();
 
     const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
+      if (event === 'PASSWORD_RECOVERY' && session?.user) {
+        // Посилання «новий пароль» (від адміністратора чи з листа): людина вже
+        // всередині, але спершу має задати пароль — екран ResetPasswordPage
+        setRecovery(true);
+        const sameUser = userRef.current?.id === session.user.id;
+        setUser(session.user);
+        loadAccess(session.user.id, { silent: sameUser && accessRef.current !== 'none' });
+      } else if (event === 'SIGNED_IN' && session?.user) {
         // SIGNED_IN приходить і при поверненні на вкладку. Якщо це той самий
         // користувач — перевіряємо тихо, щоб не скидати відкриту сторінку.
         const sameUser = userRef.current?.id === session.user.id;
+        // Увійшов інший акаунт — незадане «новий пароль» попереднього вже ні до чого
+        if (userRef.current && !sameUser) setRecovery(false);
         setUser(session.user);
         loadAccess(session.user.id, { silent: sameUser && accessRef.current !== 'none' });
       } else if (event === 'SIGNED_OUT') {
@@ -140,6 +157,7 @@ export const AuthProvider = ({ children }) => {
         setRegistration(null);
         setTemplate(null);
         setAccess('none');
+        setRecovery(false);
       } else if (event === 'TOKEN_REFRESHED' && session?.user) {
         setUser(session.user);
       }
@@ -173,7 +191,7 @@ export const AuthProvider = ({ children }) => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       clearInterval(recheck);
     };
-  }, [loadAccess]); // loadAccess стабільний (useCallback без залежностей) — циклу немає
+  }, [loadAccess, setRecovery]); // обидва стабільні (useCallback без змінних залежностей) — циклу немає
 
   const signOut = async () => {
     // Після виходу цей пристрій більше не отримує чужих пушів
@@ -218,6 +236,9 @@ export const AuthProvider = ({ children }) => {
     // Гроші всієї компанії: загальна дебіторка, оборот. Решта бачить гроші
     // лише своїх об'єктів (domain/objects.canSeeMoney)
     financeAll: isOffice && canAll('money'),
+    // Прийшла за посиланням «новий пароль» і ще не задала його
+    recovery,
+    endRecovery: () => setRecovery(false),
     signOut,
     loading
   };

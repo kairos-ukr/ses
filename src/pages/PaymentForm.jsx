@@ -3,9 +3,11 @@
 //
 //  Одна форма для «Фінансів» і для картки об'єкта. Поля: об'єкт (якщо
 //  не з картки), сума й валюта, дата, курс, спосіб, коментар.
-//  Курс дня записується в кожен платіж: якщо валюта платежу інша, ніж
+//  Курс записується в кожен платіж: якщо валюта платежу інша, ніж
 //  валюта угоди, — за ним перераховується сума (і він обов'язковий);
-//  якщо та сама — лишається довідкою. Типово — курс із налаштувань.
+//  якщо та сама — лишається довідкою. Типово — курс угоди (кожна угода
+//  має свій, db/2026-11_deal_rate.sql); платіж без об'єкта чи угода
+//  без курсу — поточний курс із налаштувань. Його можна змінити.
 // =====================================================================
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -25,6 +27,9 @@ export const PAY_METHODS = [
 export const methodLabel = (v) => ({ 'Bank Transfer': 'Банківський переказ', Cash: 'Готівка', Card: 'Картка', Other: 'Інше', 'Безготівково': 'Безготівково' }[v] || v || '—');
 
 const isoDay = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+/** Курс угоди об'єкта рядком для поля, або null, якщо в угоди курсу немає */
+const dealRate = (o) => (Number(o?.exchange_rate) > 0 ? String(Number(o.exchange_rate)) : null);
 
 const chip = (on) => `h-10 px-3 rounded-lg border text-[13px] font-semibold transition-colors ${on
     ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'}`;
@@ -50,7 +55,13 @@ export default function PaymentForm({ installation, client, objects = [], client
     const [saving, setSaving] = useState(false);
     const set = (p) => { setF(x => ({ ...x, ...p })); setErrors(e => ({ ...e, ...Object.fromEntries(Object.keys(p).map(k => [k, null])) })); };
 
-    useEffect(() => { loadUsdRate().then(r => setF(x => (x.rate === '' ? { ...x, rate: r ? String(r) : '' } : x))); }, []);
+    // Курс угоди, якщо платіж з картки об'єкта; інакше — поточний
+    useEffect(() => {
+        const own = dealRate(installation);
+        if (own) { setF(x => (x.rate === '' ? { ...x, rate: own } : x)); return; }
+        loadUsdRate().then(r => setF(x => (x.rate === '' ? { ...x, rate: r ? String(r) : '' } : x)));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const needsRate = !!obj && f.currency !== dealCur;
     const counted = needsRate ? paymentInObjectCurrency(f.amount, f.currency, dealCur, f.rate) : null;
@@ -108,7 +119,8 @@ export default function PaymentForm({ installation, client, objects = [], client
                     <Picker options={client ? [{ id: '', label: "Без об'єкта — на клієнта" }, ...objectOptions] : objectOptions} value={objId} onChange={v => {
                         setObjId(v);
                         const o = objects.find(x => String(x.custom_id) === String(v));
-                        set({ currency: o?.currency || f.currency || DEFAULT_CURRENCY });
+                        // Обрали об'єкт — курс його угоди
+                        set({ currency: o?.currency || f.currency || DEFAULT_CURRENCY, ...(dealRate(o) ? { rate: dealRate(o) } : {}) });
                         setErrors(e => ({ ...e, obj: null }));
                     }} placeholder={client ? "Без об'єкта — на клієнта" : 'Номер, назва або клієнт…'} searchPlaceholder="Пошук об'єкта…" icon={FaHardHat} />
                     {errors.obj && <div className="mt-1 text-[12px] font-semibold text-rose-600">{errors.obj}</div>}
@@ -146,6 +158,9 @@ export default function PaymentForm({ installation, client, objects = [], client
                     <input type="number" inputMode="decimal" min="0" step="0.01" className={`${T.input} h-11 tabular-nums ${errors.rate ? 'border-rose-400' : ''}`}
                         value={f.rate} onChange={e => set({ rate: e.target.value })} placeholder="Напр. 41.50" />
                     {errors.rate && <div className="mt-1 text-[12px] font-semibold text-rose-600">{errors.rate}</div>}
+                    {!errors.rate && dealRate(obj) && f.rate === dealRate(obj) && (
+                        <div className="mt-1 text-[12px] text-slate-500">курс угоди</div>
+                    )}
                 </Field>
             </div>
 

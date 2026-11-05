@@ -19,7 +19,7 @@ import { useAuth } from './AuthProvider';
 const PAGE = 200;
 
 const MONEY_TABLES = ['payment_history', 'payment_schedule'];
-const MONEY_FIELDS = ['total_cost', 'paid_amount', 'payment_status', 'currency', 'total_cost_source'];
+const MONEY_FIELDS = ['total_cost', 'paid_amount', 'payment_status', 'currency', 'total_cost_source', 'exchange_rate', 'no_cost'];
 
 const GROUPS = [
     { key: 'all', label: 'Усе', tables: null },

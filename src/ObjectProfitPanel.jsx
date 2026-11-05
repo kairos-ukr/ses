@@ -2,7 +2,7 @@
 //  Прибуток з об'єкта: план і факт (етап 4, п.17)
 //
 //  Прибуток = вартість для клієнта − матеріали − роботи − інші витрати,
-//  усе в гривнях (долари — за курсом з налаштувань). Дані — перегляди
+//  усе в гривнях (долари — за курсом угоди; без нього — поточним). Дані — перегляди
 //  v_object_profit / v_object_materials_cost / v_object_labour_cost
 //  (db/2026-10_object_profit.sql).
 //
@@ -16,7 +16,6 @@ import { FaPlus, FaTrash, FaExclamationTriangle, FaCheck, FaPen } from 'react-ic
 import { supabase } from './supabaseClient';
 import { T, Btn, IconBtn, Tip, Skeleton, useToast, useConfirm, humanError, num } from './ui';
 import { CURRENCIES, formatMoney } from './domain/objects';
-import { saveUsdRate as storeUsdRate } from './utils/settings';
 import { useAuth } from './AuthProvider';
 
 const uah = (v) => formatMoney(Math.round(Number(v) || 0), 'UAH');
@@ -107,14 +106,15 @@ export default function ObjectProfitPanel({ installationId, employeeId }) {
         return true;
     };
 
+    // Курс угоди — лише цього об'єкта (db/2026-11_deal_rate.sql); інші угоди не чіпає
     const saveUsdRate = async () => {
         const rate = Number(String(rateDraft).replace(',', '.'));
         if (!(rate > 0)) { toast('Курс — число більше за 0', 'error'); return; }
-        try {
-            await storeUsdRate(rate, employeeId);
-        } catch (error) { toast(humanError(error), 'error'); return; }
+        const { error } = await supabase.from('installations')
+            .update({ exchange_rate: rate }).eq('custom_id', Number(installationId));
+        if (error) { toast(humanError(error), 'error'); return; }
         setRateDraft(null);
-        toast('Курс збережено — прибуток перераховано для всіх об\'єктів');
+        toast('Курс угоди збережено — прибуток перераховано');
         load();
     };
 
@@ -179,7 +179,7 @@ export default function ObjectProfitPanel({ installationId, employeeId }) {
             <div className="flex items-center justify-end gap-2 text-[12.5px] text-slate-500">
                 {rateDraft === null ? (
                     <button type="button" disabled={!canEditProfit} onClick={() => setRateDraft(String(p.usd_rate))} className="hover:text-slate-800 inline-flex items-center gap-1.5 disabled:hover:text-slate-500 disabled:cursor-default">
-                        Курс для розрахунку: <b className="text-slate-700 tabular-nums">1 $ = {num(p.usd_rate, 2)} ₴</b> {canEditProfit && <FaPen size={9} />}
+                        Курс угоди: <b className="text-slate-700 tabular-nums">1 $ = {num(p.usd_rate, 2)} ₴</b> {canEditProfit && <FaPen size={9} />}
                     </button>
                 ) : (
                     <span className="inline-flex items-center gap-1.5">
@@ -191,7 +191,7 @@ export default function ObjectProfitPanel({ installationId, employeeId }) {
                         <IconBtn variant="ok" icon={FaCheck} label="Зберегти курс" onClick={saveUsdRate} />
                     </span>
                 )}
-                <Tip text="Один курс для всіх об'єктів: ним переводяться долари у гривні в прибутку й аналітиці." />
+                <Tip text="Свій для кожної угоди: ним долари цієї угоди (вартість, матеріали, витрати) переводяться в гривні. Нова угода бере поточний курс у момент створення; старим, де курсу немає, — поточний." />
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-4 items-start">

@@ -7,8 +7,12 @@
 //  «Зберегти й надіслати» — графік іде в Telegram-гілку графіка, а кожен
 //  з графіка отримує сповіщення: де, з ким, на чому, хто за кермом.
 //
-//  Праворуч — люди дня (вільні / зайняті / відсутні, у кого своє авто)
-//  і транспорт дня (які авто зайняті, які вільні, які в ремонті).
+//  Праворуч — люди дня (вільні / відсутні, у кого своє авто).
+//  Зверху — «Рекомендовані до виїзду»: де бригада вже працювала (продовжити
+//  тими самими людьми), об'єкти на «Монтажі» й «Запуску», готові матеріали.
+//  У пошуку об'єкта завершених і скасованих немає, на паузі — в кінці.
+//  Під об'єктом — «Взяти з собою»: що за специфікаціями ще не видано
+//  (той самий список бригада отримає разом зі сповіщенням про графік).
 //  Поки складаєте — чернетка зберігається сама, інші менеджери її бачать.
 //
 //  Транспорт зберігається як поїздки (trips + trip_stops): один запис на
@@ -19,16 +23,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     FaPlus, FaTrash, FaHistory, FaShuttleVan, FaCar, FaPaperPlane, FaCheck, FaSave, FaHardHat, FaUserTie,
-    FaTasks, FaRoute, FaTimes, FaExclamationTriangle, FaPen, FaUserSlash,
+    FaTasks, FaRoute, FaTimes, FaExclamationTriangle, FaPen, FaUserSlash, FaStar, FaChevronDown,
 } from 'react-icons/fa';
 
 import { supabase } from '../supabaseClient';
-import { T, Btn, IconBtn, Chip, Picker, Segmented, Skeleton, useToast, humanError } from '../ui';
+import { T, Btn, IconBtn, Chip, Picker, Segmented, Skeleton, Tip, useToast, humanError } from '../ui';
+import { normalizeGroupKey, getStageGroupLabel } from '../domain/stages';
+import { loadReadiness } from '../domain/pipeline';
+import { loadTakeLists } from '../domain/takeList';
+import TakeLine from './provisioning/TakeLine';
 
 const ABSENCE = { OFF: 'вихідний', VACATION: 'відпустка', SICK_LEAVE: 'лікарняний' };
 const ABSENCE_WHAT = { OFF: 'вихідний', VACATION: 'відпустку', SICK_LEAVE: 'лікарняний' };
 const INSTALL_DEPS = ['Монтаж', 'Склад', 'Водії'];
 const CLOSED = ['completed', 'cancelled', 'lost'];
+// Етапи, з якими об'єкт іде до монтажу; у пошуку об'єктів вони зверху
+const BUILD_STAGES = ['equipment', 'complectation', 'installation', 'monitoring_setup'];
+const STAGE_RANK = { installation: 0, monitoring_setup: 1, complectation: 2, equipment: 3, tech_review: 4, project: 5, proposal: 6 };
+const daysBetween = (a, b) => Math.round((parseDay(b) - parseDay(a)) / 86400000);
 
 const isoDay = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const parseDay = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d, 12); };
@@ -216,6 +228,7 @@ function Block({ b, idx, ctx, readOnly, active, error, onFocus, onChange, onRemo
                     {isCustom(b) ? (b.notes || 'Завдання') : <><span className="font-mono text-[11.5px] text-slate-400 mr-1.5">СЕС-{b.installationId}</span>{obj?.name || `Об'єкт #${b.installationId}`}</>}
                 </div>
                 {!isCustom(b) && b.notes && <div className="text-[13px] text-slate-600 break-words">{b.notes}</div>}
+                {!isCustom(b) && <TakeLine rows={ctx.takeOf(b.installationId)} />}
                 <div className="text-[13px] text-slate-700 break-words">{b.workers.map(nameOf).join(', ') || 'без людей'}</div>
                 {b.transport && (
                     <div className="text-[12.5px] text-indigo-700 font-semibold inline-flex items-start gap-1.5 break-words">
@@ -254,6 +267,7 @@ function Block({ b, idx, ctx, readOnly, active, error, onFocus, onChange, onRemo
                             {obj?.client?.populated_place && <div className="text-[12.5px] text-slate-500">{obj.client.populated_place}</div>}
                         </button>
                     )}
+                    {!isCustom(b) && b.installationId && !pickObj && <TakeLine rows={ctx.takeOf(b.installationId)} className="mt-1" />}
                     {!isCustom(b) && b.installationId && (
                         <input className={`${T.input} mt-2`} value={b.notes} onChange={e => set({ notes: e.target.value })} placeholder="Що робимо (необов'язково)" />
                     )}
@@ -373,6 +387,10 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
     const [busy, setBusy] = useState(false);
     const [autoSave, setAutoSave] = useState(null);
     const [absent, setAbsent] = useState({ status: 'OFF', until: '' });
+    const [recent, setRecent] = useState([]);       // хто де працював останні два тижні
+    const [readiness, setReadiness] = useState({}); // забезпечення матеріалами, %
+    const [takeLists, setTakeLists] = useState(new Map()); // що взяти з собою: об'єкт → позиції
+    const [recOpen, setRecOpen] = useState(true);
     const reqRef = useRef(0);
     const dirtyRef = useRef(false);
 
@@ -383,7 +401,7 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
     const loadBase = useCallback(async () => {
         const [e, o, v, c] = await Promise.all([
             supabase.from('employees').select('id, custom_id, name, position, department, role, tier, email, hidden_from_list, access_blocked_at').order('name'),
-            supabase.from('installations').select('custom_id, name, status, client:clients(name, populated_place)').order('custom_id', { ascending: false }),
+            supabase.from('installations').select('custom_id, name, status, workflow_stage, client:clients(name, populated_place)').order('custom_id', { ascending: false }),
             supabase.from('vehicles').select('*').order('name'),
             supabase.from('employee_cars').select('employee_id, status, until'),
         ]);
@@ -427,6 +445,77 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
 
     useEffect(() => { loadBase(); }, [loadBase]);
     useEffect(() => { setDay(null); setActive(null); setAutoSave(null); loadDay(); }, [loadDay]);
+
+    // Хто й де працював останні два тижні — для рекомендацій «продовжити»
+    useEffect(() => {
+        let alive = true;
+        supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date')
+            .gte('work_date', shiftDay(date, -14)).lt('work_date', date).not('installation_custom_id', 'is', null)
+            .then(({ data }) => { if (alive) setRecent(data || []); });
+        return () => { alive = false; };
+    }, [date]);
+
+    // Наскільки забезпечені матеріалами об'єкти, що йдуть до монтажу
+    useEffect(() => {
+        if (!base) return;
+        const ids = base.objects
+            .filter(o => !CLOSED.includes(o.status) && o.status !== 'on_hold' && BUILD_STAGES.includes(normalizeGroupKey(o.workflow_stage)))
+            .map(o => o.custom_id);
+        loadReadiness(ids).then(setReadiness).catch(() => setReadiness({}));
+    }, [base]);
+
+    // Що взяти з собою — для об'єктів, які вже стоять у графіку дня
+    const blockObjects = blocks.filter(b => !isCustom(b) && b.installationId).map(b => Number(b.installationId)).sort((a, b) => a - b).join(',');
+    useEffect(() => {
+        let alive = true;
+        loadTakeLists(blockObjects ? blockObjects.split(',').map(Number) : [])
+            .then(map => { if (alive) setTakeLists(map); });
+        return () => { alive = false; };
+    }, [blockObjects]);
+
+    /**
+     * Рекомендовані до виїзду: де бригада вже працювала останні два тижні
+     * (продовжити — ті самі люди), об'єкти на «Монтажі» й «Запуску», і ті,
+     * де матеріали вже готові. Завершені, скасовані, на паузі й уже
+     * поставлені в цей день — не пропонуємо.
+     */
+    const recommend = useMemo(() => {
+        if (!base) return [];
+        const used = new Set(blocks.filter(b => !isCustom(b) && b.installationId).map(b => Number(b.installationId)));
+        const last = new Map();
+        recent.forEach(r => {
+            const id = Number(r.installation_custom_id);
+            const cur = last.get(id);
+            if (!cur || r.work_date > cur.day) last.set(id, { day: r.work_date, crew: [Number(r.employee_custom_id)] });
+            else if (r.work_date === cur.day && !cur.crew.includes(Number(r.employee_custom_id))) cur.crew.push(Number(r.employee_custom_id));
+        });
+        const out = [];
+        base.objects.forEach(o => {
+            if (CLOSED.includes(o.status) || o.status === 'on_hold' || used.has(o.custom_id)) return;
+            const stage = normalizeGroupKey(o.workflow_stage);
+            const rd = readiness[o.custom_id];
+            const prev = last.get(o.custom_id);
+            let score = 0;
+            const why = [];
+            if (prev) {
+                const gap = daysBetween(prev.day, date);
+                score = gap <= 3 ? 100 - gap : 75 - gap;
+                why.push(`працювали ${dayWord(prev.day)}`);
+            }
+            if (stage === 'installation') {
+                score = Math.max(score, 80 + (rd != null ? rd / 10 : 0));
+                why.push(rd != null ? `монтаж, матеріали ${rd}%` : 'етап «Монтаж»');
+            } else if (stage === 'monitoring_setup') {
+                score = Math.max(score, 60);
+                why.push('запуск станції');
+            } else if ((stage === 'complectation' || stage === 'equipment') && rd != null && rd >= 90) {
+                score = Math.max(score, 55);
+                why.push(`матеріали готові на ${rd}%`);
+            }
+            if (score > 0) out.push({ o, score, why: why.join(' · '), crew: prev?.crew || [] });
+        });
+        return out.sort((a, b) => b.score - a.score).slice(0, 8);
+    }, [base, blocks, recent, readiness, date]);
 
     // Наживо: зміни інших людей по цьому дню
     useEffect(() => {
@@ -476,18 +565,33 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
         const isInstall = (e) => e.role === 'installer' || (Array.isArray(e.department) ? e.department : [e.department]).some(d => INSTALL_DEPS.includes(d));
         const blockTitle = (b) => (isCustom(b) ? (b.notes || 'завдання') : objByCid.get(Number(b.installationId))?.name || `СЕС-${b.installationId}`);
         const carOf = (cid) => base.cars.find(c => Number(c.cid) === Number(cid));
+        const recIndex = new Map(recommend.map((r, i) => [r.o.custom_id, { ...r, i }]));
 
         return {
             nameOf, objByCid, offMap, busyIn, blockTitle, carOf, isInstall,
+            takeOf: (cid) => takeLists.get(Number(cid)),
             vehicles: base.vehicles,
             cars: base.cars,
             people: staff.map(e => ({ id: Number(e.custom_id), label: e.name })),
             installPeople: staff.filter(isInstall),
+            // Пошук об'єкта: завершених і скасованих немає; рекомендовані — першими,
+            // далі ті, що ближче до монтажу; на паузі — в кінці
             objectOptions: [
                 { id: 'custom', label: 'Інше завдання (без обʼєкта)' },
                 ...base.objects
                     .filter(o => !CLOSED.includes(o.status) && !used.has(o.custom_id))
-                    .map(o => ({ id: o.custom_id, label: [`СЕС-${o.custom_id}`, o.name || o.client?.name, o.client?.populated_place].filter(Boolean).join(' · ') })),
+                    .map(o => {
+                        const st = normalizeGroupKey(o.workflow_stage);
+                        const rec = recIndex.get(o.custom_id);
+                        return {
+                            id: o.custom_id,
+                            label: [`СЕС-${o.custom_id}`, o.name || o.client?.name, o.client?.populated_place,
+                                o.workflow_stage ? getStageGroupLabel(st) : null, o.status === 'on_hold' ? 'на паузі' : null].filter(Boolean).join(' · '),
+                            hint: rec ? `★ рекомендовано: ${rec.why}` : null,
+                            rank: rec ? rec.i - 100 : o.status === 'on_hold' ? 50 : (STAGE_RANK[st] ?? 10),
+                        };
+                    })
+                    .sort((a, b) => a.rank - b.rank || b.id - a.id),
             ],
             // Кого можна додати в бригаду: не відсутні й не зайняті в іншому місці; вільні монтажники — зверху
             peopleFor: () => staff
@@ -513,7 +617,7 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
                 return null;
             },
         };
-    }, [base, day, blocks]);
+    }, [base, day, blocks, recommend, takeLists]);
 
     /* ---- Дії з блоками ---- */
     const changeBlock = (nb) => {
@@ -546,17 +650,28 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
                 supabase.from('trips').select('*, stops:trip_stops(*)').eq('trip_date', ds),
             ]);
             if (w && w.length) {
-                const prev = buildBlocks(w, t).map(b => ({ ...b, id: newBlock().id, sourceVisitPlanId: null, workers: b.workers.filter(x => !ctx.offMap.has(x)) }));
+                // Об'єкти, які відтоді завершили чи скасували, не переносимо
+                const all = buildBlocks(w, t).map(b => ({ ...b, id: newBlock().id, sourceVisitPlanId: null, workers: b.workers.filter(x => !ctx.offMap.has(x)) }));
+                const prev = all.filter(b => isCustom(b) || !CLOSED.includes(ctx.objByCid.get(Number(b.installationId))?.status));
                 setBlocks(list => {
                     const keep = list.filter(meaningful);
                     const have = new Set(keep.filter(b => !isCustom(b)).map(b => String(b.installationId)));
                     return [...keep, ...prev.filter(b => isCustom(b) || !have.has(String(b.installationId)))];
                 });
-                toast(`Взято за основу ${dayWord(ds)} — внесіть правки`);
+                const skipped = all.length - prev.length;
+                toast(`Взято за основу ${dayWord(ds)} — внесіть правки${skipped ? ` (без ${skipped} завершених)` : ''}`);
                 return;
             }
         }
         toast('За попередній тиждень графіка не знайдено', 'info');
+    };
+
+    // Рекомендований об'єкт — одразу з людьми, що працювали там минулого разу
+    // (якщо вони вільні й не відсутні цього дня)
+    const addRecommended = (r) => {
+        const crew = r.crew.filter(cid => !ctx.offMap.has(cid) && !ctx.busyIn.has(cid));
+        addBlock({ installationId: r.o.custom_id, workers: crew });
+        toast(`Додано: ${r.o.name || `СЕС-${r.o.custom_id}`}${crew.length ? ` · бригада минулого разу (${crew.length})` : ''}`);
     };
 
     const addVisit = (v) => {
@@ -706,6 +821,43 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
                                 <FaPlus size={9} /> {v.installation_custom_id ? (ctx.objByCid.get(v.installation_custom_id)?.name || `СЕС-${v.installation_custom_id}`) : (v.custom_task_title || 'Виїзд')}
                             </button>
                         ))}
+                    </div>
+                )}
+
+                {/* Рекомендовані до виїзду — система підказує, кого куди ставити */}
+                {!readOnly && recommend.length > 0 && (
+                    <div className={`${T.card} overflow-hidden`}>
+                        <button type="button" onClick={() => setRecOpen(v => !v)} aria-expanded={recOpen}
+                            className="w-full px-3.5 py-2.5 flex items-center gap-2 text-left hover:bg-slate-50">
+                            <FaStar size={12} className="text-amber-500 flex-shrink-0" />
+                            <span className="text-[13.5px] font-bold text-slate-900">Рекомендовані до виїзду</span>
+                            <Chip tone="warn">{recommend.length}</Chip>
+                            <span onClick={e => e.stopPropagation()}>
+                                <Tip width={300} text="Де бригада вже працювала останні два тижні (продовжити — з тими самими людьми), об'єкти на «Монтажі» й «Запуску», і ті, де матеріали вже готові. Завершених, скасованих і на паузі тут немає." />
+                            </span>
+                            <FaChevronDown size={10} className={`ml-auto text-slate-400 transition-transform ${recOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        {recOpen && (
+                            <div className="px-2.5 pb-2.5 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                {recommend.map(r => {
+                                    const crew = r.crew.filter(cid => !ctx.offMap.has(cid) && !ctx.busyIn.has(cid));
+                                    return (
+                                        <div key={r.o.custom_id} className="rounded-lg border border-slate-200 bg-white p-2.5 flex items-start gap-2">
+                                            <div className="min-w-0 flex-1">
+                                                <div className="text-[13px] font-semibold text-slate-900 break-words">
+                                                    <span className="font-mono text-[11px] text-slate-400 mr-1">СЕС-{r.o.custom_id}</span>{r.o.name || r.o.client?.name}
+                                                </div>
+                                                <div className="text-[12px] text-slate-500 break-words">{[r.o.client?.populated_place, r.why].filter(Boolean).join(' · ')}</div>
+                                                {crew.length > 0 && (
+                                                    <div className="text-[12px] text-slate-600 break-words">бригада: {crew.map(ctx.nameOf).join(', ')}</div>
+                                                )}
+                                            </div>
+                                            <Btn size="sm" variant="soft" icon={FaPlus} onClick={() => addRecommended(r)}>Додати</Btn>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 )}
 

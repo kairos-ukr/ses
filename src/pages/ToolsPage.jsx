@@ -17,6 +17,7 @@ import {
 } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
+import { nomFullName } from '../domain/nomenclature';
 import { useAuth } from '../AuthProvider';
 import {
     T, Btn, IconBtn, Chip, Card, Field, Picker, Segmented, EmptyState,
@@ -118,7 +119,7 @@ export default function ToolsPage({ externalSearch = '', externalActionTrigger =
                     path.unshift(c.name);
                     id = c.parent_id;
                 }
-                return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim() };
+                return { ...item, fullName: nomFullName(path, item.name) };
             });
             setNomenclatures(nom);
 

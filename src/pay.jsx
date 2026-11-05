@@ -105,7 +105,7 @@ function Payments({ employeeId }) {
 
     // Легкі списки об'єктів і клієнтів: для пошуку й для форми платежу
     useEffect(() => {
-        supabase.from('installations').select('custom_id, name, currency, client:clients(name, company_name)').order('custom_id', { ascending: false })
+        supabase.from('installations').select('custom_id, name, currency, exchange_rate, client:clients(name, company_name)').order('custom_id', { ascending: false })
             .then(({ data }) => setObjects(data || []));
         supabase.from('clients').select('id, custom_id, name, company_name, phone').order('name')
             .then(({ data }) => setClients(data || []));

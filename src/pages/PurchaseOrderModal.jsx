@@ -6,6 +6,7 @@ import {
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { supplyTargetOptions } from '../domain/objects';
+import { nomFullName } from '../domain/nomenclature';
 import { NomenclatureModal } from './NomenclatureModal';
 import { findBestNomenclatureMatch, normalizeName } from '../utils/nameMatching';
 
@@ -172,7 +173,7 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSuccess, initial
             const cat = categories.find(c => c.id === currentId);
             if (cat) { path.unshift(cat.name); currentId = cat.parent_id; } else break;
         }
-        const processed = { ...savedItem, fullName: `${path.join(' ')} ${savedItem.name}`.trim() };
+        const processed = { ...savedItem, fullName: nomFullName(path, savedItem.name) };
         setExtraNoms(prev => [...prev.filter(n => n.id !== processed.id), processed]);
 
         const target = quickAdd.target;

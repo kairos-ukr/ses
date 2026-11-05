@@ -11,8 +11,8 @@
 // =====================================================================
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
-import { FaEye, FaTimes } from 'react-icons/fa';
+import { Routes, Route, Navigate, useSearchParams, useNavigate } from 'react-router-dom';
+import { FaEye, FaTimes, FaHardHat, FaArrowLeft } from 'react-icons/fa';
 
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
@@ -42,6 +42,7 @@ const writeAs = (v) => { try { if (v) sessionStorage.setItem(AS_KEY, String(v));
 
 export default function MontazhApp() {
     const { employee: me, isOffice } = useAuth();
+    const navigate = useNavigate();
     const [params, setParams] = useSearchParams();
     const [asId, setAsId] = useState(() => (isOffice ? readAs() : null));
     const [people, setPeople] = useState(new Map());
@@ -133,10 +134,29 @@ export default function MontazhApp() {
         <MontazhCtx.Provider value={ctx}>
             <div className="fixed inset-0 bg-slate-200 text-slate-900 antialiased">
                 <div className="h-full max-w-md mx-auto flex flex-col bg-slate-100">
+                    {/* Офіс і керівник: завжди видно, що це «Монтаж», і один дотик назад у CRM */}
+                    {isOffice && !preview && (
+                        <div className="flex-shrink-0 bg-slate-900 text-white px-3 py-1.5 flex items-center gap-2 text-[13px]">
+                            <FaHardHat size={12} className="flex-shrink-0 text-[#f2c200]" />
+                            <span className="min-w-0 flex-1 leading-tight">«Монтаж» — як бачать бригади</span>
+                            <button type="button" onClick={() => navigate('/m/me')}
+                                className="h-9 px-2.5 rounded-lg text-slate-200 hover:text-white hover:bg-white/10 font-semibold whitespace-nowrap">
+                                Як інша людина
+                            </button>
+                            <button type="button" onClick={() => navigate('/home')}
+                                className="h-9 px-3 rounded-lg bg-white text-slate-900 font-bold inline-flex items-center gap-1.5 whitespace-nowrap">
+                                <FaArrowLeft size={10} /> CRM
+                            </button>
+                        </div>
+                    )}
                     {preview && (
                         <div className="flex-shrink-0 bg-slate-900 text-white px-4 py-2 flex items-center gap-2 text-[13.5px]">
                             <FaEye size={13} className="flex-shrink-0 text-[#f2c200]" />
                             <span className="min-w-0 flex-1">Ви бачите як <b>{who.name}</b> · лише перегляд</span>
+                            <button type="button" onClick={() => { setPreview(null); navigate('/home'); }}
+                                className="h-9 px-2.5 rounded-lg text-slate-200 hover:text-white hover:bg-white/10 font-semibold inline-flex items-center gap-1.5 whitespace-nowrap">
+                                <FaArrowLeft size={10} /> CRM
+                            </button>
                             <button type="button" onClick={() => setPreview(null)} aria-label="Вийти з перегляду"
                                 className="w-10 h-10 -my-1 -mr-2 flex items-center justify-center rounded-lg text-slate-300 hover:text-white">
                                 <FaTimes size={14} />

@@ -4,14 +4,18 @@
 //  Одні правила для воронки «Об'єкти», «Сьогодні» і картки об'єкта.
 //  Дати беремо з перегляду v_object_activity (db/2026-10_object_activity_view.sql):
 //   • stage_entered_at — коли об'єкт перейшов на поточний етап;
-//   • last_activity_at — остання дія (етап, підетап, платіж, коментар, КП).
+//   • last_activity_at — остання дія (етап, підетап, платіж, коментар, КП,
+//     звіт бригади, день у графіку робіт, «Робота йде»).
 // =====================================================================
 
 import { supabase } from '../supabaseClient';
 import { fetchAll } from '../utils/fetchAll';
 import { STAGE_GROUPS, normalizeGroupKey } from './stages';
 
-/* Пороги: до 14 днів — нормально, 15–30 — варто глянути, понад 30 — горить */
+/* «Без руху» (жодної дії: етап, платіж, коментар, КП, звіт бригади, день у
+ * графіку, «Робота йде»): понад 14 днів — варто глянути, понад 30 — горить.
+ * Скільки днів об'єкт стоїть на етапі — лише довідка: норм немає (власник
+ * 05.11: «об'єкт можна зробити за 3 дні, а можна за 2 місяці»). */
 export const STALE_DAYS = 14;
 export const LONG_DAYS = 30;
 
@@ -36,46 +40,20 @@ export const ageTone = (days) => {
 /** «41 дн» */
 export const daysLabel = (days) => (days == null ? '—' : `${days} дн`);
 
-/* ---------------------------------------------------------------------
- *  НОРМА ДНІВ НА ЕТАП (db/2026-10_stage_norms.sql)
- *  Якщо норму задано — колір за нею: до 70% норми спокійно, далі
- *  жовтий, понад норму червоний. Без норми — загальні 14/30 днів.
- * ------------------------------------------------------------------- */
+/* Норми днів на етап прибрано 02.11.2026, а 05.11 — і з бази (v_deal_review,
+ * v_stage_overdue): ні «довше норми», ні кольору за днями на етапі.
+ * ageTone — лише для «без руху». */
 
-export const stageTone = (days, norm) => {
-    if (days == null) return 'neutral';
-    if (!norm) return ageTone(days);
-    if (days > norm) return 'danger';
-    if (days >= Math.ceil(norm * 0.7)) return 'warn';
-    return 'neutral';
-};
-
-const timesWord = (n) => {
-    const m10 = n % 10, m100 = n % 100;
-    if (m10 === 1 && m100 !== 11) return 'раз';
-    if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'рази';
-    return 'разів';
-};
-
-/** «норма 7 дн, перевищено в 6 разів» / «норма 7 дн, перевищено на 3 дн» / «норма 7 дн» */
-export const normText = (days, norm) => {
-    if (!norm) return null;
-    if (days == null || days <= norm) return `норма ${norm} дн`;
-    const times = Math.floor(days / norm);
-    return times >= 2
-        ? `норма ${norm} дн, перевищено в ${times} ${timesWord(times)}`
-        : `норма ${norm} дн, перевищено на ${days - norm} дн`;
-};
-
-/** Норми з бази: { stage_key: days }. Без таблиці — порожньо. */
-export async function loadStageNorms() {
-    try {
-        const { data, error } = await supabase.from('stage_norms').select('stage_key, days');
-        if (error) return {};
-        return Object.fromEntries((data || []).map(r => [r.stage_key, r.days]));
-    } catch {
-        return {};
-    }
+/**
+ * «Робота йде»: позначити об'єкт активним — це рахується як рух
+ * (v_object_activity), тож «Без руху» його більше не показує, доки знову
+ * не мине поріг. Пишеться в журнал змін об'єкта; гілку в Telegram не чіпає.
+ */
+export async function confirmActivity(customId, employeeId) {
+    const { error } = await supabase.from('installations')
+        .update({ activity_confirmed_at: new Date().toISOString(), activity_confirmed_by: employeeId || null })
+        .eq('custom_id', customId);
+    if (error) throw error;
 }
 
 export const median = (list) => {

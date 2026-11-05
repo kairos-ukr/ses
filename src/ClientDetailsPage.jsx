@@ -32,7 +32,7 @@ export default function ClientDetailsPage() {
 
       const { data: objData, error: objError } = await supabase
         .from('installations')
-        .select('custom_id, name, status, workflow_stage, capacity_kw, payment_status, responsible_emp_id, currency, created_at')
+        .select('custom_id, name, status, workflow_stage, capacity_kw, payment_status, responsible_emp_id, currency, exchange_rate, created_at')
         .eq('client_id', clientData.custom_id)
         .order('created_at', { ascending: false });
       if (objError) throw objError;

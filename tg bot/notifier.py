@@ -66,6 +66,8 @@ KIND_LABELS = {
     "personal_reminder": "особисте нагадування",
     "deal_review": "угоди на перегляд",
     "report_reminder": "нагадування про звіт",
+    "report_digest": "зведення звітів",
+    "take_reminder": "що взяти з собою",
 }
 
 

@@ -23,7 +23,8 @@ import { T, Btn, Chip, Linkify, useToast, humanError } from '../ui';
 import { getTask } from '../domain/stages';
 import { loadUsdRate } from '../utils/settings';
 import { DEFAULT_CURRENCY, canSeeMoney } from '../domain/objects';
-import { DAY_STATUS_LABEL, CURRENCY_SIGN, fmtAmount, fmtQty, driveThumb } from '../montazh/report';
+import { DAY_STATUS_LABEL, CURRENCY_SIGN, fmtAmount, fmtQty } from '../montazh/report';
+import { PhotoThumbs } from '../ui/MediaViewer';
 
 const dayTitle = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString('uk-UA', { weekday: 'long', day: 'numeric', month: 'long' });
 const timeOf = (ts) => new Date(ts).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
@@ -133,21 +134,10 @@ export default function ObjectReports({ project }) {
     );
 }
 
-function Photos({ photos, fileIds }) {
-    if (!photos?.length) return null;
-    return (
-        <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
-            {photos.map((url, i) => {
-                const fid = (fileIds || [])[i];
-                return (
-                    <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="block aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100">
-                        {fid && <img src={driveThumb(fid, 300)} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover" />}
-                    </a>
-                );
-            })}
-        </div>
-    );
-}
+/* Фото звіту — відкриваються тут же, на весь екран (ui/MediaViewer), а не на Диску */
+const Photos = ({ photos, fileIds }) => (
+    <PhotoThumbs photos={photos} fileIds={fileIds} className="grid grid-cols-4 sm:grid-cols-6 gap-1.5" />
+);
 
 const Block = ({ title, children }) => (
     <div>
@@ -245,10 +235,12 @@ function MoneyBlock({ report: r, project, me, onChanged }) {
     const [rate, setRate] = useState('');
     const [busy, setBusy] = useState(false);
 
+    // Курс угоди об'єкта; угода без курсу — поточний
     useEffect(() => {
         if (!needsRate) return;
+        if (Number(project?.exchange_rate) > 0) { setRate(String(Number(project.exchange_rate))); return; }
         loadUsdRate().then(r => setRate(r ? String(r) : ''));
-    }, [needsRate]);
+    }, [needsRate, project?.exchange_rate]);
 
     const confirm = async () => {
         const rt = parseFloat(String(rate).replace(',', '.'));

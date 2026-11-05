@@ -13,22 +13,13 @@
 import React, { useEffect, useState } from 'react';
 import { FaBell, FaShoppingCart, FaRobot } from 'react-icons/fa';
 import { useAuth } from '../AuthProvider';
-import { T, Skeleton, useToast, humanError } from '../ui';
+import { T, Skeleton, Switch, useToast, humanError } from '../ui';
 import { loadSupplyAutomation, saveSetting } from '../utils/settings';
 
 const ROWS = [
     { key: 'alerts', icon: FaBell, title: 'Нагадування забезпечення', on: 'Система сама нагадує: скласти специфікацію захисту, забезпечити матеріал', off: 'Нагадувань немає — усе вручну' },
     { key: 'requests', icon: FaShoppingCart, title: 'Заявки в закупівлю', on: 'Коли за специфікацією бракує матеріалу — система сама ставить заявку', off: 'Заявки ставлять лише люди' },
 ];
-
-function Switch({ on, disabled, onClick, label }) {
-    return (
-        <button type="button" role="switch" aria-checked={on} aria-label={label} disabled={disabled} onClick={onClick}
-            className={`relative w-11 h-6 rounded-full flex-shrink-0 transition-colors disabled:opacity-50 ${on ? 'bg-emerald-500' : 'bg-slate-300'}`}>
-            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${on ? 'translate-x-5' : ''}`} />
-        </button>
-    );
-}
 
 export default function SupplyAutomation({ onChanged, bare = false }) {
     const auth = useAuth();

@@ -6,8 +6,9 @@
 //   • Об'єкт — клієнт з телефоном, станція, етапи монтажу;
 //   • Файли — технічне креслення, 3D, специфікації, фото замірів і монтажу
 //     (з тих самих етапів, куди офіс уже завантажує; без КП — там ціни);
-//   • Матеріали — специфікації «Комплектація матеріалів» і «Комплектація
-//     ел. захисту» з позначкою, що вже видано зі складу;
+//   • Матеріали — зверху «Взяти з собою» (що ще не видано і з якого
+//     складу), далі специфікації «Комплектація матеріалів» і
+//     «Комплектація ел. захисту» з позначкою, що вже видано зі складу;
 //   • Звіти — що бригади звітували по цьому об'єкту день за днем;
 //   • Нотатки — важливе по об'єкту; нове бот надсилає в гілку об'єкта.
 // =====================================================================
@@ -22,8 +23,11 @@ import { getStageGroupLabel, tasksOfGroup, taskStatusMeta } from '../domain/stag
 import {
     useMontazh, isoDay, shiftDay, relDay, OBJECT_FIELDS, objectTitle, placeOf, kwText, routeLink, telLink,
 } from './data';
+import { loadTakeLists } from '../domain/takeList';
 import { Screen, Card, Label, Pill, Big, Line, Empty, Loading, Tabs } from './kit';
 import ReportHistory from './ReportHistory';
+import TakeList from './TakeList';
+import { MediaViewer } from '../ui/MediaViewer';
 
 const TABS = [
     { value: 'info', label: "Об'єкт" },
@@ -181,12 +185,15 @@ const FILE_GROUPS = [
 const ALL_STAGES = FILE_GROUPS.flatMap(g => g.stages);
 const fileIdOf = (url) => (String(url).match(/\/d\/([^/?#]+)/) || String(url).match(/[?&]id=([^&#]+)/) || [])[1] || null;
 const thumb = (fid) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(fid)}&sz=w360-h360`;
+// Креслення й специфікації — документи на кілька сторінок: відкриваємо переглядом Диска; решта — фото
+const DOC_GROUPS = new Set(['drawing', 'spec']);
 
 function FilesTab({ objId }) {
     const [loading, setLoading] = useState(true);
     const [groups, setGroups] = useState([]);
     const [selected3d, setSelected3d] = useState(new Set());
     const [open, setOpen] = useState({});
+    const [view, setView] = useState(null);   // { items, index } — перегляд тут же, не окремою вкладкою
 
     useEffect(() => {
         (async () => {
@@ -220,16 +227,19 @@ function FilesTab({ objId }) {
     if (loading) return <Loading />;
     if (!groups.length) return <Card><Empty>Файлів по об'єкту ще немає</Empty></Card>;
 
-    return groups.map(g => {
+    return (<>
+        {groups.map(g => {
         // Затверджене 3D — першим
         const files = g.key === '3d' ? [...g.files].sort((a, b) => selected3d.has(b.fid) - selected3d.has(a.fid)) : g.files;
         const limit = open[g.key] ? files.length : 6;
+        const items = files.map(f => ({ url: f.url, fid: f.fid, kind: DOC_GROUPS.has(g.key) ? 'file' : 'image', name: g.title }));
         return (
             <Card key={g.key}>
                 <Label right={files.length}>{g.title}</Label>
                 <div className="grid grid-cols-3 gap-1.5">
-                    {files.slice(0, limit).map(f => (
-                        <a key={f.fid || f.url} href={f.url} target="_blank" rel="noopener noreferrer"
+                    {files.slice(0, limit).map((f, i) => (
+                        <button key={f.fid || f.url} type="button" onClick={() => setView({ items, index: i })}
+                            aria-label={`${g.title}: відкрити ${i + 1} з ${files.length}`}
                             className="relative block aspect-square rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
                             {/* Значок під мініатюрою: видно, поки вона вантажиться або якщо її немає */}
                             <span className="absolute inset-0 flex items-center justify-center text-slate-400">
@@ -243,7 +253,7 @@ function FilesTab({ objId }) {
                             {g.key === '3d' && selected3d.has(f.fid) && (
                                 <span className="absolute left-1 bottom-1"><Pill tone="ok">затверджено</Pill></span>
                             )}
-                        </a>
+                        </button>
                     ))}
                 </div>
                 {files.length > limit && (
@@ -252,7 +262,9 @@ function FilesTab({ objId }) {
                 <div className="text-[12.5px] text-slate-500 mt-2">Останнє: {relDay(isoDay(new Date(files[0].at))).toLowerCase()}</div>
             </Card>
         );
-    });
+        })}
+        {view && <MediaViewer items={view.items} index={view.index} onClose={() => setView(null)} />}
+    </>);
 }
 
 /* ---------------- Матеріали ---------------- */
@@ -267,16 +279,18 @@ function MaterialsTab({ objId }) {
     const [loading, setLoading] = useState(true);
     const [specs, setSpecs] = useState({});
     const [issued, setIssued] = useState(new Map());
+    const [take, setTake] = useState([]);
 
     useEffect(() => {
         (async () => {
-            const [sp, need] = await Promise.all([
+            const [sp, need, takeMap] = await Promise.all([
                 supabase.from('specifications')
                     .select('id, notes, version, status, specification_items(id, quantity, original_name, nomenclature_id, nomenclature:nomenclature(name, brand, model, unit:units(code, name)))')
                     .eq('installation_custom_id', objId).in('notes', SPEC_KINDS.map(k => k.key)).neq('status', 'archived')
                     .order('version', { ascending: false }),
                 // Видано на об'єкт по кожній позиції (видача, продаж, передача мінус повернення)
                 supabase.from('v_object_site_stock').select('nomenclature_id, issued_quantity').eq('installation_custom_id', objId),
+                loadTakeLists([objId]),
             ]);
             // Остання версія кожного виду; затверджена має перевагу над чернеткою
             const pick = {};
@@ -286,6 +300,7 @@ function MaterialsTab({ objId }) {
             });
             setSpecs(pick);
             setIssued(new Map((need.data || []).map(r => [r.nomenclature_id, Number(r.issued_quantity || 0)])));
+            setTake(takeMap.get(objId) || []);
             setLoading(false);
         })();
     }, [objId]);
@@ -293,31 +308,35 @@ function MaterialsTab({ objId }) {
     if (loading) return <Loading />;
     if (!Object.keys(specs).length) return <Card><Empty>Комплектацію для цього об'єкта ще не складено</Empty></Card>;
 
-    return SPEC_KINDS.filter(k => specs[k.key]).map(k => {
-        const items = specs[k.key].specification_items || [];
-        const doneN = items.filter(it => (issued.get(it.nomenclature_id) || 0) >= Number(it.quantity || 0) - 1e-9).length;
-        return (
-            <Card key={k.key}>
-                <Label icon={k.icon} right={`видано ${doneN} з ${items.length}`}>{k.title}</Label>
-                {items.map((it, i) => {
-                    const need = Number(it.quantity || 0);
-                    const got = issued.get(it.nomenclature_id) || 0;
-                    const name = it.nomenclature ? [it.nomenclature.name, it.nomenclature.model].filter(Boolean).join(' ') : it.original_name;
-                    const unit = String(it.nomenclature?.unit?.code || it.nomenclature?.unit?.name || '').toLowerCase();
-                    const tone = got >= need - 1e-9 ? 'ok' : got > 0 ? 'warn' : 'neutral';
-                    const label = got >= need - 1e-9 ? 'видано' : got > 0 ? `видано ${qty(got)}` : 'ще ні';
-                    return (
-                        <div key={it.id} className={`flex items-center gap-2.5 py-2.5 ${i ? 'border-t border-slate-100' : ''}`}>
-                            <div className="min-w-0 flex-1 text-[14.5px] text-slate-800 break-words">{name || '—'}</div>
-                            <b className="text-[14.5px] tabular-nums whitespace-nowrap">{qty(need)}{unit ? ` ${unit}` : ''}</b>
-                            <Pill tone={tone}>{label}</Pill>
-                        </div>
-                    );
-                })}
-                {specs[k.key].status !== 'confirmed' && <div className="text-[12.5px] text-amber-800 mt-1">Чернетка — офіс ще уточнює</div>}
-            </Card>
-        );
-    });
+    // Зверху — що ще взяти з собою (невидане), далі самі специфікації
+    return (<>
+        {take.length > 0 && <TakeList rows={take} open className="" />}
+        {SPEC_KINDS.filter(k => specs[k.key]).map(k => {
+            const items = specs[k.key].specification_items || [];
+            const doneN = items.filter(it => (issued.get(it.nomenclature_id) || 0) >= Number(it.quantity || 0) - 1e-9).length;
+            return (
+                <Card key={k.key}>
+                    <Label icon={k.icon} right={`видано ${doneN} з ${items.length}`}>{k.title}</Label>
+                    {items.map((it, i) => {
+                        const need = Number(it.quantity || 0);
+                        const got = issued.get(it.nomenclature_id) || 0;
+                        const name = it.nomenclature ? [it.nomenclature.name, it.nomenclature.model].filter(Boolean).join(' ') : it.original_name;
+                        const unit = String(it.nomenclature?.unit?.code || it.nomenclature?.unit?.name || '').toLowerCase();
+                        const tone = got >= need - 1e-9 ? 'ok' : got > 0 ? 'warn' : 'neutral';
+                        const label = got >= need - 1e-9 ? 'видано' : got > 0 ? `видано ${qty(got)}` : 'ще ні';
+                        return (
+                            <div key={it.id} className={`flex items-center gap-2.5 py-2.5 ${i ? 'border-t border-slate-100' : ''}`}>
+                                <div className="min-w-0 flex-1 text-[14.5px] text-slate-800 break-words">{name || '—'}</div>
+                                <b className="text-[14.5px] tabular-nums whitespace-nowrap">{qty(need)}{unit ? ` ${unit}` : ''}</b>
+                                <Pill tone={tone}>{label}</Pill>
+                            </div>
+                        );
+                    })}
+                    {specs[k.key].status !== 'confirmed' && <div className="text-[12.5px] text-amber-800 mt-1">Чернетка — офіс ще уточнює</div>}
+                </Card>
+            );
+        })}
+    </>);
 }
 
 /* ---------------- Нотатки ---------------- */

@@ -1,10 +1,12 @@
 // =====================================================================
 //  K-CORE · «Задачі»
 //
-//  Три вкладки (відкривається «Етапи»):
+//  Чотири вкладки (відкривається «Етапи»):
 //   • Етапи      — етапи об'єктів, де людина відповідальна (StagesView;
 //                  колишня сторінка «Мої етапи»);
 //   • Мій день   — особистий планер (PlannerView); доручення мені — теж тут;
+//   • Нотатник   — особисті нотатки з нагадуванням ботом; бачить лише
+//                  автор або ті, кому він показав (NotebookView);
 //   • Доручення  — задачі команди: хто кому що доручив.
 //
 //  Доручення створюються й редагуються прямо в списку — без вікон поверх
@@ -25,6 +27,7 @@ import Layout from './Layout';
 import { useAuth } from './AuthProvider';
 import { T, Btn, IconBtn, Chip, Picker, Segmented, SearchInput, Skeleton, EmptyState, Linkify, useToast, useAutoFocus, humanError } from './ui';
 import PlannerView from './pages/PlannerView';
+import NotebookView from './pages/NotebookView';
 import StagesView from './pages/StagesView';
 
 const STATUSES = [
@@ -510,6 +513,7 @@ function TeamTasks({ editId, onEditDone }) {
 const TABS = [
     { value: 'stages', label: 'Етапи' },
     { value: 'day', label: 'Мій день' },
+    { value: 'notes', label: 'Нотатник' },
     { value: 'team', label: 'Доручення' },
 ];
 
@@ -536,6 +540,7 @@ export default function MicrotasksPage() {
                 {tab === 'day' && (
                     <PlannerView onOpenTask={(t) => setParams({ tab: 'team', edit: String(t.custom_id).trim() }, { replace: true })} />
                 )}
+                {tab === 'notes' && <NotebookView />}
                 {tab === 'team' && <TeamTasks editId={editId} onEditDone={clearEdit} />}
                 {tab === 'stages' && <StagesView />}
             </div>

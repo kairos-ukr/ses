@@ -10,6 +10,7 @@ import ToolsPage from './ToolsPage';
 import PurchasesPage from './PurchasesPage';
 import StockMovementsPage from './StockMovementsPage';
 import IssueOrdersPage from './warehouse/IssueOrdersPage';
+import DispatchPage from './warehouse/DispatchPage';
 import CategoriesAdminPage from './CategoriesAdminPage';
 import EquipmentBase from '../EquipmentBase';
 import CostPricesPanel from './CostPricesPanel';
@@ -100,6 +101,7 @@ export default function InventoryWorkspace() {
             )}
         >
             {activeTab === 'stock' && <WarehousePage externalSearch={globalSearch} externalActionTrigger={actionTrigger} initialStockMode={params.get('stock')} />}
+            {activeTab === 'dispatch' && <DispatchPage />}
             {activeTab === 'issue' && <IssueOrdersPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
             {activeTab === 'movements' && <StockMovementsPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}
             {activeTab === 'purchases' && <PurchasesPage externalSearch={globalSearch} externalActionTrigger={actionTrigger} />}

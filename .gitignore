@@ -33,3 +33,6 @@ __pycache__/
 /doc-server/config.py
 /doc-server/google_token.json
 /doc-server/logs/
+
+# Копія старого сервера з хостингу (там token.json Google) — лише для звірки
+/old-backend/

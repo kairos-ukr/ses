@@ -26,12 +26,11 @@ import { T, Btn, Segmented, Tip, Skeleton, Chip, useToast, humanError, num } fro
 import { STAGE_GROUPS, normalizeGroupKey, getStageGroupLabel } from './domain/stages';
 import { LOST_REASONS, formatMoney, getObjectStatus } from './domain/objects';
 import { LEAD_SOURCES, getLeadSourceLabel } from './domain/leads';
-import { median, stageTone, loadStageNorms } from './domain/pipeline';
+import { median } from './domain/pipeline';
 import { DIMENSIONS, getDimension, buildRecords, stats, groupBy, applyFilters, touchedInPeriod } from './domain/analytics';
 import { fetchAll } from './utils/fetchAll';
 import { hasPaymentSchedule, hasLeads } from './utils/features';
 import { useUsdRate } from './utils/settings';
-import UsdRateEditor from './pages/UsdRateEditor';
 
 const MONTHS_UA = ['січ', 'лют', 'бер', 'кві', 'тра', 'чер', 'лип', 'сер', 'вер', 'жов', 'лис', 'гру'];
 const monthKey = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`; };
@@ -45,7 +44,6 @@ const lastMonths = (n) => {
     return out;
 };
 
-const toneText = (tone) => (tone === 'danger' ? 'text-rose-600' : tone === 'warn' ? 'text-amber-700' : 'text-slate-700');
 const marginTone = (m) => (m == null ? 'text-slate-300' : m < 10 ? 'text-rose-600' : m < 20 ? 'text-amber-700' : 'text-emerald-700');
 
 /* Які об'єкти показати в списку */
@@ -149,16 +147,15 @@ export default function AnalyticsPage() {
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const [objects, launches, durations, profit, norms, employees, schedReady, leadsReady] = await Promise.all([
+            const [objects, launches, durations, profit, employees, schedReady, leadsReady] = await Promise.all([
                 fetchAll(() => supabase.from('installations')
-                    .select('custom_id, name, created_at, status, workflow_stage, capacity_kw, lost_at, lost_stage, lost_reason, responsible_emp_id, station_type, mount_type, working_company, bank, bank_name, client:clients(name, company_name, populated_place, oblast)')
+                    .select('custom_id, name, created_at, status, workflow_stage, capacity_kw, lost_at, lost_stage, lost_reason, responsible_emp_id, station_type, mount_type, working_company, bank, bank_name, exchange_rate, client:clients(name, company_name, populated_place, oblast)')
                     .or('is_subcontract.eq.false,is_subcontract.is.null').order('custom_id')),
                 fetchAll(() => supabase.from('v_object_launch').select('installation_custom_id, launched_at').order('installation_custom_id')),
                 fetchAll(() => supabase.from('v_stage_durations').select('stage_key, left_at, days').order('left_at')),
                 fetchAll(() => supabase.from('v_object_profit')
                     .select('installation_custom_id, revenue_uah, cost_uah, profit_uah, margin_pct, materials_items, materials_missing, labour_missing, usd_rate')
                     .order('installation_custom_id')),
-                loadStageNorms(),
                 supabase.from('employees').select('custom_id, name').then(r => r.data || []),
                 hasPaymentSchedule(),
                 hasLeads(),
@@ -167,7 +164,7 @@ export default function AnalyticsPage() {
                 schedReady ? fetchAll(() => supabase.from('v_receivables').select('*').order('installation_custom_id')) : [],
                 leadsReady ? fetchAll(() => supabase.from('leads').select('created_at, source, status, converted_at').order('id')) : [],
             ]);
-            setData({ objects, launches, durations, profit, norms, employees, receivables, leads, leadsReady });
+            setData({ objects, launches, durations, profit, employees, receivables, leads, leadsReady });
         } catch (e) {
             toast(humanError(e), 'error');
         } finally {
@@ -182,16 +179,12 @@ export default function AnalyticsPage() {
         return { empName: (k) => names.get(String(k)) };
     }, [data]);
 
-    // Курс — той, за яким база рахувала прибуток, або з налаштувань; без курсу — лише гривні
-    const usdRate = Number(data?.profit?.[0]?.usd_rate) || Number(settingsRate) || null;
-    /** Гроші в аналітиці зберігаються в гривнях; показуємо у вибраній валюті */
-    const money = useCallback((uah) => (cur === 'USD' && usdRate
-        ? formatMoney(Math.round((Number(uah) || 0) / usdRate), 'USD')
-        : formatMoney(Math.round(Number(uah) || 0), 'UAH')), [cur, usdRate]);
-    const short = useCallback((uah) => {
-        const v = cur === 'USD' && usdRate ? uah / usdRate : uah;
-        return Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}к` : Math.round(v);
-    }, [cur, usdRate]);
+    // Кожна угода — за своїм курсом (domain/analytics → buildRecords); поточний — лише
+    // для старих угод без курсу і для впорядкування боржників
+    const usdRate = Number(settingsRate) || null;
+    /** Гроші записів уже у вибраній валюті — лише форматуємо */
+    const money = useCallback((v) => formatMoney(Math.round(Number(v) || 0), cur), [cur]);
+    const short = useCallback((v) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}к` : Math.round(v)), []);
 
     /* --- Записи по об'єктах і вибірка поточного рівня --- */
     const base = useMemo(() => {
@@ -207,10 +200,11 @@ export default function AnalyticsPage() {
             profit: new Map(data.profit.map(p => [p.installation_custom_id, p])),
             debts: new Map(data.receivables.map(r => [r.installation_custom_id, r])),
             usdRate,
+            cur,
             inPeriod,
         });
         return { months, from, inPeriod, inPrev, recs };
-    }, [data, period, usdRate]);
+    }, [data, period, usdRate, cur]);
 
     const view = useMemo(() => {
         if (!base) return null;
@@ -232,11 +226,7 @@ export default function AnalyticsPage() {
             if (r.revenue > 0) { x.revenue += r.revenue; x.revenueObjects += 1; }
             if (r.complete) { x.profit += r.profit; x.completeObjects += 1; }
         });
-        const chartSeries = series.map(x => ({
-            ...x,
-            revenueV: cur === 'USD' ? x.revenue / usdRate : x.revenue,
-            profitV: cur === 'USD' ? x.profit / usdRate : x.profit,
-        }));
+        const chartSeries = series.map(x => ({ ...x, revenueV: x.revenue, profitV: x.profit }));
 
         const groups = by ? groupBy(scope, by, ctx) : [];
 
@@ -248,7 +238,7 @@ export default function AnalyticsPage() {
             if (month) list = list.filter(r => sh.month(r, month));
         }
         return { scope, s, createdPrev, series: chartSeries, groups, list };
-    }, [base, filters, by, ctx, isDrill, show, month, cur, usdRate]);
+    }, [base, filters, by, ctx, isDrill, show, month]);
 
     /* Розділи першого рівня (етапи, втрати, борги, джерела) — по всій компанії */
     const company = useMemo(() => {
@@ -261,9 +251,9 @@ export default function AnalyticsPage() {
         const durations = STAGE_GROUPS.map(g => {
             const list = data.durations.filter(d => normalizeGroupKey(d.stage_key) === g.key && inPeriod(d.left_at)).map(d => Number(d.days));
             const avg = list.length ? list.reduce((s, x) => s + x, 0) / list.length : null;
-            return { key: g.key, label: g.label, n: list.length, med: median(list.map(x => Math.round(x))), avg, norm: data.norms[g.key] || null };
+            return { key: g.key, label: g.label, n: list.length, med: median(list.map(x => Math.round(x))), avg };
         });
-        const inUsd = (r) => (r.currency === 'UAH' ? Number(r.debt) / usdRate : Number(r.debt));
+        const inUsd = (r) => (r.currency === 'UAH' ? Number(r.debt) / (usdRate || 41.5) : Number(r.debt));
         const topDebtors = data.receivables.slice().sort((x, y) => inUsd(y) - inUsd(x)).slice(0, 8);
         const leadsInPeriod = data.leads.filter(l => inPeriod(l.created_at));
         const sources = LEAD_SOURCES.map(s => {
@@ -339,7 +329,7 @@ export default function AnalyticsPage() {
                     <Segmented value={period} onChange={(v) => go({ period: v }, { replace: true })}
                         options={[{ value: 3, label: '3 міс' }, { value: 6, label: '6 міс' }, { value: 12, label: '12 міс' }, { value: 24, label: '2 роки' }]} />
                     <Segmented value={cur} onChange={setCurrency} options={[{ value: 'USD', label: '$' }, { value: 'UAH', label: '₴' }]} />
-                    <UsdRateEditor compact />
+                    <Tip text="Кожна угода — за своїм курсом: угода на $10 000 і в доларах, і в гривнях рахується за курсом цієї угоди. Старі угоди без курсу — за поточним." />
                     {!isDrill && <Btn icon={FaHistory} onClick={() => navigate('/admin/changes')}>Журнал змін</Btn>}
                     <Btn icon={FaSyncAlt} onClick={load} disabled={loading}><span className="hidden sm:inline">Оновити</span></Btn>
                 </div>
@@ -431,23 +421,21 @@ export default function AnalyticsPage() {
 
                     {!isDrill && company && <>
                         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
-                            <Section title="Скільки триває кожен етап" hint="Етапи, які об'єкти завершили в цьому періоді: медіана (половина швидше, половина довше) і середнє. Червоне — довше за норму.">
+                            <Section title="Скільки триває кожен етап" hint="Етапи, які об'єкти завершили в цьому періоді: медіана (половина швидше, половина довше) і середнє. Норм немає: об'єкт буває на 3 дні, а буває на 2 місяці.">
                                 <table className="w-full text-left">
                                     <thead>
                                         <tr className="border-b border-slate-200">
                                             <th className={`${T.th} bg-transparent px-0`}>Етап</th>
                                             <th className={`${T.th} bg-transparent text-right`}>Медіана</th>
-                                            <th className={`${T.th} bg-transparent text-right`}>Середнє</th>
-                                            <th className={`${T.th} bg-transparent text-right pr-0`}>Норма</th>
+                                            <th className={`${T.th} bg-transparent text-right pr-0`}>Середнє</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
                                         {company.durations.map(d => (
                                             <tr key={d.key}>
                                                 <td className="py-2 text-[13.5px] text-slate-700">{d.label}<span className="text-[11.5px] text-slate-400"> · {d.n}</span></td>
-                                                <td className={`py-2 text-right text-[13.5px] font-bold tabular-nums ${toneText(stageTone(d.med, d.norm))}`}>{d.med != null ? `${d.med} дн` : '—'}</td>
+                                                <td className="py-2 text-right text-[13.5px] font-bold tabular-nums text-slate-900">{d.med != null ? `${d.med} дн` : '—'}</td>
                                                 <td className="py-2 text-right text-[13px] tabular-nums text-slate-500">{d.avg != null ? `${num(d.avg, 1)} дн` : '—'}</td>
-                                                <td className="py-2 text-right text-[13px] tabular-nums text-slate-400">{d.norm ? `${d.norm} дн` : '—'}</td>
                                             </tr>
                                         ))}
                                     </tbody>

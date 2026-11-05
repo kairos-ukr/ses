@@ -15,7 +15,8 @@ import { FaChevronDown, FaChevronUp, FaArrowRight, FaCamera } from 'react-icons/
 import { supabase } from '../supabaseClient';
 import { Linkify } from '../ui';
 import { useMontazh, relDay, fmtDay, loadObjects, objectTitle } from './data';
-import { REPORT_STAGES, DAY_STATUS_LABEL, CURRENCY_SIGN, fmtAmount, fmtQty, driveThumb } from './report';
+import { REPORT_STAGES, DAY_STATUS_LABEL, CURRENCY_SIGN, fmtAmount, fmtQty } from './report';
+import { PhotoThumbs } from '../ui/MediaViewer';
 import { Card, Label, Pill, Empty, Loading } from './kit';
 
 const STAGE_SHORT = Object.fromEntries(REPORT_STAGES.map(t => [t.key, t.short]));
@@ -83,21 +84,8 @@ export default function ReportHistory({ objId, mine, limit = 40 }) {
     });
 }
 
-function Thumbs({ photos, fileIds }) {
-    if (!photos?.length) return null;
-    return (
-        <div className="grid grid-cols-4 gap-1.5">
-            {photos.map((url, i) => {
-                const fid = (fileIds || [])[i];
-                return (
-                    <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="block aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100">
-                        {fid && <img src={driveThumb(fid, 300)} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover" />}
-                    </a>
-                );
-            })}
-        </div>
-    );
-}
+/* Фото відкриваються тут же, на весь екран, з гортанням (ui/MediaViewer) */
+const Thumbs = ({ photos, fileIds }) => <PhotoThumbs photos={photos} fileIds={fileIds} />;
 
 function Details({ r, showMoney, byId, mine }) {
     const navigate = useNavigate();

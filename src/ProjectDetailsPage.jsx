@@ -31,10 +31,11 @@ import {
 } from "./domain/stages";
 import {
   OBJECT_STATUSES, getObjectStatus, isObjectActive, getLostReasonLabel, getPaymentStatus,
-  DEFAULT_CURRENCY, formatMoney, COMPANIES, BANKS, getCompany, STATION_TYPES, managerOptions,
+  DEFAULT_CURRENCY, CURRENCIES, formatMoney, COMPANIES, BANKS, getCompany, STATION_TYPES, managerOptions,
   brigadierOptions, canSeeMoney, isOwnObject,
 } from "./domain/objects";
-import { stageTone, normText, loadStageNorms, daysSince, stageIndex, kw, LONG_DAYS } from "./domain/pipeline";
+import { useUsdRate } from "./utils/settings";
+import { ageTone, daysSince, stageIndex, kw, STALE_DAYS, confirmActivity } from "./domain/pipeline";
 import { hasLostDeals, hasMoneyCurrency, hasCommercialOffers, hasChangeLog } from "./utils/features";
 import { describeChange } from "./domain/changes";
 import LostReasonPicker from "./LostReasonPicker";
@@ -155,7 +156,6 @@ export default function ProjectDetailPage() {
   const [activity, setActivity] = useState(null);     // { stage_entered_at, last_activity_at }
   const [readiness, setReadiness] = useState(null);   // % забезпечення; null — специфікації немає
   const [clientObjects, setClientObjects] = useState(0);
-  const [norms, setNorms] = useState({});             // норма днів на етап
   const [changes, setChanges] = useState([]);         // журнал змін по обʼєкту (хто змінив вартість, статус…)
   const [reports, setReports] = useState([]);         // денні звіти бригад (додаток «Монтаж»)
 
@@ -251,10 +251,9 @@ export default function ProjectDetailPage() {
         navigate('/installations');
         return;
       }
-      const [, , , , needs, sameClient] = await Promise.all([
+      const [, , , needs, sameClient] = await Promise.all([
         loadNotes(),
         loadPayments(),
-        loadStageNorms().then(setNorms),
         loadWorkflow(),
         supabase.from('v_object_material_needs')
           .select('required_quantity, reserved_quantity, issued_quantity').eq('installation_custom_id', id),
@@ -309,7 +308,8 @@ export default function ProjectDetailPage() {
   const currentIdx = stageIndex(currentKey);
   const currentLabel = getStageGroupLabel(currentKey);
   const stageDays = activity ? daysSince(activity.stage_entered_at) : null;
-  const currentNorm = norms[currentKey] || null;
+  // «Без руху» — днів без жодної дії; лише за ним колір і тривога (норм етапів немає)
+  const idleDays = activity ? daysSince(activity.last_activity_at) : null;
 
   // Коли об'єкт заходив на кожен макроетап (остання подія «перевели на етап»)
   const enteredAt = useMemo(() => {
@@ -452,7 +452,19 @@ export default function ProjectDetailPage() {
 
   /* ---------------- РЕДАГУВАННЯ ---------------- */
 
-  const openEdit = () => { setFormData(project); setEditOpen(true); };
+  // openEdit('money') — одразу до «Гроші угоди» (з «Вартість не вказана → Вказати»)
+  const [editFocus, setEditFocus] = useState(null);
+  const openEdit = (focus) => { setFormData(project); setEditFocus(typeof focus === 'string' ? focus : null); setEditOpen(true); };
+  useEffect(() => {
+    if (!editOpen || editFocus !== 'money') return undefined;
+    const t = setTimeout(() => {
+      const el = document.getElementById('edit-money');
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el?.querySelector('input[type="number"]')?.focus({ preventScroll: true });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [editOpen, editFocus]);
+  const currentRate = useUsdRate();   // підказка для курсу угоди, якщо його ще немає
   const setF = (patch) => setFormData(f => ({ ...f, ...patch }));
   const setClientF = (patch) => setFormData(f => ({ ...f, client: { ...f.client, ...patch } }));
 
@@ -519,6 +531,17 @@ export default function ProjectDetailPage() {
     }
   };
 
+  /* «Робота йде»: об'єкт активний — рахується як рух, «Без руху» зникає */
+  const workGoes = async () => {
+    try {
+      await confirmActivity(project.custom_id, me?.id);
+      showToast('Позначено: робота йде', 'success');
+      loadWorkflow();
+    } catch (e) {
+      showToast(humanError(e), 'error');
+    }
+  };
+
   /* ---------------- «НАСТУПНИЙ КРОК» ---------------- */
 
   // Рахується щоразу заново: дешево, і дії завжди бачать свіжі дані
@@ -572,10 +595,12 @@ export default function ProjectDetailPage() {
     // Активний об'єкт: перший невиконаний підетап поточного макроетапу
     const tasks = tasksOfGroup(currentKey).map(t => ({ ...t, ...taskState(t.key) }));
     const pending = tasks.filter(t => !t.meta.done);
-    const tone = stageTone(stageDays, currentNorm);
-    const ageLine = stageDays == null ? null : currentNorm
-      ? `На етапі «${currentLabel}» ${stageDays} дн: ${normText(stageDays, currentNorm)}.`
-      : `На етапі «${currentLabel}» ${stageDays} дн${stageDays > LONG_DAYS ? ' — довше за місяць' : ''}.`;
+    // Норм етапів немає: колір і тривога — лише за «без руху» (жодної дії), а не за днями на етапі
+    const stale = idleDays != null && idleDays > STALE_DAYS;
+    const tone = ageTone(idleDays);
+    const ageLine = stageDays == null ? null
+      : `На етапі «${currentLabel}» ${stageDays} дн.${stale ? ` Без руху ${idleDays} дн.` : ''}`;
+    const workBtn = stale && canEdit ? { label: 'Робота йде', icon: FaCheck, variant: 'outline', onClick: workGoes } : null;
     const moneyLine = seeMoney && cost > 0 && paid === 0 && currentIdx >= stageIndex('equipment')
       ? 'Аванс ще не надходив.' : null;
     const payBtn = moneyLine && auth.can('payments', 'add') ? { label: 'Додати платіж', icon: FaPlus, variant: 'outline', onClick: openPaymentModal } : null;
@@ -598,6 +623,7 @@ export default function ProjectDetailPage() {
         actions: [
           ...(canEdit ? [{ label: 'Клієнт погодив', icon: FaCheck, variant: 'primary', onClick: () => setTaskStatus('commercial_proposal', 'approved', 'Клієнт погодив КП').then(ok => ok && showToast('КП погоджено')) }] : []),
           ...(callBtn ? [callBtn] : []),
+          ...(workBtn ? [workBtn] : []),
           ...(lostBtn ? [lostBtn] : []),
         ],
       };
@@ -614,6 +640,7 @@ export default function ProjectDetailPage() {
             { label: `Перевести на «${next.label}»`, icon: FaArrowRight, variant: 'primary', onClick: () => moveToStage(next.key) },
             ...(payBtn ? [payBtn] : []),
             { label: 'Відкрити етапи', variant: 'outline', onClick: () => setTab('workflow') },
+            ...(workBtn ? [workBtn] : []),
           ] : [],
         };
       }
@@ -636,6 +663,7 @@ export default function ProjectDetailPage() {
     }
     if (payBtn) actions.push(payBtn);
     if (callBtn) actions.push(callBtn);
+    if (workBtn) actions.push(workBtn);
     if (lostBtn) actions.push(lostBtn);
 
     return {
@@ -696,7 +724,7 @@ export default function ProjectDetailPage() {
       const shown = { ...c, changes: { ...c.changes } };
       if (c.table_name === 'installations') delete shown.changes.workflow_stage;
       if (c.table_name === 'installations' && !seeMoney) {
-        ['total_cost', 'paid_amount', 'payment_status', 'currency', 'total_cost_source'].forEach(k => { delete shown.changes[k]; });
+        ['total_cost', 'paid_amount', 'payment_status', 'currency', 'total_cost_source', 'exchange_rate', 'no_cost'].forEach(k => { delete shown.changes[k]; });
       }
       if (!Object.keys(shown.changes).length) return;
       const d = describeChange(shown, ctx);
@@ -758,11 +786,10 @@ export default function ProjectDetailPage() {
           const dur = finished ? daysBetween(enteredAt[g.key], nextEntered) : null;
           let sub = '';
           if (finished) sub = nextEntered ? `${formatShort(nextEntered)}${dur != null ? ` · ${dur} дн` : ''}` : 'виконано';
-          else if (current) sub = lost ? 'зупинено' : stageDays != null ? `${stageDays} дн${currentNorm ? ` · норма ${currentNorm}` : ''}` : 'зараз';
+          else if (current) sub = lost ? 'зупинено' : stageDays != null ? `${stageDays} дн` : 'зараз';
           else if (g.key === 'complectation' && readiness != null) sub = `${readiness}% є`;
-          else if (norms[g.key]) sub = `норма ${norms[g.key]} дн`;
           else if (g.key === 'installation') sub = `${tasksOfGroup('installation').length} підетапів`;
-          const tone = current && !lost ? stageTone(stageDays, currentNorm) : 'neutral';
+          const tone = current && !lost ? ageTone(idleDays) : 'neutral';
           return (
             <button
               key={g.key}
@@ -932,6 +959,9 @@ export default function ProjectDetailPage() {
               <span className="text-[12.5px] font-semibold text-slate-500 tabular-nums">{Math.round(paidPct)}% сплачено</span>
             </div>
             <Bar segments={[{ pct: paidPct, tone: 'ok' }]} />
+            {Number(project.exchange_rate) > 0 && (
+              <div className="text-[12px] text-slate-500 tabular-nums">Курс угоди: <b className="text-slate-700">{Number(project.exchange_rate).toLocaleString('uk-UA', { maximumFractionDigits: 4 })} грн/$</b></div>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-lg bg-emerald-50/60 border border-emerald-100 px-3 py-2">
                 <div className="text-[11.5px] font-semibold text-emerald-700 inline-flex items-center gap-1">
@@ -945,10 +975,18 @@ export default function ProjectDetailPage() {
               </div>
             </div>
           </>
+        ) : project.no_cost ? (
+          // Вартість навмисно не вноситься (закрита угода, підряд) — без тривоги
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5">
+            <span className="text-[13px] font-semibold text-slate-600 inline-flex items-center gap-1.5">
+              Вартість не вноситься <Tip text="Позначено в редагуванні: закрита угода чи підряд. «Немає вартості угоди» по цьому об'єкту не нагадує." />
+            </span>
+            {canEdit && <Btn size="sm" variant="ghost" icon={FaEdit} onClick={() => openEdit('money')}>Змінити</Btn>}
+          </div>
         ) : (
           <div className="flex items-center justify-between gap-3 rounded-lg bg-amber-50/60 border border-amber-100 px-3 py-2.5">
             <span className="text-[13px] font-semibold text-amber-800">Вартість не вказана</span>
-            {canEdit && <Btn size="sm" variant="outline" icon={FaEdit} onClick={openEdit}>Вказати</Btn>}
+            {canEdit && <Btn size="sm" variant="outline" icon={FaEdit} onClick={() => openEdit('money')}>Вказати</Btn>}
           </div>
         )}
 
@@ -960,7 +998,7 @@ export default function ProjectDetailPage() {
           {showPaymentModal && (
             <div id="object-payment-form" className="mb-3 p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 scroll-mt-20">
               <div className="text-[14px] font-bold text-slate-900 mb-2.5">Новий платіж</div>
-              <PaymentForm installation={{ custom_id: project.custom_id, name: project.name, currency: objectCurrency }}
+              <PaymentForm installation={{ custom_id: project.custom_id, name: project.name, currency: objectCurrency, exchange_rate: project.exchange_rate }}
                 employeeId={me?.id} onCancel={() => setShowPaymentModal(false)} onSaved={paymentSaved} />
             </div>
           )}
@@ -1154,7 +1192,7 @@ export default function ProjectDetailPage() {
                   {project.bank === 'Так' && <Chip>Банк{project.bank_name ? ` · ${project.bank_name}` : ''}</Chip>}
                   {(project.status !== 'planning' && project.status !== 'in_progress') && <Chip tone={status.tone}>{status.label}</Chip>}
                   {isObjectActive(project.status) && project.status !== 'on_hold' && (
-                    <Chip tone={stageTone(stageDays, currentNorm) === 'neutral' ? 'accent' : stageTone(stageDays, currentNorm)}>
+                    <Chip tone={ageTone(idleDays) === 'neutral' ? 'accent' : ageTone(idleDays)}>
                       {currentLabel}{stageDays != null ? ` · ${stageDays} дн` : ''}
                     </Chip>
                   )}
@@ -1264,6 +1302,41 @@ export default function ProjectDetailPage() {
               </div>
             )}
           </div>
+
+          {/* Гроші угоди: вартість, валюта, курс угоди; або «вартість не вноситься» */}
+          {seeMoney && (
+            <div id="edit-money" className="space-y-2.5 scroll-mt-20">
+              <span className={T.label}>Гроші угоди</span>
+              <div className={`${T.inset} p-3 space-y-3`}>
+                <label className="flex items-center gap-2.5 cursor-pointer w-fit">
+                  <input type="checkbox" className="w-4 h-4 accent-indigo-600" checked={!!formData.no_cost}
+                    onChange={e => setF({ no_cost: e.target.checked })} />
+                  <span className="text-[13.5px] font-semibold text-slate-800">Вартість не вноситься</span>
+                  <Tip text="Закрита угода чи підряд, де суму навмисно не вписують. Тоді «Немає вартості угоди» по цьому об'єкту не нагадує." />
+                </label>
+                {!formData.no_cost && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <Field label="Вартість угоди">
+                      <input type="number" inputMode="decimal" min="0" step="0.01" className={`${T.input} tabular-nums`}
+                        value={formData.total_cost ?? ''} onChange={e => setF({ total_cost: e.target.value })} placeholder="0" />
+                    </Field>
+                    <Field label="Валюта" hint={payments.length > 0 ? "По об'єкту вже є платежі — валюту угоди не змінити." : undefined}>
+                      <select className={T.select} value={formData.currency || DEFAULT_CURRENCY} disabled={payments.length > 0}
+                        onChange={e => setF({ currency: e.target.value })}>
+                        {CURRENCIES.map(c => <option key={c.key} value={c.key}>{c.symbol} {c.label}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Курс угоди, грн за 1 $" hint="Свій для кожної угоди: за ним платежі в іншій валюті перераховуються в суму угоди, а долари — в гривні в прибутку. Нова угода бере поточний курс у момент створення.">
+
+                      <input type="number" inputMode="decimal" min="0" step="0.0001" className={`${T.input} tabular-nums`}
+                        value={formData.exchange_rate ?? ''} onChange={e => setF({ exchange_rate: e.target.value })}
+                        placeholder={currentRate ? `напр. ${currentRate}` : 'напр. 41.50'} />
+                    </Field>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-2.5">
             <span className={T.label}>Станція</span>

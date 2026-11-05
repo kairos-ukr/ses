@@ -16,6 +16,9 @@
 //  звіт чекає на телефоні й надсилається сам, щойно з'явиться мережа.
 //  Після надсилання: підетапи оновлюються в CRM, офіс бачить звіт, бот
 //  публікує його в гілці об'єкта (без суми грошей).
+//  Звіт — лише за сьогодні (до півночі): заднім числом не подаємо
+//  (власник 04.11). Звіт, що чекав інтернету на телефоні, надсилається
+//  своєю датою — його заповнили того ж дня.
 // =====================================================================
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -29,7 +32,7 @@ import { supabase } from '../supabaseClient';
 import { useToast, humanError } from '../ui';
 import { taskStatusMeta, normalizeTaskStatus } from '../domain/stages';
 import {
-    useMontazh, useFresh, isoDay, shiftDay, relDay, fmtDay, loadObjects, groupVisits, objectTitle, isBrigadier,
+    useMontazh, useFresh, isoDay, relDay, fmtDay, loadObjects, groupVisits, objectTitle, isBrigadier,
 } from './data';
 import {
     REPORT_STAGES, DAY_STATUS, DAY_STATUS_LABEL, CURRENCY_SIGN, fmtAmount, fmtQty, uploadPhotos, driveThumb, ensureReport,
@@ -37,8 +40,8 @@ import {
 } from './report';
 import { reportKey, localGet, localSet, localDel } from './local';
 import { Screen, Card, Label, Pill, Big, Line, Empty, Loading, Segment } from './kit';
+import { MediaViewer, driveFileId } from '../ui/MediaViewer';
 
-const BACK_DAYS = 3;   // дописати звіт можна за три останні дні
 // Кабель і провід — категорії складу «Кабель» і «Провід»
 const isCable = (c) => /^(кабел|провід|провод)/i.test(c?.category_name || '');
 // Пошук: «3х4», «3x4», «3×4» і «3*4» — те саме; дужки не заважають
@@ -69,7 +72,7 @@ export default function ReportScreen() {
         const today = isoDay();
         const { data: mine } = await supabase.from('installation_workers')
             .select('installation_custom_id, employee_custom_id, work_date, notes')
-            .eq('employee_custom_id', who.custom_id).gte('work_date', shiftDay(today, -BACK_DAYS)).lte('work_date', today)
+            .eq('employee_custom_id', who.custom_id).eq('work_date', today)
             .not('installation_custom_id', 'is', null);
         const my = groupVisits(mine).sort((a, b) => b.date.localeCompare(a.date));
         const dates = [...new Set(my.map(v => v.date))];
@@ -98,8 +101,8 @@ export default function ReportScreen() {
         return (
             <Screen title="Звіт за день" right={<HistoryLink />}>
                 <Card hero>
-                    <div className="text-[18px] font-bold">Звітувати поки нема про що</div>
-                    <p className="text-[14.5px] text-slate-600 mt-1">Звіт подається за об'єкт, на якому ви стоїте в графіку сьогодні або в останні дні.</p>
+                    <div className="text-[18px] font-bold">Сьогодні звітувати нема про що</div>
+                    <p className="text-[14.5px] text-slate-600 mt-1">Звіт подається в той самий день — за об'єкт, на якому ви сьогодні в графіку.</p>
                 </Card>
             </Screen>
         );
@@ -115,7 +118,7 @@ export default function ReportScreen() {
         || visits[0];
     const crewIds = crew.find(c => c.key === current.key)?.workerIds || current.workerIds;
     const choices = visits.map(v => ({
-        key: keyOf(v), label: `${relDay(v.date)} · ${objectTitle(objects.get(v.installationId))}`, done: !!reportOf(v)?.submitted_at,
+        key: keyOf(v), label: objectTitle(objects.get(v.installationId)), done: !!reportOf(v)?.submitted_at,
     }));
 
     return (
@@ -678,7 +681,7 @@ function CatalogSearch({ items, exclude = [], placeholder, onPick, onFree, allow
     );
 }
 
-/* Вибір, за який виїзд звіт (кілька об'єктів або дописати вчорашній) */
+/* Вибір, за який об'єкт звіт, коли сьогодні їх кілька */
 function Picker({ choices, current, onChoose }) {
     const [open, setOpen] = useState(false);
     const cur = choices.find(c => c.key === current);
@@ -732,6 +735,7 @@ function PhotoGrid({ photos = [], local = [], onAddFiles, onRemove, onRemoveLoca
     const { canWrite: mayWrite } = useMontazh();
     const canWrite = mayWrite && !readOnly;
     const [preparing, setPreparing] = useState(0);
+    const [viewAt, setViewAt] = useState(null);   // фото з Диска — перегляд тут же, не окремою вкладкою
 
     const add = async (list) => {
         const n = [...(list || [])].filter(f => f.type?.startsWith('image/')).length;
@@ -758,9 +762,9 @@ function PhotoGrid({ photos = [], local = [], onAddFiles, onRemove, onRemoveLoca
             ))}
             {photos.map((p, i) => (
                 <div key={p.fid || p.url} className="relative aspect-square rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
-                    <a href={p.url} target="_blank" rel="noopener noreferrer" className="absolute inset-0">
+                    <button type="button" onClick={() => setViewAt(i)} className="absolute inset-0" aria-label={`Відкрити фото ${i + 1}`}>
                         {p.fid && <img src={driveThumb(p.fid)} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover" />}
-                    </a>
+                    </button>
                     {onRemove && canWrite && (
                         <button type="button" onClick={() => onRemove(i)} aria-label="Прибрати фото зі звіту"
                             className="absolute top-1 right-1 w-9 h-9 rounded-lg bg-slate-900/80 text-white flex items-center justify-center"><FaTimes size={12} /></button>
@@ -773,6 +777,10 @@ function PhotoGrid({ photos = [], local = [], onAddFiles, onRemove, onRemoveLoca
                     <span className="text-[12.5px] font-bold">Додати</span>
                     <input type="file" accept="image/*" multiple className="hidden" onChange={e => { add(e.target.files); e.target.value = ''; }} />
                 </label>
+            )}
+            {viewAt != null && (
+                <MediaViewer index={viewAt} onClose={() => setViewAt(null)}
+                    items={photos.map(p => ({ url: p.url, fid: p.fid || driveFileId(p.url), kind: 'image' }))} />
             )}
         </div>
     );

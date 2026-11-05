@@ -1,9 +1,13 @@
 // =====================================================================
-//  K-CORE · Курс долара — один на всю програму
+//  K-CORE · Поточний курс долара — для нових угод
 //
-//  Видно, який курс зараз діє; змінити можна тут же (вписати свій або
-//  взяти офіційний курс НБУ на сьогодні). Міняють ті, кому відкриті
-//  «Налаштування» або гроші всієї компанії; решта лише бачить.
+//  Курс тепер свій у кожної угоди (installations.exchange_rate,
+//  db/2026-11_deal_rate.sql): нова угода бере цей поточний курс у момент
+//  створення й далі тримає свій. Зміна поточного курсу старих угод не
+//  чіпає. Ще він підставляється в платежі й продажі без об'єкта і
+//  рахує угоди, де свого курсу немає (старі).
+//  Змінити — тут же (вписати свій або взяти курс НБУ на сьогодні).
+//  Міняють ті, кому відкриті «Налаштування» або гроші всієї компанії.
 //  compact — рядок для шапки сторінки; інакше — картка налаштувань.
 // =====================================================================
 
@@ -33,7 +37,7 @@ export default function UsdRateEditor({ compact = false }) {
         try {
             await saveUsdRate(r, auth.employee?.id);
             close();
-            toast(`Курс ${fmt(r)} ₴ збережено — підставлятиметься всюди`, 'success');
+            toast(`Поточний курс ${fmt(r)} ₴ збережено — його візьмуть нові угоди`, 'success');
         } catch (e) {
             toast(humanError(e), 'error');
         } finally {
@@ -74,7 +78,8 @@ export default function UsdRateEditor({ compact = false }) {
         ) : (
             <span className="inline-flex items-center gap-1.5 h-9 pl-3 pr-1 rounded-lg border border-slate-200 bg-white text-[13px] text-slate-600">
                 <FaDollarSign size={11} className="text-emerald-600" />
-                Курс: <b className="text-slate-900 tabular-nums">{rate ? `${fmt(rate)} ₴` : rate === null ? 'не задано' : '…'}</b>
+                Поточний курс: <b className="text-slate-900 tabular-nums">{rate ? `${fmt(rate)} ₴` : rate === null ? 'не задано' : '…'}</b>
+                <Tip text="Для нових угод: кожна угода бере курс у момент створення й далі тримає свій (змінити — в картці об'єкта)." />
                 {canEdit
                     ? <IconBtn icon={FaPen} label="Змінити курс долара" onClick={() => setDraft(rate ? String(rate) : '')} />
                     : <span className="w-1" />}
@@ -85,8 +90,8 @@ export default function UsdRateEditor({ compact = false }) {
     return (
         <div className={`${T.card} p-4 space-y-3`}>
             <h2 className="text-[15px] font-bold text-slate-900 inline-flex items-center gap-2">
-                <FaDollarSign size={13} className="text-emerald-600" /> Курс долара
-                <Tip width={300} text="Один курс на всю програму: підставляється в платежі, продажі, звіти бригад; за ним рахуються прибуток об'єктів і аналітика. Можна вписати свій або взяти курс НБУ на сьогодні." />
+                <FaDollarSign size={13} className="text-emerald-600" /> Поточний курс долара
+                <Tip width={300} text="Курс тепер свій у кожної угоди: нова угода бере цей поточний курс у момент створення й далі тримає свій — зміна поточного курсу старих угод не чіпає. Змінити курс угоди — в картці об'єкта («Редагувати» → «Гроші угоди»). Ще цей курс підставляється в платежі й продажі без об'єкта." />
             </h2>
             {draft !== null ? editor : (
                 <div className="flex flex-wrap items-center gap-2">

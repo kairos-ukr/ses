@@ -6,7 +6,8 @@ import { FaEye, FaEyeSlash, FaUser, FaLock, FaEnvelope, FaSignInAlt, FaUserPlus,
 import logoImg from './logo.webp'; // логотип: зменшений, у форматі WebP
 
 // Ініціалізація клієнта Supabase
-import { supabase } from './supabaseClient';
+import { supabase, AUTH_LINK_ERROR } from './supabaseClient';
+import { useAuth } from './AuthProvider';
 
 // Компонент поля вводу
 const InputField = ({ name, type, placeholder, value, onChange, icon, disabled, required = true, minLength }) => (
@@ -69,6 +70,11 @@ export default function AuthPage() {
   });
   
   const navigate = useNavigate();
+  const { endRecovery } = useAuth();
+  // Відкрили протерміноване чи вже використане посилання з листа
+  const linkNote = AUTH_LINK_ERROR
+    ? 'Посилання для входу вже не дійсне: воно одноразове й діє обмежений час. Попросіть адміністратора створити нове.'
+    : '';
 
   useEffect(() => {
     const checkSession = async () => {
@@ -145,6 +151,8 @@ export default function AuthPage() {
           password: formData.password,
         });
         if (signInError) throw signInError;
+        // Увійшли своїм паролем — незавершене «новий пароль» у цій вкладці вже ні до чого
+        endRecovery?.();
       }
     } catch (err) {
       const errorMessage = err.message || "Сталася невідома помилка.";
@@ -217,6 +225,12 @@ export default function AuthPage() {
               <p className="text-sm text-slate-500 mb-8 text-center">
                 {isSignIn ? "Увійдіть, щоб керувати енергією" : "Приєднуйтесь до платформи майбутнього"}
               </p>
+
+              {linkNote && isSignIn && !error && !successMessage && (
+                <div className="bg-amber-50 border-l-4 border-amber-500 text-amber-800 px-4 py-3 rounded-r-lg mb-6 text-sm font-medium">
+                  {linkNote}
+                </div>
+              )}
 
               {error && (
                 <motion.div

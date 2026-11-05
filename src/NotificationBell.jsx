@@ -45,6 +45,9 @@ const ago = (ts) => {
 const POLL_MS = 60000;
 // Дзвіночків на сторінці два (меню і шапка телефона) — прочитане в одному оновлює інший
 const CHANGED = 'kcore:notifications-changed';
+// Показуємо лише останні два дні; старіші база прибирає сама (db/2026-11_notifications_two_days.sql)
+const KEEP_HOURS = 48;
+const since = () => new Date(Date.now() - KEEP_HOURS * 3600 * 1000).toISOString();
 
 /**
  * variant: 'side' — квадратна кнопка поруч із пошуком у бічному меню;
@@ -69,7 +72,7 @@ export default function NotificationBell({ variant = 'side' }) {
         if (!ready || !empId) return;
         const { count } = await supabase.from('app_notifications')
             .select('id', { count: 'exact', head: true })
-            .eq('employee_id', empId).is('read_at', null);
+            .eq('employee_id', empId).is('read_at', null).gte('created_at', since());
         setUnread(count || 0);
     }, [ready, empId]);
 
@@ -78,7 +81,8 @@ export default function NotificationBell({ variant = 'side' }) {
         setLoading(true);
         const { data } = await supabase.from('app_notifications')
             .select('id, kind, title, body, link, created_at, read_at')
-            .eq('employee_id', empId).order('created_at', { ascending: false }).limit(40);
+            .eq('employee_id', empId).gte('created_at', since())
+            .order('created_at', { ascending: false }).limit(60);
         setItems(data || []);
         setLoading(false);
     }, [ready, empId]);
@@ -158,7 +162,9 @@ export default function NotificationBell({ variant = 'side' }) {
         <div ref={panelRef} role="dialog" aria-label="Сповіщення"
             className="fixed z-[140] inset-x-2 top-14 lg:inset-x-auto lg:left-[268px] lg:top-3 lg:w-[400px] max-h-[80dvh] bg-white rounded-xl border border-slate-200 shadow-2xl flex flex-col overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
-                <h2 className="text-[15px] font-bold text-slate-900 mr-auto">Сповіщення</h2>
+                <h2 className="text-[15px] font-bold text-slate-900 mr-auto">
+                    Сповіщення <span className="text-[12px] font-medium text-slate-400 ml-1">за 2 дні</span>
+                </h2>
                 {unreadIds.length > 0 && (
                     <button type="button" onClick={() => markRead(unreadIds)}
                         className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-indigo-600 hover:underline">
@@ -176,8 +182,7 @@ export default function NotificationBell({ variant = 'side' }) {
                 ) : items.length === 0 ? (
                     <div className="px-4 py-10 text-center">
                         <FaBell className="mx-auto text-slate-200 mb-2" size={28} />
-                        <div className="text-[13.5px] font-semibold text-slate-600">Сповіщень немає</div>
-                        <div className="text-[12.5px] text-slate-400 mt-0.5">Тут з'являться задачі, етапи й нагадування для вас</div>
+                        <div className="text-[13.5px] font-semibold text-slate-600">За два дні сповіщень немає</div>
                     </div>
                 ) : (
                     <ul className="divide-y divide-slate-100">

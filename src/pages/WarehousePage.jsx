@@ -8,22 +8,30 @@
 //
 //  Телефон — список карток: знайшов позицію, тапнув, побачив усе
 //  і зробив дію. Деталі відкриваються шухлядою знизу, під палець.
+//
+//  Резерв (warehouse/ItemReserves): за яким об'єктом чи клієнтом, скільки,
+//  з якого дня — у картці товару на телефоні й у розгорнутому рядку на
+//  комп'ютері; у списку на телефоні — коротко «за: …» під позицією.
+//  Тут же зарезервувати (клієнту без об'єкта або під об'єкт), продати
+//  клієнту з резерву, зняти резерв.
 // =====================================================================
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     FaChevronDown, FaPlus, FaMinus, FaExchangeAlt, FaWarehouse, FaTimes,
-    FaFileExcel, FaMapMarkerAlt, FaHardHat, FaEdit, FaBox, FaHistory,
+    FaFileExcel, FaMapMarkerAlt, FaEdit, FaBox, FaHistory,
     FaClipboardList, FaBoxes, FaLayerGroup, FaSlidersH, FaLock,
     FaCompressArrowsAlt, FaArchive, FaUndo, FaArrowDown,
 } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
+import { nomFullName } from '../domain/nomenclature';
 import { useAuth } from '../AuthProvider';
 import { NomenclatureModal } from './NomenclatureModal';
 import ItemMovementHistoryModal from './ItemMovementHistoryModal';
 import LotsPanel from './warehouse/LotsPanel';
 import DuplicatesModal from './warehouse/DuplicatesModal';
+import ItemReserves, { reserveTarget } from './warehouse/ItemReserves';
 import { printInventorySheet } from '../utils/inventorySheetPdf';
 import { hasStockRules } from '../utils/features';
 import { restoreNomenclature } from '../utils/nomenclatureOps';
@@ -51,7 +59,7 @@ const decorate = (list, cats) => {
         }
         return {
             ...item,
-            fullName: `${path.join(' ')} ${item.name}`.trim(),
+            fullName: nomFullName(path, item.name),
             rootCategoryId: root,
             isLot: item.tracking_mode === 'lot',
         };
@@ -111,7 +119,7 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
     const [whModal, setWhModal] = useState(false);
     const [whForm, setWhForm] = useState({ id: null, name: '', address: '', is_active: true });
     const [adjust, setAdjust] = useState(null);              // { op, item, whId, whName, qty, doc, note }
-    const [reserveInfo, setReserveInfo] = useState(null);    // { item, loading, rows }
+    const [reserveBy, setReserveBy] = useState(new Map());   // позиція → [{ label, qty, whId }] — за ким резерв
     const [nomModal, setNomModal] = useState({ open: false, item: null });
     const [history, setHistory] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -168,6 +176,23 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
         const { data } = await supabase.from('v_warehouse_stock_available').select('*');
         setBalances(data || []);
     }, []);
+
+    // За ким резерв — коротко для списку (активних резервів небагато, беремо всі)
+    const loadReserveBy = useCallback(async () => {
+        const { data } = await supabase.from('reservations')
+            .select('nomenclature_id, warehouse_id, reserved_quantity, released_quantity, installation:installations(custom_id, name), client:clients(name, company_name)')
+            .eq('status', 'active');
+        const m = new Map();
+        (data || []).forEach(r => {
+            const qty = Number(r.reserved_quantity) - Number(r.released_quantity);
+            if (!(qty > 0)) return;
+            if (!m.has(r.nomenclature_id)) m.set(r.nomenclature_id, []);
+            m.get(r.nomenclature_id).push({ label: reserveTarget(r), qty, whId: r.warehouse_id });
+        });
+        setReserveBy(m);
+    }, []);
+    useEffect(() => { if (!authLoading) loadReserveBy(); }, [authLoading, loadReserveBy]);
+    const reservesChanged = useCallback(() => { refreshBalances(); loadReserveBy(); }, [refreshBalances, loadReserveBy]);
 
     // Сигнал «додати позицію» з оболонки складу
     const prevTrigger = useRef(externalActionTrigger);
@@ -441,28 +466,16 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
         } finally { setBusy(false); }
     };
 
-    const openReserves = async (item) => {
-        setReserveInfo({ item, loading: true, rows: [] });
-        try {
-            let q = supabase.from('reservations')
-                .select('id, warehouse_id, reserved_quantity, released_quantity, notes, created_at, installation:installations(name), client:clients(name, company_name)')
-                .eq('nomenclature_id', item.id).eq('status', 'active');
-            if (isScoped) q = q.eq('warehouse_id', scopedId);
-            const { data, error } = await q;
-            if (error) throw error;
-            const rows = (data || [])
-                .map(r => ({
-                    ...r,
-                    whName: warehouses.find(w => w.id === r.warehouse_id)?.name || '—',
-                    qty: parseFloat(r.reserved_quantity) - parseFloat(r.released_quantity),
-                }))
-                .filter(r => r.qty > 0);
-            setReserveInfo(prev => ({ ...prev, loading: false, rows }));
-        } catch (e) {
-            toast(humanError(e), 'error');
-            setReserveInfo(null);
-        }
-    };
+    /** Блок «Резерв» позиції: за ким, скільки; зарезервувати / продати / зняти — тут же */
+    const reservesOf = (item) => (
+        <ItemReserves item={item} scopedId={isScoped ? scopedId : null} canStock={canStock} onChanged={reservesChanged}
+            stock={activeWarehouses.map(w => ({ id: w.id, name: w.name, available: atWarehouse(item.id, w.id).available }))} />
+    );
+
+    /** «за: СЕС-6055 Обласна… — 2 · Клієнт: Петренко — 1» — для списку на телефоні */
+    const reserveLine = (item) => (reserveBy.get(item.id) || [])
+        .filter(r => !isScoped || r.whId === scopedId)
+        .map(r => `${r.label} — ${num(r.qty)}`).join(' · ');
 
     const saveWarehouse = async (e) => {
         e.preventDefault();
@@ -822,6 +835,11 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                                         <Chip tone={b.available > 0 ? 'ok' : 'danger'}>вільно {num(b.available)}</Chip>
                                         {!isScoped && <SpreadBadges item={item} max={2} />}
                                     </div>
+                                    {b.reserved > 0 && reserveLine(item) && (
+                                        <div className="mt-1.5 text-[12px] leading-snug text-amber-800 break-words">
+                                            <FaLock size={9} className="inline mr-1 -mt-0.5" />за: {reserveLine(item)}
+                                        </div>
+                                    )}
                                 </button>
                             );
                         })}
@@ -881,7 +899,8 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
 
                                                 <td className={`${T.td} text-right`}>
                                                     {b.reserved > 0 ? (
-                                                        <button onClick={() => openReserves(item)}
+                                                        <button onClick={() => setExpandedId(open ? null : item.id)}
+                                                            title={`За ким: ${reserveLine(item) || '…'}`}
                                                             className="font-black tabular-nums text-amber-700 hover:underline decoration-amber-400 underline-offset-2">
                                                             {num(b.reserved)}
                                                         </button>
@@ -922,7 +941,10 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                                             {open && (
                                                 <tr>
                                                     <td colSpan={6} className="p-0 bg-slate-50 border-b border-slate-200">
-                                                        <div className="p-2.5"><ItemDetails item={item} /></div>
+                                                        <div className="p-2.5 grid gap-2.5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start">
+                                                            <ItemDetails item={item} />
+                                                            {reservesOf(item)}
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             )}
@@ -962,7 +984,12 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                     </Btn>}
                 </>}
             >
-                {sheetItem && <ItemDetails item={sheetItem} />}
+                {sheetItem && (
+                    <div className="space-y-2.5">
+                        <ItemDetails item={sheetItem} />
+                        {reservesOf(sheetItem)}
+                    </div>
+                )}
             </Modal>
 
             {/* ---------- РУЧНА ОПЕРАЦІЯ ---------- */}
@@ -1027,37 +1054,6 @@ export default function WarehousePage({ externalSearch = '', externalActionTrigg
                                     onChange={e => setAdjust({ ...adjust, note: e.target.value })} />
                             </Field>
                         </div>
-                    </div>
-                )}
-            </Modal>
-
-            {/* ---------- ДЕТАЛІ РЕЗЕРВУ ---------- */}
-            <Modal
-                isOpen={!!reserveInfo}
-                onClose={() => setReserveInfo(null)}
-                title="Під які об'єкти зарезервовано"
-                subtitle={reserveInfo?.item.fullName}
-                tone="warn"
-                size="md"
-            >
-                {reserveInfo?.loading ? <Skeleton rows={3} /> : !reserveInfo?.rows.length ? (
-                    <p className="text-[13px] text-slate-500 text-center py-6">Активних резервів немає.</p>
-                ) : (
-                    <div className="space-y-1.5">
-                        {reserveInfo?.rows.map(r => (
-                            <div key={r.id} className={`${T.cardFlat} px-3 py-2 flex items-center gap-3`}>
-                                <FaHardHat className="text-slate-400 flex-shrink-0" size={12} />
-                                <div className="min-w-0 flex-1">
-                                    <div className="text-[12.5px] font-bold text-slate-900 truncate">
-                                        {r.installation?.name || (r.client ? `Клієнт: ${r.client.company_name || r.client.name}` : "Невідомий об'єкт")}
-                                    </div>
-                                    <div className="text-[10.5px] text-slate-400">
-                                        {r.whName} · {new Date(r.created_at).toLocaleDateString('uk-UA')}
-                                    </div>
-                                </div>
-                                <span className="text-[15px] font-black tabular-nums text-amber-600 flex-shrink-0">{num(r.qty)}</span>
-                            </div>
-                        ))}
                     </div>
                 )}
             </Modal>

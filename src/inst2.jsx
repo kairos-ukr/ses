@@ -34,7 +34,7 @@ import {
   brigadierOptions, canSeeMoney, isOwnObject,
 } from "./domain/objects";
 import {
-  STALE_DAYS, ageTone, stageTone, normText, loadStageNorms, median, stageIndex, costOf, paidOf, debtOf, isReceivable,
+  STALE_DAYS, ageTone, median, stageIndex, costOf, paidOf, debtOf, isReceivable,
   loadActivity, loadReadiness, stationShort, kw,
 } from "./domain/pipeline";
 import { fetchAll } from "./utils/fetchAll";
@@ -45,7 +45,7 @@ import LostReasonPicker from "./LostReasonPicker";
 
 const OBJECT_COLUMNS = [
   'custom_id', 'name', 'client_id', 'status', 'workflow_stage', 'capacity_kw', 'station_type', 'mount_type',
-  'quant_phase', 'gps_link', 'bank', 'bank_name', 'total_cost', 'paid_amount', 'payment_status', 'currency',
+  'quant_phase', 'gps_link', 'bank', 'bank_name', 'total_cost', 'paid_amount', 'payment_status', 'currency', 'no_cost',
   'responsible_emp_id', 'brigadier_emp_id', 'working_company', 'notes', 'creator_email', 'created_at',
   'lost_reason', 'lost_comment',
   'client:clients(name, company_name, populated_place, phone)',
@@ -140,11 +140,10 @@ const fmtDate = (ts) => (ts ? new Date(ts).toLocaleDateString('uk-UA') : '—');
  *  ДРІБНІ ЧАСТИНИ
  * ------------------------------------------------------------------- */
 
-const ageText = (o, act, norm) => {
+const ageText = (o, act) => {
   if (!act) return null;
   const stage = getStageGroup(o.workflow_stage)?.label || 'етапі';
-  const n = normText(act.stageDays, norm);
-  return `На етапі «${stage}» з ${fmtDate(act.stageEnteredAt)}${n ? ` (${n})` : ''}. Остання дія по об'єкту — ${fmtDate(act.lastActivityAt)}.`;
+  return `На етапі «${stage}» з ${fmtDate(act.stageEnteredAt)}. Остання дія по об'єкту — ${fmtDate(act.lastActivityAt)}.`;
 };
 
 // Етапи продажу: тут угода ще може не відбутися — довго без рішення = «Втрачено?»
@@ -159,10 +158,11 @@ const COMPANY_CHIP = {
 };
 
 /** Картка у воронці: усе головне видно одразу, без наведення мишкою */
-const BoardCard = ({ o, act, ready, owner, brigadier, norm, onOpen, onLost }) => {
+const BoardCard = ({ o, act, ready, owner, brigadier, onOpen, onLost }) => {
   const days = act?.stageDays ?? null;
+  // Колір — за «без руху» (днів без жодної дії), а не за днями на етапі: норм немає.
   // Призупинений об'єкт стоїть свідомо — не підсвічуємо його як «горить»
-  const tone = o.status === 'on_hold' ? 'neutral' : stageTone(days, norm);
+  const tone = o.status === 'on_hold' ? 'neutral' : ageTone(act?.idleDays ?? null);
   const stage = normalizeGroupKey(o.workflow_stage);
   const cur = o.currency || DEFAULT_CURRENCY;
   const cost = costOf(o);
@@ -213,7 +213,9 @@ const BoardCard = ({ o, act, ready, owner, brigadier, norm, onOpen, onLost }) =>
                 {formatMoney(cost, cur)}
                 {paid > 0 && <span className="ml-1.5 text-[11.5px] font-semibold text-emerald-700">{Math.min(100, Math.round((paid / cost) * 100))}% спл.</span>}
               </span>
-            ) : o._moneyHidden ? <span /> : <span className="text-[12px] text-amber-700">вартість не вказана</span>}
+            ) : o._moneyHidden ? <span /> : o.no_cost
+              ? <span className="text-[12px] text-slate-500">вартість не вноситься</span>
+              : <span className="text-[12px] text-amber-700">вартість не вказана</span>}
             {o.bank === 'Так' && (
               <span className="h-5 px-2 rounded-full border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-600 flex items-center gap-1 whitespace-nowrap">
                 <FaUniversity size={9} /> {o.bank_name || 'банк'}
@@ -240,14 +242,14 @@ const BoardCard = ({ o, act, ready, owner, brigadier, norm, onOpen, onLost }) =>
         )}
       </div>
 
-      {/* Відповідальний повністю + скільки днів на етапі проти норми */}
+      {/* Відповідальний повністю + скільки днів на етапі */}
       <div className="px-2.5 py-2 border-t border-slate-100 bg-slate-50/60 flex items-center gap-2">
         <span className={`text-[12.5px] min-w-0 flex-1 leading-tight break-words ${owner?.name ? 'font-semibold text-slate-700' : 'text-slate-400'}`}>
           {owner?.name || 'Не призначено'}
         </span>
-        <Tip text={ageText(o, act, norm)}>
+        <Tip text={ageText(o, act)}>
           <span className={`h-6 px-2 rounded-md border text-[11.5px] font-bold tabular-nums flex items-center whitespace-nowrap ${o.status === 'on_hold' ? 'bg-slate-50 text-slate-500 border-slate-200' : daysTone}`}>
-            {days == null ? 'новий' : norm ? `${days} / ${norm} дн` : `${days} дн`}
+            {days == null ? 'новий' : `${days} дн`}
           </span>
         </Tip>
       </div>
@@ -269,11 +271,11 @@ const BoardCard = ({ o, act, ready, owner, brigadier, norm, onOpen, onLost }) =>
 };
 
 /** Колонка етапу у воронці */
-const BoardColumn = ({ col, activity, readiness, ownerOf, brigadierOf, norm, onOpen, onLost }) => {
+const BoardColumn = ({ col, activity, readiness, ownerOf, brigadierOf, onOpen, onLost }) => {
   const [limit, setLimit] = useState(BOARD_LIMIT);
   const [showSleeping, setShowSleeping] = useState(false);
   const { group, items, live, sleeping } = col;
-  const medTone = stageTone(col.med, norm);
+  const medTone = 'neutral';   // медіана днів на етапі — лише довідка, без «норми»
   return (
     <div className="w-[272px] flex-shrink-0 flex flex-col min-h-0 bg-slate-200/60 rounded-xl snap-start">
       <div className="px-3 pt-2.5 pb-2 flex-none">
@@ -284,13 +286,12 @@ const BoardColumn = ({ col, activity, readiness, ownerOf, brigadierOf, norm, onO
         <div className="mt-0.5 flex items-center gap-2 text-[11.5px] text-slate-500 tabular-nums">
           <span>{col.kw ? `${col.kw.toLocaleString('uk-UA', { maximumFractionDigits: 0 })} кВт` : '0 кВт'}</span>
           {col.med != null && (
-            <Tip text={`Медіана: половина об'єктів колонки стоїть на етапі менше цього, половина — більше.${norm ? ` Норма етапу — ${norm} дн.` : ''}`}>
+            <Tip text="Медіана: половина об'єктів колонки стоїть на етапі менше цього, половина — більше.">
               <span className={medTone === 'danger' ? 'text-rose-600 font-semibold' : medTone === 'warn' ? 'text-amber-700 font-semibold' : ''}>
                 мед. {col.med} дн
               </span>
             </Tip>
           )}
-          {norm && <span className="text-slate-400">· норма {norm}</span>}
         </div>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-2 pb-2 space-y-2">
@@ -302,7 +303,6 @@ const BoardColumn = ({ col, activity, readiness, ownerOf, brigadierOf, norm, onO
             ready={readiness[o.custom_id]}
             owner={ownerOf(o)}
             brigadier={brigadierOf(o)}
-            norm={norm}
             onOpen={onOpen}
             onLost={onLost}
           />
@@ -326,7 +326,7 @@ const BoardColumn = ({ col, activity, readiness, ownerOf, brigadierOf, norm, onO
             </button>
             {showSleeping && sleeping.map(o => (
               <div key={o.custom_id} className="opacity-80">
-                <BoardCard o={o} act={activity[o.custom_id]} ready={readiness[o.custom_id]} owner={ownerOf(o)} brigadier={brigadierOf(o)} norm={norm} onOpen={onOpen} onLost={onLost} />
+                <BoardCard o={o} act={activity[o.custom_id]} ready={readiness[o.custom_id]} owner={ownerOf(o)} brigadier={brigadierOf(o)} onOpen={onOpen} onLost={onLost} />
               </div>
             ))}
           </>
@@ -357,7 +357,6 @@ export default function ProjectsPage() {
     const [projects, setProjects] = useState([]);
     const [activity, setActivity] = useState({});      // custom_id → { stageDays, idleDays, … }
     const [readiness, setReadiness] = useState({});
-    const [norms, setNorms] = useState({});            // норма днів на етап: { stage_key: days }
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
 
@@ -449,15 +448,13 @@ export default function ProjectsPage() {
     const loadProjects = useCallback(async () => {
         setLoading(true);
         try {
-            const [rows, act, nm] = await Promise.all([
+            const [rows, act] = await Promise.all([
                 fetchAll(() => supabase.from('installations')
                     .select(OBJECT_COLUMNS)
                     .or('is_subcontract.eq.false,is_subcontract.is.null')
                     .order('custom_id', { ascending: false })),
                 loadActivity(),
-                loadStageNorms(),
             ]);
-            setNorms(nm);
             setProjects(rows);
             setActivity(act);
 
@@ -496,7 +493,8 @@ export default function ProjectsPage() {
         // «Мої» — де я відповідальний менеджер або бригадир
         if (f.mine && Number(o.responsible_emp_id) !== Number(myEmployeeId) && Number(o.brigadier_emp_id) !== Number(myEmployeeId)) return false;
         if (f.stale && !((activity[o.custom_id]?.idleDays ?? 0) > STALE_DAYS)) return false;
-        if (f.nocost && (o._moneyHidden || costOf(o) > 0)) return false;
+        // «Без вартості» — лише ті, де її забули вписати (не «вартість не вноситься»)
+        if (f.nocost && (o._moneyHidden || o.no_cost || costOf(o) > 0)) return false;
         if (f.debt && !isReceivable(o)) return false;
         if (f.activity && f.activity !== 'all') {
             const idle = activity[o.custom_id]?.idleDays ?? 0;
@@ -858,7 +856,6 @@ export default function ProjectsPage() {
                         const cur = o.currency || DEFAULT_CURRENCY;
                         const debt = isReceivable(o) ? debtOf(o) : 0;
                         const owner = ownerOf(o);
-                        const norm = norms[normalizeGroupKey(o.workflow_stage)];
                         return (
                             <li key={o.custom_id} onClick={(e) => openObject(o, e)} className="px-3 py-3 active:bg-slate-50 cursor-pointer">
                                 <div className="flex items-start gap-2">
@@ -880,9 +877,7 @@ export default function ProjectsPage() {
                                     <Chip tone={stage.tone || 'neutral'}>{stage.label}</Chip>
                                     {(!isObjectActive(o.status) || o.status === 'on_hold') && <Chip tone={status.tone}>{status.short}</Chip>}
                                     {act && isObjectActive(o.status) && (
-                                        <Chip tone={o.status === 'on_hold' ? 'neutral' : stageTone(act.stageDays, norm)}>
-                                            {act.stageDays} дн{norm ? ` / ${norm}` : ''}
-                                        </Chip>
+                                        <Chip tone="neutral">{act.stageDays} дн</Chip>
                                     )}
                                     {o.status === 'lost' && o.lost_reason && <span className="text-[12px] text-slate-500">{getLostReasonLabel(o.lost_reason)}</span>}
                                 </div>
@@ -941,7 +936,7 @@ export default function ProjectsPage() {
                                     </td>
                                     <td className={`${T.td} text-right whitespace-nowrap`}>
                                         {act && isObjectActive(o.status) ? (
-                                            <Tip text={ageText(o, act, norms[normalizeGroupKey(o.workflow_stage)])}><Chip tone={o.status === 'on_hold' ? 'neutral' : stageTone(act.stageDays, norms[normalizeGroupKey(o.workflow_stage)])}>{act.stageDays} дн</Chip></Tip>
+                                            <Tip text={ageText(o, act)}><Chip tone="neutral">{act.stageDays} дн</Chip></Tip>
                                         ) : <span className="text-slate-300">—</span>}
                                     </td>
                                     <td className={`${T.td} text-right tabular-nums hidden lg:table-cell whitespace-nowrap ${ageTone(act?.idleDays) === 'danger' ? 'text-rose-600' : 'text-slate-500'}`}>
@@ -991,7 +986,6 @@ export default function ProjectsPage() {
                     col={c}
                     activity={activity}
                     readiness={readiness}
-                    norm={norms[c.group.key]}
                     ownerOf={ownerOf}
                     brigadierOf={brigadierOf}
                     onOpen={openObject}

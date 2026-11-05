@@ -18,6 +18,7 @@ import {
 } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { SUPPLY_TARGET_STATUSES } from '../domain/objects';
+import { nomFullName } from '../domain/nomenclature';
 import { useAuth } from '../AuthProvider';
 import PurchaseOrderModal from './PurchaseOrderModal';
 import {
@@ -121,7 +122,7 @@ export default function PurchasesPage({ externalSearch = '', externalActionTrigg
                     path.unshift(c.name);
                     id = c.parent_id;
                 }
-                return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim() };
+                return { ...item, fullName: nomFullName(path, item.name) };
             }));
 
             const { data: ordersData, error } = await supabase

@@ -3,7 +3,11 @@
 //
 //  За 10 секунд після входу: куди їдемо, з ким, що робимо, що забрати
 //  на складі, які задачі. Усе з графіка робіт; два об'єкти за день —
-//  дві картки одна під одною.
+//  дві картки одна під одною. «Взяти з собою» — що за специфікаціями
+//  ще не видано на об'єкт: на сьогодні розгорнуто, на завтра — згорнуто.
+//  Увечері (з години в Налаштуваннях, за замовчуванням 19:00) головне —
+//  завтра: куди, з ким, на чому, що взяти; сьогоднішні об'єкти й кнопка
+//  звіту лишаються нижче до півночі (звіт — лише за сьогодні).
 // =====================================================================
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -19,8 +23,11 @@ import {
     useMontazh, useFresh, useNow, isReportTime, isoDay, shiftDay, fmtDay, relDay, OFF_KEYS, OFF_LABEL, loadObjects, groupVisits, visitTitle,
     placeOf, kwText, routeLink, telLink, isBrigadier, TASK_FIELDS, OPEN_TASK, plainText,
 } from './data';
+import { loadTakeLists } from '../domain/takeList';
+import { useDaySwitch, isEvening } from '../utils/settings';
 import { Screen, Card, Label, Pill, Big, Line, Empty, Loading, Check } from './kit';
 import TripCard from './TripCard';
+import TakeList from './TakeList';
 
 const ISSUE = {
     ready: { label: 'зібрано', tone: 'ok' },
@@ -33,6 +40,8 @@ export default function TodayScreen() {
     const toast = useToast();
     const today = isoDay();
     const now = useNow();
+    const switchAt = useDaySwitch();
+    const evening = isEvening(now, switchAt);
 
     const [loading, setLoading] = useState(true);
     const [visits, setVisits] = useState([]);       // мої виїзди на 14 днів наперед
@@ -40,6 +49,7 @@ export default function TodayScreen() {
     const [objects, setObjects] = useState(new Map());
     const [offs, setOffs] = useState(new Map());    // дата → статус вихідного
     const [issues, setIssues] = useState([]);
+    const [take, setTake] = useState(new Map());    // що взяти з собою: об'єкт → позиції
     const [tasks, setTasks] = useState([]);
     const [reports, setReports] = useState([]);     // сьогоднішні звіти по моїх об'єктах
     const [queuedKeys, setQueuedKeys] = useState(new Set());   // звіти, що чекають інтернету на телефоні
@@ -70,11 +80,13 @@ export default function TodayScreen() {
             const near = [today, shiftDay(today, 1)];
             const nearIds = my.filter(v => near.includes(v.date) && v.installationId).map(v => v.installationId);
             const todayIds = my.filter(v => v.date === today && v.installationId).map(v => v.installationId);
+            // Що взяти: сьогодні, завтра і найближчий виїзд, якщо сьогодні вільний
+            const takeIds = [...nearIds, my.find(v => v.date > today && v.installationId)?.installationId];
 
-            const [crewRes, objMap, issueRes, repRes] = await Promise.all([
+            const [crewRes, objMap, issueRes, repRes, takeMap] = await Promise.all([
                 supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes').in('work_date', near),
                 loadObjects(my.map(v => v.installationId)),
-                todayIds.length
+                nearIds.length
                     ? supabase.from('issue_orders')
                         .select('id, doc_number, status, installation_custom_id, warehouse:warehouses(name), items:issue_order_items(count)')
                         .in('installation_custom_id', [...new Set(nearIds)]).in('status', ['draft', 'ready'])
@@ -83,6 +95,7 @@ export default function TodayScreen() {
                     ? supabase.from('installer_reports').select('installation_custom_id, submitted_at')
                         .eq('work_date', today).in('installation_custom_id', todayIds)
                     : Promise.resolve({ data: [] }),
+                loadTakeLists(takeIds),
             ]);
             if (!ok()) return;
             setVisits(my);
@@ -90,6 +103,7 @@ export default function TodayScreen() {
             setObjects(objMap);
             setOffs(new Map((off.data || []).map(o => [o.work_date, o.status])));
             setIssues(issueRes.data || []);
+            setTake(takeMap);
             setReports(repRes.data || []);
             setTasks(task.data || []);
         } catch (e) {
@@ -121,20 +135,27 @@ export default function TodayScreen() {
         refreshBadges();
     };
 
-    const todayVisits = visits.filter(v => v.date === today);
     const tomorrow = shiftDay(today, 1);
+    const todayVisits = visits.filter(v => v.date === today);
     const tomorrowVisits = visits.filter(v => v.date === tomorrow);
-    const nextVisit = visits.find(v => v.date > today);
+    // Головний день: до години перемикання — сьогодні, потім — завтра
+    const focus = evening ? tomorrow : today;
+    const focusVisits = evening ? tomorrowVisits : todayVisits;
+    const dayWord = evening ? 'Завтра' : 'Сьогодні';
     const offToday = offs.get(today);
+    const offFocus = offs.get(focus);
+    const nextVisit = visits.find(v => v.date > focus);
     const crewOf = (v) => (crew.find(c => c.key === v.key)?.workerIds || v.workerIds)
         .filter(id => id !== who.custom_id).map(id => people.get(id)).filter(Boolean);
 
     const roleLine = [isBrigadier(who) ? 'Бригадир' : null, who.position].filter(Boolean).join(' · ');
 
-    // Головна кнопка дня — звіт по об'єктах, де я сьогодні в графіку
+    // Головна кнопка дня — звіт по об'єктах, де я сьогодні в графіку (до півночі, і ввечері теж)
     const reportable = todayVisits.filter(v => v.installationId);
-    const sentN = reportable.filter(v => reports.some(r => r.installation_custom_id === v.installationId && r.submitted_at)).length;
-    const waitingN = reportable.filter(v => queuedKeys.has(reportKey(v.installationId, today))).length;
+    const isReported = (v) => reports.some(r => r.installation_custom_id === v.installationId && r.submitted_at);
+    const isQueued = (v) => queuedKeys.has(reportKey(v.installationId, today));
+    const sentN = reportable.filter(isReported).length;
+    const waitingN = reportable.filter(isQueued).length;
     // З 15:30 незаповнений звіт — червона кнопка, що блимає
     const late = isReportTime(now);
     const bottom = !loading && reportable.length > 0 && !offToday ? (
@@ -148,21 +169,21 @@ export default function TodayScreen() {
     ) : null;
 
     return (
-        <Screen title={fmtDay(today)} sub={roleLine || who.name} bottom={bottom}>
+        <Screen title={evening ? `Завтра, ${fmtDay(tomorrow)}` : fmtDay(today)} sub={roleLine || who.name} bottom={bottom}>
             {loading ? <Loading /> : (<>
-                {offToday && (
+                {offFocus && (
                     <Card hero>
                         <div className="flex items-center gap-3">
                             <FaUmbrellaBeach size={22} className="text-slate-900 flex-shrink-0" />
                             <div>
-                                <div className="text-[18px] font-bold">Сьогодні у вас {OFF_LABEL[offToday].toLowerCase()}</div>
-                                {todayVisits.length > 0 && <div className="text-[14px] text-amber-800 mt-0.5">Але ви стоїте в графіку — офіс уже знає й шукає заміну.</div>}
+                                <div className="text-[18px] font-bold">{dayWord} у вас {OFF_LABEL[offFocus].toLowerCase()}</div>
+                                {focusVisits.length > 0 && <div className="text-[14px] text-amber-800 mt-0.5">Але ви стоїте в графіку — офіс уже знає й шукає заміну.</div>}
                             </div>
                         </div>
                     </Card>
                 )}
 
-                {todayVisits.map((v, i) => {
+                {focusVisits.map((v, i) => {
                     const o = v.installationId ? objects.get(v.installationId) : null;
                     const team = crewOf(v);
                     const route = routeLink(o);
@@ -171,7 +192,7 @@ export default function TodayScreen() {
                     return (
                         <Card key={v.key} hero={i === 0}>
                             <Label right={o?.workflow_stage ? <Pill tone="warn">{getStageGroupLabel(o.workflow_stage)}</Pill> : null}>
-                                {i === 0 ? 'Їдемо' : 'Далі'}
+                                {i === 0 ? (evening ? 'Завтра їдемо' : 'Їдемо') : 'Далі'}
                             </Label>
                             <div className="text-[19px] font-bold leading-snug break-words">{visitTitle(v, objects)}</div>
                             {o && (
@@ -187,6 +208,7 @@ export default function TodayScreen() {
                             {v.installationId && v.notes && (
                                 <p className="mt-2.5 text-[15px] text-slate-800 break-words"><b>Що робимо:</b> {v.notes}</p>
                             )}
+                            {v.installationId && <TakeList rows={take.get(v.installationId)} open={i === 0} />}
 
                             {docs.map(d => {
                                 const st = ISSUE[d.status] || { label: d.status, tone: 'neutral' };
@@ -218,30 +240,52 @@ export default function TodayScreen() {
                     );
                 })}
 
-                {!offToday && <TripCard who={who} people={people} canWrite={canWrite} />}
+                {!offFocus && <TripCard who={who} people={people} canWrite={canWrite} date={focus} />}
 
-                {todayVisits.length === 0 && !offToday && (
+                {focusVisits.length === 0 && !offFocus && (
                     <Card hero>
-                        <div className="text-[18px] font-bold">Сьогодні вас немає в графіку</div>
+                        <div className="text-[18px] font-bold">{dayWord} вас немає в графіку</div>
                         <p className="text-[14.5px] text-slate-600 mt-1">
                             {nextVisit
                                 ? <>Найближчий виїзд — {relDay(nextVisit.date).toLowerCase()}: <b className="text-slate-900">{visitTitle(nextVisit, objects)}</b></>
                                 : 'На найближчі два тижні виїздів ще не заплановано.'}
                         </p>
+                        {nextVisit?.installationId && <TakeList rows={take.get(nextVisit.installationId)} />}
                         <Big small className="mt-3" onClick={() => navigate('/m/schedule')}>Відкрити графік</Big>
                     </Card>
                 )}
 
-                {todayVisits.length > 0 && tomorrowVisits.length > 0 && (
+                {/* Увечері сьогоднішні об'єкти — коротко, зі станом звіту (звіт — до півночі) */}
+                {evening && todayVisits.length > 0 && (
                     <Card>
-                        <Label right={offs.get(tomorrow) ? <Pill tone="bad">{OFF_LABEL[offs.get(tomorrow)].toLowerCase()}</Pill> : null}>Завтра</Label>
-                        {tomorrowVisits.map((v, i) => (
+                        <Label>Сьогодні</Label>
+                        {todayVisits.map((v, i) => (
                             <Line key={v.key} first={i === 0}
                                 onClick={v.installationId ? () => navigate(`/m/object/${v.installationId}`) : undefined}
-                                right={v.installationId ? <FaArrowRight size={12} className="text-slate-400" /> : null}>
+                                right={!v.installationId ? null
+                                    : isReported(v) ? <Pill tone="ok">звіт є</Pill>
+                                        : isQueued(v) ? <Pill tone="warn">чекає інтернету</Pill>
+                                            : <Pill tone="bad">звіту немає</Pill>}>
                                 <b className="text-slate-900">{visitTitle(v, objects)}</b>
                                 {crewOf(v).length > 0 && <div className="text-[13px] text-slate-500">з {crewOf(v).map(p => p.name).join(', ')}</div>}
                             </Line>
+                        ))}
+                    </Card>
+                )}
+
+                {!evening && todayVisits.length > 0 && tomorrowVisits.length > 0 && (
+                    <Card>
+                        <Label right={offs.get(tomorrow) ? <Pill tone="bad">{OFF_LABEL[offs.get(tomorrow)].toLowerCase()}</Pill> : null}>Завтра</Label>
+                        {tomorrowVisits.map((v, i) => (
+                            <React.Fragment key={v.key}>
+                                <Line first={i === 0}
+                                    onClick={v.installationId ? () => navigate(`/m/object/${v.installationId}`) : undefined}
+                                    right={v.installationId ? <FaArrowRight size={12} className="text-slate-400" /> : null}>
+                                    <b className="text-slate-900">{visitTitle(v, objects)}</b>
+                                    {crewOf(v).length > 0 && <div className="text-[13px] text-slate-500">з {crewOf(v).map(p => p.name).join(', ')}</div>}
+                                </Line>
+                                {v.installationId && <TakeList rows={take.get(v.installationId)} className="mb-2" />}
+                            </React.Fragment>
                         ))}
                     </Card>
                 )}

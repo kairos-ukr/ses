@@ -2,7 +2,8 @@
 //  K-CORE · Монтаж · «Я»
 //
 //  Мій місяць (днів у графіку — так рахуються відпрацьовані дні), мої
-//  вихідні, встановлення на телефон, вихід.
+//  вихідні, сповіщення (на телефоні й у Telegram), встановлення на
+//  телефон, вихід.
 //  Офісу й керівнику тут же — «Переглянути як монтажник» і назад у CRM.
 // =====================================================================
 
@@ -18,6 +19,7 @@ import {
 } from './data';
 import { Screen, Card, Label, Pill, Big, Line, Empty, Segment } from './kit';
 import MileageCard from './MileageCard';
+import NotifyCard from './NotifyCard';
 
 // Браузер пропонує «встановити програму» один раз — ловимо цю подію одразу
 let installPrompt = null;
@@ -118,6 +120,8 @@ export default function MeScreen() {
                 ))}
                 <Big small tone="soft" className="mt-2" onClick={() => navigate('/m/schedule')}>Поставити або скасувати — у «Графіку»</Big>
             </Card>
+
+            <NotifyCard who={who} canWrite={canWrite} />
 
             <MyCar who={who} canWrite={canWrite} onChanged={() => setCarRev(n => n + 1)} />
             <MileageCard key={`${who.id}-${carRev}`} who={who} canWrite={canWrite} />

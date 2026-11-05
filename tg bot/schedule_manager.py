@@ -33,6 +33,7 @@ async def get_schedule_for_date(work_date: date) -> Optional[Dict[str, Any]]:
             return {"objects": [], "tasks_without_object": [], "off_duty": []}
         data = response.data
         attach_transport(work_date, data)
+        attach_take(data)
         return data
     except Exception as e:
         print(f"Критична помилка отримання розкладу на {date_str}: {e!r}")
@@ -85,6 +86,62 @@ def attach_transport(work_date: date, data: Dict[str, Any]) -> None:
         data["transport_by_task"] = by_place
     except Exception as e:
         print(f"Не вдалося додати транспорт до графіка на {work_date}: {e!r}")
+
+
+TAKE_KINDS = [("protection", "ел. захист"), ("equipment", "обладнання"), ("materials", "матеріали")]
+
+
+def attach_take(data: Dict[str, Any]) -> None:
+    """
+    Під кожним об'єктом — коротко, що взяти з собою: що за специфікаціями
+    ще не видано на об'єкт і чого немає на складі (v_object_take_list).
+    Повний список кожен отримує особисто зі сповіщенням про графік і бачить
+    у «Монтажі». Перемикач «Разом із графіком» — «Доступи» → Налаштування.
+    """
+    try:
+        objs = [o.get("custom_id") for o in data.get("objects") or [] if o.get("custom_id")]
+        if not objs:
+            return
+        cfg = supabase.table("app_settings").select("value").eq("key", "take_reminders").limit(1).execute().data or []
+        if ((cfg[0].get("value") if cfg else None) or {}).get("schedule") is False:
+            return
+        rows = (
+            supabase.table("v_object_take_list")
+            .select("installation_custom_id, kind, reserved, free")
+            .in_("installation_custom_id", objs)
+            .execute()
+        ).data or []
+        counts: Dict[Any, Dict[str, int]] = {}
+        for r in rows:
+            c = counts.setdefault(r["installation_custom_id"], {})
+            have = float(r.get("reserved") or 0) + float(r.get("free") or 0)
+            key = r.get("kind") if have > 0 else "absent"
+            c[key] = c.get(key, 0) + 1
+        # Після зміни специфікації: що вже на об'єкті, але більше не потрібне
+        try:
+            back = (
+                supabase.table("v_object_spec_leftovers")
+                .select("installation_custom_id")
+                .in_("installation_custom_id", objs).eq("in_work", True).gt("to_return", 0)
+                .execute()
+            ).data or []
+        except Exception:
+            back = []
+        for r in back:
+            c = counts.setdefault(r["installation_custom_id"], {})
+            c["back"] = c.get("back", 0) + 1
+        for obj in data.get("objects") or []:
+            c = counts.get(obj.get("custom_id"))
+            if not c:
+                continue
+            parts = [f"{label} {c[k]}" for k, label in TAKE_KINDS if c.get(k)]
+            if c.get("absent"):
+                parts.append(f"немає на складі {c['absent']}")
+            if c.get("back"):
+                parts.append(f"повернути на склад {c['back']}")
+            obj["take"] = " · ".join(parts)
+    except Exception as e:
+        print(f"Не вдалося додати «Взяти з собою» до графіка: {e!r}")
 
 
 async def add_day_off_requests(employee_id: int, dates: List[date]) -> bool:
@@ -274,6 +331,9 @@ def format_schedule_message(work_date: date, data: Dict[str, Any]) -> str:
 
             if obj.get('transport'):
                 obj_part.append(f"🚐 {escape_html(obj['transport'])}")
+
+            if obj.get('take'):
+                obj_part.append(f"🧰 Взяти з собою: {escape_html(obj['take'])}")
 
             message_parts.append("\n".join(obj_part))
 

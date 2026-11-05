@@ -16,6 +16,7 @@ import {
 } from 'react-icons/fa';
 import { supabase } from '../../supabaseClient';
 import { SUPPLY_TARGET_STATUSES, supplyTargetOptions } from '../../domain/objects';
+import { nomFullName } from '../../domain/nomenclature';
 import { useAuth } from '../../AuthProvider';
 import {
     T, Btn, IconBtn, Chip, Card, Field, Picker, Bar, EmptyState,
@@ -93,7 +94,7 @@ export default function IssueOrdersPage({ externalSearch = '', externalActionTri
                 path.unshift(c.name);
                 id = c.parent_id;
             }
-            return { ...n, fullName: `${path.join(' ')} ${n.name}`.trim() };
+            return { ...n, fullName: nomFullName(path, n.name) };
         }).sort((a, b) => a.fullName.localeCompare(b.fullName, 'uk')));
     }, []);
 

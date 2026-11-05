@@ -15,7 +15,7 @@ import {
     FaUsers, FaHandshake, FaHardHat, FaTruck, FaFolderOpen,
     FaWarehouse, FaClipboardList, FaExchangeAlt, FaShoppingCart, FaToolbox, FaTags, FaSitemap,
     FaMoneyBillWave, FaUserTie, FaCalendarAlt, FaUmbrellaBeach, FaHistory, FaTasks,
-    FaUserShield, FaHome, FaSun, FaFunnelDollar, FaCoins, FaChartLine, FaShuttleVan,
+    FaUserShield, FaHome, FaSun, FaFunnelDollar, FaCoins, FaChartLine, FaShuttleVan, FaTruckLoading,
 } from 'react-icons/fa';
 import { FIRST_PAGE } from './domain/access';
 
@@ -53,6 +53,7 @@ export const MAIN_NAV = [
 /* Розділи складу. action — підпис головної кнопки в шапці (якщо є); section — розділ доступів. */
 export const INVENTORY_SECTIONS = [
     { id: 'stock', label: 'Залишки', icon: FaWarehouse, title: 'Залишки та номенклатура', action: 'Додати товар', section: 'stock' },
+    { id: 'dispatch', label: 'На виїзди', icon: FaTruckLoading, title: 'Що видати на виїзди', section: 'stock' },
     { id: 'issue', label: 'Видача', icon: FaClipboardList, title: 'Документи видачі', action: 'Новий документ', section: 'stock' },
     { id: 'movements', label: 'Рух товарів', icon: FaExchangeAlt, title: 'Рух товарів', action: 'Видача / Продаж', section: 'stock' },
     { id: 'purchases', label: 'Закупівлі', icon: FaShoppingCart, title: 'Закупівлі та постачання', action: 'Замовлення / Імпорт', section: 'purchases' },
@@ -87,7 +88,7 @@ export const sectionsFor = (list, auth) => visible(list, auth);
 /* Сторінки, яких немає в меню, але їх можна знайти пошуком Ctrl+K */
 const EXTRA_PAGES = [
     { key: 'changes', label: 'Журнал змін', icon: FaHistory, to: '/admin/changes', section: 'access', group: 'Доступи' },
-    { key: 'settings', label: 'Налаштування: норми етапів, курс', icon: FaUserShield, to: '/admin?tab=settings', section: 'settings', group: 'Доступи' },
+    { key: 'settings', label: 'Налаштування: курс, автоматика', icon: FaUserShield, to: '/admin?tab=settings', section: 'settings', group: 'Доступи' },
     { key: 'montazh', label: 'Монтаж — як бачить монтажник', icon: FaSun, to: '/m/me', show: (a) => a.isOffice, group: 'Працівники' },
 ];
 

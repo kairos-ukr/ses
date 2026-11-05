@@ -19,6 +19,7 @@ import {
 } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
+import { nomFullName } from '../domain/nomenclature';
 import { useAuth } from '../AuthProvider';
 
 import DirectSaleModal from './DirectSaleModal';
@@ -278,7 +279,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
             path.unshift(c.name);
             id = c.parent_id;
         }
-        return path.join(' ');
+        return path;
     }, [dicts.cat]);
 
     const instLabel = useCallback((customId) => {
@@ -299,7 +300,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
         const nom = n
             ? {
                 id: n.id, sku: n.sku,
-                fullName: `${catPath(n.category_id)} ${n.name}`.trim(),
+                fullName: nomFullName(catPath(n.category_id), n.name),
                 unitCode: n.unit?.code || n.unit?.name || 'шт',
             }
             : { id: mov.nomenclature_id, fullName: 'Невідомий товар', unitCode: 'шт', sku: '' };
@@ -480,7 +481,7 @@ export default function StockMovementsPage({ externalSearch = '', externalAction
                 items: list.map(r => {
                     const n = r.nomenclature;
                     return {
-                        name: n ? `${catPath(n.category_id)} ${n.name}`.trim() : 'Товар',
+                        name: n ? nomFullName(catPath(n.category_id), n.name) : 'Товар',
                         sku: n?.sku || '',
                         unit: n?.unit?.code || n?.unit?.name || 'шт',
                         qty: parseFloat(r.quantity),

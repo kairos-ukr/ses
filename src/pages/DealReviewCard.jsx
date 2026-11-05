@@ -1,10 +1,11 @@
 // =====================================================================
 //  K-CORE · «Мої угоди на перегляд» (вкладка «Мій день» на «Задачах»)
 //
-//  Угоди менеджера, які застоялись: довго без жодної дії, довше за норму
-//  етапу, без вартості — за його власними правилами. Тут же він налаштовує,
-//  як часто бот нагадує переглянути угоди (щодня / щотижня, о котрій).
-//  Хто нічого не змінював — щопонеділка о 9:00, без руху понад 14 днів.
+//  Угоди менеджера, які застоялись: довго без жодної дії (і, за бажанням,
+//  без вартості) — за його власними правилами. Норм етапів немає (05.11).
+//  «Робота йде» — позначити, що об'єкт активний: він зникає зі списку,
+//  доки знову не мине поріг. Тут же налаштування, як часто бот нагадує
+//  (щодня / щотижня, о котрій). Типово — щопонеділка о 9:00, понад 14 днів.
 // =====================================================================
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -13,23 +14,16 @@ import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
 import { T, Btn, useToast, humanError } from '../ui';
 import { getStageGroupLabel } from '../domain/stages';
+import { confirmActivity } from '../domain/pipeline';
 
-const DEFAULTS = { enabled: true, frequency: 'weekly', weekday: 1, hour: 9, stale_days: 14, include_over_norm: true, include_no_cost: false };
+const DEFAULTS = { enabled: true, frequency: 'weekly', weekday: 1, hour: 9, stale_days: 14, include_no_cost: false };
 const WEEKDAYS = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'нд'];
 
 const reasonsOf = (r, s) => {
     const why = [];
-    const stale = (r.idle_days ?? 0) > s.stale_days;
-    const over = s.include_over_norm && r.norm_days && (r.stage_days ?? 0) > r.norm_days;
-    // Стоїть на етапі стільки ж, скільки без руху — одне речення замість двох
-    if (stale && over && Math.abs((r.stage_days ?? 0) - (r.idle_days ?? 0)) <= 7) {
-        why.push(`без руху ${r.idle_days} дн (норма етапу ${r.norm_days})`);
-        if (s.include_no_cost && !Number(r.total_cost)) why.push('без вартості');
-        return why;
-    }
-    if (stale) why.push(`без руху ${r.idle_days} дн`);
-    if (over) why.push(`етап ${r.stage_days} дн при нормі ${r.norm_days}`);
-    if (s.include_no_cost && !Number(r.total_cost)) why.push('без вартості');
+    if ((r.idle_days ?? 0) > s.stale_days) why.push(`без руху ${r.idle_days} дн`);
+    // «Вартість не вноситься» (закрита угода, підряд) — не нагадуємо
+    if (s.include_no_cost && !r.no_cost && !Number(r.total_cost)) why.push('без вартості');
     return why;
 };
 
@@ -65,13 +59,25 @@ export default function DealReviewCard() {
             employee_id: me.id,
             enabled: draft.enabled, frequency: draft.frequency, weekday: Number(draft.weekday), hour: Number(draft.hour),
             stale_days: Math.min(120, Math.max(3, Number(draft.stale_days) || 14)),
-            include_over_norm: draft.include_over_norm, include_no_cost: draft.include_no_cost,
+            // Норм етапів немає — і нагадування за ними вимкнене назавжди
+            include_over_norm: false, include_no_cost: draft.include_no_cost,
         };
         const { error } = await supabase.from('deal_review_settings').upsert(row, { onConflict: 'employee_id' });
         if (error) { toast(humanError(error), 'error'); return; }
         setSettings({ ...DEFAULTS, ...row });
         setDraft(null);
         toast('Нагадування про угоди налаштовано', 'success');
+    };
+
+    // «Робота йде» — об'єкт активний; у списку лишається, лише якщо є інша причина
+    const workGoes = async (r) => {
+        try {
+            await confirmActivity(r.custom_id, me?.id);
+            setRows(list => list.map(x => (x.custom_id === r.custom_id ? { ...x, idle_days: 0 } : x)));
+            toast(`СЕС-${r.custom_id}: робота йде`, 'success');
+        } catch (e) {
+            toast(humanError(e), 'error');
+        }
     };
 
     const scheduleText = !settings.enabled ? 'нагадування вимкнено'
@@ -123,10 +129,6 @@ export default function DealReviewCard() {
                                 className="w-16 h-8 px-2 rounded-lg border border-slate-200 bg-white text-right" /> днів
                         </div>
                         <label className="flex items-center gap-2 text-slate-700">
-                            <input type="checkbox" checked={draft.include_over_norm} onChange={e => setDraft(d => ({ ...d, include_over_norm: e.target.checked }))} />
-                            Також ті, що довше за норму етапу
-                        </label>
-                        <label className="flex items-center gap-2 text-slate-700">
                             <input type="checkbox" checked={draft.include_no_cost} onChange={e => setDraft(d => ({ ...d, include_no_cost: e.target.checked }))} />
                             Також ті, де не вказана вартість
                         </label>
@@ -145,13 +147,16 @@ export default function DealReviewCard() {
             ) : (
                 <ul className="divide-y divide-slate-100">
                     {list.slice(0, limit).map(({ r, why }) => (
-                        <li key={r.custom_id}>
-                            <a href={`#/project/${r.custom_id}`} className="block px-4 py-2.5 hover:bg-slate-50">
+                        <li key={r.custom_id} className="flex items-center gap-2 pr-3 hover:bg-slate-50">
+                            <a href={`#/project/${r.custom_id}`} className="block min-w-0 flex-1 pl-4 py-2.5">
                                 <div className="text-[13px] font-semibold text-slate-800 leading-snug break-words">
                                     <span className="font-mono text-[11px] text-slate-400 mr-1">СЕС-{r.custom_id}</span>{r.name || 'без назви'}
                                 </div>
                                 <div className="text-[11.5px] text-slate-500 leading-snug">{getStageGroupLabel(r.workflow_stage)} · <span className="text-amber-700">{why.join(', ')}</span></div>
                             </a>
+                            {(r.idle_days ?? 0) > settings.stale_days && (
+                                <Btn size="sm" variant="softOk" icon={FaCheck} onClick={() => workGoes(r)} className="flex-shrink-0">Робота йде</Btn>
+                            )}
                         </li>
                     ))}
                 </ul>

@@ -18,6 +18,7 @@ import {
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
 import { NomenclatureModal } from './NomenclatureModal';
+import { nomFullName } from '../domain/nomenclature';
 import {
     T, TONE, Btn, IconBtn, Chip, Picker, Modal, EmptyState,
     Skeleton, useToast, useConfirm, humanError, num,
@@ -75,7 +76,7 @@ export default function ManualSpecBuilder({
                     rootName = c.name;
                     id = c.parent_id;
                 }
-                return { ...item, fullName: `${path.join(' ')} ${item.name}`.trim(), rootCategoryName: rootName || 'Інше' };
+                return { ...item, fullName: nomFullName(path, item.name), rootCategoryName: rootName || 'Інше' };
             }).sort((a, b) => a.fullName.localeCompare(b.fullName, 'uk')));
 
             const f = {};
@@ -370,7 +371,7 @@ export default function ManualSpecBuilder({
         }
         const processed = {
             ...saved,
-            fullName: `${path.join(' ')} ${saved.name}`.trim(),
+            fullName: nomFullName(path, saved.name),
             rootCategoryName: rootName || 'Інше',
         };
         setNomenclatures(prev => [...prev.filter(n => n.id !== processed.id), processed]);

@@ -65,10 +65,11 @@ export default function PlannerView({ onOpenTask }) {
         try {
             const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
             const [mine, done, assigned, free, emps] = await Promise.all([
-                supabase.from('personal_reminders').select('*')
+                // Нотатки з «Нотатника» (is_note) тут не показуємо — лише справи дня
+                supabase.from('personal_reminders').select('*').eq('is_note', false)
                     .or(`owner_id.eq.${me.id},shared_with.cs.{${me.id}}`).is('done_at', null)
                     .order('plan_date', { ascending: true, nullsFirst: false }).order('remind_at', { ascending: true }),
-                supabase.from('personal_reminders').select('*')
+                supabase.from('personal_reminders').select('*').eq('is_note', false)
                     .or(`owner_id.eq.${me.id},shared_with.cs.{${me.id}}`).gte('done_at', startToday.toISOString())
                     .order('done_at', { ascending: false }).limit(30),
                 me.custom_id
@@ -396,8 +397,8 @@ function ReminderRow({ r, me, nameOf, editing, onEdit, onCloseEdit, people, onCo
     );
 }
 
-/** Кому показати: позначаємо людей, решта не бачить */
-function SharePicker({ people, value, onChange }) {
+/** Кому показати: позначаємо людей, решта не бачить (і в «Нотатнику») */
+export function SharePicker({ people, value, onChange }) {
     const [q, setQ] = useState('');
     const list = people.filter(p => !q.trim() || p.name.toLowerCase().includes(q.trim().toLowerCase()));
     const toggle = (id) => onChange(value.includes(id) ? value.filter(x => x !== id) : [...value, id]);

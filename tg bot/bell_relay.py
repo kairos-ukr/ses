@@ -48,6 +48,7 @@ QUIET_FROM, QUIET_TO = 22, 7
 ICONS = {
     "schedule": "🗓",
     "object_assigned": "👷",
+    "report_submitted": "🧾",
     "system": "🔔",
 }
 

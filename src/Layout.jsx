@@ -9,7 +9,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { FaBars, FaTimes, FaSignOutAlt, FaSearch, FaUserTie } from 'react-icons/fa';
+import { FaBars, FaTimes, FaSignOutAlt, FaSearch, FaUserTie, FaHardHat, FaArrowRight } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { useAuth } from './AuthProvider';
@@ -63,6 +63,18 @@ const Layout = ({ children }) => {
     </nav>
   );
 
+  // Офіс і адміністратор можуть будь-коли відкрити «Монтаж» — як його бачать бригади
+  const renderMontazh = () => auth.isOffice && (
+    <div className="px-3 pb-2">
+      <button type="button" onClick={() => go('/m')}
+        className="w-full h-10 px-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100 text-[13px] font-semibold inline-flex items-center gap-2 transition-colors">
+        <FaHardHat size={13} className="text-amber-600" />
+        <span className="flex-1 text-left">Перейти в «Монтаж»</span>
+        <FaArrowRight size={10} className="text-amber-500" />
+      </button>
+    </div>
+  );
+
   const renderUser = () => (
     <div className="border-t border-slate-100 p-3 flex items-center gap-2.5">
       <span className="w-9 h-9 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 flex items-center justify-center text-[12px] font-bold flex-shrink-0">
@@ -96,6 +108,7 @@ const Layout = ({ children }) => {
           <NotificationBell variant="side" />
         </div>
         {renderNav()}
+        {renderMontazh()}
         {renderUser()}
       </aside>
 
@@ -119,6 +132,7 @@ const Layout = ({ children }) => {
               </div>
               <div className="px-3 pt-3"><SideSearchButton onClick={() => { setMobileOpen(false); openSearch(); }} /></div>
               {renderNav()}
+              {renderMontazh()}
               <div className="pb-safe">{renderUser()}</div>
             </motion.div>
           </>
@@ -131,6 +145,7 @@ const Layout = ({ children }) => {
           <HeaderIconBtn icon={FaBars} label="Меню" onClick={() => setMobileOpen(true)} />
           <img src={logo} alt="K-Core" className="h-7 w-auto object-contain" />
           <span className="ml-auto flex items-center">
+            {auth.isOffice && <HeaderIconBtn icon={FaHardHat} label="Перейти в «Монтаж»" onClick={() => navigate('/m')} />}
             <NotificationBell variant="header" />
             <HeaderIconBtn icon={FaSearch} label="Пошук" onClick={openSearch} />
           </span>

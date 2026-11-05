@@ -373,11 +373,19 @@ export const Segmented = ({ options, value, onChange, className = '' }) => (
     </div>
 );
 
+/** Перемикач «увімкнено / вимкнено» */
+export const Switch = ({ on, onClick, disabled, label }) => (
+    <button type="button" role="switch" aria-checked={!!on} aria-label={label} disabled={disabled} onClick={onClick}
+        className={`relative w-11 h-6 rounded-full flex-shrink-0 transition-colors disabled:opacity-50 ${on ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+        <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${on ? 'translate-x-5' : ''}`} />
+    </button>
+);
+
 /**
  * Селект із пошуком. За наявності onAddNew дозволяє створити запис
  * прямо з поля — коли потрібного варіанта в довіднику ще немає.
  *
- * options: [{ id, label }]
+ * options: [{ id, label, hint? }] — hint: підказка дрібно під назвою (напр. «рекомендовано»)
  */
 export const Picker = ({
     options, value, onChange, placeholder = 'Оберіть…',
@@ -543,6 +551,7 @@ export const Picker = ({
                                         ${i === active ? 'bg-indigo-50' : ''}`}
                                 >
                                     {o.label}
+                                    {o.hint && <span className="block text-[11.5px] font-semibold text-amber-700 mt-0.5">{o.hint}</span>}
                                 </button>
                             )) : (
                                 <div className="px-3 py-4 text-[12.5px] text-slate-400 text-center">Нічого не знайдено</div>

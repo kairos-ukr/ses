@@ -59,6 +59,7 @@ const LeadsPage = lazyPage(() => import('./LeadsPage'));
 const AnalyticsPage = lazyPage(() => import('./AnalyticsPage'));
 const ChangeLogPage = lazyPage(() => import('./ChangeLogPage'));
 const BrigadeReportsPage = lazyPage(() => import('./BrigadeReportsPage'));
+const ResetPasswordPage = lazyPage(() => import('./ResetPasswordPage'));
 
 /** Поки частина сторінки вантажиться — тихий індикатор, а не біла сторінка */
 const PageLoader = () => (
@@ -82,7 +83,9 @@ export default function App() {
         <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/" element={<AuthPage />} />
-          
+          {/* Посилання «задати новий пароль», яке створює адміністратор у «Доступах» */}
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+
           <Route path="/home" element={<HomeRedirect />} />
           {/* Кожна сторінка CRM — за доступами (Доступи → шаблони й люди) */}
           <Route path="/today" element={<RequireAccess section="today"><TodayPage /></RequireAccess>} />

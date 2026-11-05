@@ -180,7 +180,8 @@ function ReserveForm({ client, onDone, onCancel }) {
     );
 }
 
-function SellFromReserve({ r, client, onDone, onCancel }) {
+/** Продати клієнту з його резерву — і в картці клієнта, і на складі (warehouse/ItemReserves) */
+export function SellFromReserve({ r, client, onDone, onCancel }) {
     const { employee } = useAuth();
     const toast = useToast();
     const left = Number(r.reserved_quantity) - Number(r.released_quantity);
