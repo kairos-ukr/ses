@@ -49,7 +49,10 @@ export const SECTIONS = [
     { key: 'team', group: 'Люди', label: 'Команда', acts: ALL4 },
     { key: 'schedule', group: 'Люди', label: 'Графік робіт', acts: ['view', 'edit'] },
     { key: 'fleet', group: 'Люди', label: 'Автопарк і пробіг', acts: ALL4 },
+    // montazh: true — право можна дати й монтажнику (діє в «Монтажі» → Я → Автопарк)
+    { key: 'fleet_costs', group: 'Люди', label: 'Витрати на авто', acts: ALL4, montazh: true, hint: 'ТО, ремонти, пальне й чеки, аналітика по кожному авто за місяць. Видно лише тим, кому дали — можна й монтажнику' },
     { key: 'timeoff', group: 'Люди', label: 'Вихідні й відпустки', acts: ALL4, hint: 'свої вихідні кожен ставить сам' },
+    { key: 'payroll', group: 'Люди', label: 'Виплати працівникам', acts: ALL4, hint: 'оплачені дні й добові, заявки за км на своєму авто, повернення за пальне. Видно лише тим, кому дали' },
 
     { key: 'documents', group: 'Інше', label: 'Документи', acts: ALL4 },
     { key: 'partners', group: 'Інше', label: 'Партнерство', acts: ALL4 },
@@ -124,6 +127,14 @@ export const BUILTIN_TEMPLATES = [
     { key: 'brigadier', name: 'Бригадир', app: 'montazh', perms: {} },
     { key: 'installer', name: 'Монтажник', app: 'montazh', perms: {} },
 ];
+
+/**
+ * Хто в графіку монтажу («Вільні», календар «По людях», історія виїздів):
+ * монтажники й бригадири. Офіс, склад, директор — ні, хіба що в картці
+ * працівника ввімкнули «У графіку монтажу» (employees.in_schedule).
+ * Додати в бригаду точково можна будь-кого — пошуком за ім'ям.
+ */
+export const inSchedule = (e) => !!e && (typeof e.in_schedule === 'boolean' ? e.in_schedule : e.role === 'installer');
 
 /** Шаблон за замовчуванням — за роллю, поки людині не вибрали інший */
 export const defaultTemplateKey = (emp) => {

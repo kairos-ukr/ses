@@ -52,9 +52,9 @@ export default function ScheduleScreen() {
         if (who?.custom_id == null) return;
         const ok = fresh();
         const [mine, all, off] = await Promise.all([
-            supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes')
+            supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes, business_trip')
                 .eq('employee_custom_id', who.custom_id).gte('work_date', start).lte('work_date', end),
-            supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes')
+            supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes, business_trip')
                 .gte('work_date', start).lte('work_date', end),
             supabase.from('attendance').select('id, work_date, status, notes')
                 .eq('employee_custom_id', who.custom_id).gte('work_date', start).lte('work_date', end).in('status', OFF_KEYS),
@@ -145,10 +145,12 @@ export default function ScheduleScreen() {
                                         {dv.map(v => (
                                             <span key={v.key} className={`block ${past ? 'text-slate-500' : ''}`}>
                                                 <b className={`block text-[15px] break-words ${off ? 'line-through decoration-rose-400' : ''}`}>{visitTitle(v, objects)}</b>
+                                                {v.trip && <Pill tone="warn" className="mt-0.5">відрядження</Pill>}
                                                 {crewOf(v).length > 0 && <span className="block text-[13px] text-slate-500 break-words">з {crewOf(v).join(', ')}</span>}
                                             </span>
                                         ))}
-                                        {!off && !dv.length && <span className="text-[14px] text-slate-400">{past ? '—' : 'ще не заплановано'}</span>}
+                                        {/* Минулий день без графіка — вихідний сам собою */}
+                                        {!off && !dv.length && <span className="text-[14px] text-slate-400">{past ? 'вихідний' : 'ще не заплановано'}</span>}
                                     </span>
                                 </button>
 
@@ -276,7 +278,7 @@ function History() {
             const today = isoDay();
             const from = shiftDay(today, -HISTORY_DAYS);
             const [w, a] = await Promise.all([
-                supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes')
+                supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes, business_trip')
                     .eq('employee_custom_id', who.custom_id).gte('work_date', from).lt('work_date', today),
                 supabase.from('attendance').select('work_date').eq('employee_custom_id', who.custom_id)
                     .gte('work_date', from).lt('work_date', today).in('status', OFF_KEYS),

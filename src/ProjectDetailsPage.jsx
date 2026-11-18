@@ -41,6 +41,7 @@ import { describeChange } from "./domain/changes";
 import LostReasonPicker from "./LostReasonPicker";
 import ObjectProfitPanel from "./ObjectProfitPanel";
 import ObjectReports from "./pages/ObjectReports";
+import { moneyLinesOf } from "./montazh/report";
 
 import ProjectDocuments, { prefetchDocuments } from "./ProjectDocumentsPage";
 import ProjectWorkflow from "./PWT";
@@ -201,7 +202,7 @@ export default function ProjectDetailPage() {
       supabase.from('v_object_activity')
         .select('stage_entered_at, last_activity_at').eq('installation_custom_id', id).maybeSingle(),
       supabase.from('installer_reports')
-        .select('id, work_date, author_id, done_stages, comment, day_status, photos, money_amount, money_currency, submitted_at')
+        .select('id, work_date, author_id, done_stages, done_qty, comment, client_notes, day_status, photos, money_amount, money_currency, money_lines, submitted_at')
         .eq('installation_custom_id', id).not('submitted_at', 'is', null),
     ]);
     setEvents(ev.data || []);
@@ -697,12 +698,13 @@ export default function ProjectDetailPage() {
     }));
     reports.forEach(r => {
       const done = Object.entries(r.done_stages || {}).filter(([, s]) => s)
-        .map(([k, s]) => `${getTask(k)?.short || k}${s === 'completed' ? ' ✓' : ' (в роботі)'}`);
+        .map(([k, s]) => `${getTask(k)?.short || k}${s === 'completed' ? ' ✓' : ' (в роботі)'}${k === 'inst_panels' && Number(r.done_qty?.[k]) > 0 ? ` ${r.done_qty[k]} шт` : ''}`);
+      const money = moneyLinesOf(r);
       items.push({
         key: `r-${r.id}`, at: r.submitted_at, who: empById.get(r.author_id)?.name || 'Бригада', kind: 'report',
         text: `Звіт монтажу за ${formatDate(r.work_date)}${done.length ? `: ${done.join(', ')}` : ''}`,
-        sub: [r.comment, r.photos?.length ? `${r.photos.length} фото` : null,
-          seeMoney && r.money_amount != null ? `отримали від клієнта ${formatMoney(r.money_amount, r.money_currency === 'UAH' ? 'UAH' : 'USD')}` : null,
+        sub: [r.comment, r.client_notes ? `клієнт: ${r.client_notes}` : null, r.photos?.length ? `${r.photos.length} фото` : null,
+          seeMoney && money.length ? `отримали від клієнта ${money.map(l => formatMoney(l.amount, l.currency)).join(' + ')}` : null,
         ].filter(Boolean).join(' · '),
         link: `/project/${id}?tab=reports&r=${r.id}`,
       });

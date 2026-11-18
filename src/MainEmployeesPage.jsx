@@ -9,6 +9,7 @@ import WorkCalendar from "./WorkCalendar";
 import TimeOffManager from "./TimeOffManager";
 import EmployeeHistoryPage from "./EmployeeHistoryPage";
 import FleetPage from "./pages/FleetPage";
+import PayrollPage from "./pages/PayrollPage";
 import { useAuth } from "./AuthProvider";
 
 // Старі розділи: «Виїзди» тепер у Календарі, «Транспорт» — це «Автопарк»
@@ -37,6 +38,7 @@ export default function MainEmployeesPage() {
             {activeTab === "fleet" && <FleetPage />}
             {activeTab === "timeoff" && <TimeOffManager />}
             {activeTab === "history" && <EmployeeHistoryPage />}
+            {activeTab === "payroll" && <PayrollPage />}
         </WorkspaceShell>
     );
 }

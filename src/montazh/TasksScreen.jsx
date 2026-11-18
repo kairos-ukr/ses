@@ -16,7 +16,7 @@ import { FaPlus, FaPaperPlane, FaSearch, FaTimes } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { Linkify, useToast, humanError } from '../ui';
 import {
-    useMontazh, useFresh, isoDay, shiftDay, relDay, TASK_FIELDS, OPEN_TASK, plainText, officePeople, loadObjects, objectTitle,
+    useMontazh, useFresh, isoDay, shiftDay, relDay, TASK_FIELDS, OPEN_TASK, tasksSince, plainText, officePeople, loadObjects, objectTitle,
 } from './data';
 import { Screen, Card, Label, Pill, Big, Empty, Loading, Check, Segment } from './kit';
 
@@ -33,15 +33,15 @@ export default function TasksScreen() {
     const load = useCallback(async () => {
         if (who?.custom_id == null) return;
         const ok = fresh();
-        const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+        const since = tasksSince();
         const [a, b, c] = await Promise.all([
             supabase.from('microtasks').select(TASK_FIELDS).eq('assigned_to', who.custom_id).in('status', OPEN_TASK)
-                .order('due_date', { ascending: true, nullsFirst: false }),
+                .gte('created_at', since).order('due_date', { ascending: true, nullsFirst: false }).limit(50),
             supabase.from('microtasks').select(TASK_FIELDS).eq('assigned_to', who.custom_id).eq('status', 'виконано')
-                .gte('data_complete', weekAgo).order('data_complete', { ascending: false }).limit(10),
+                .gte('data_complete', since).order('data_complete', { ascending: false }).limit(30),
             who.email
                 ? supabase.from('microtasks').select(TASK_FIELDS).ilike('creator_email', who.email)
-                    .order('created_at', { ascending: false }).limit(30)
+                    .gte('created_at', since).order('created_at', { ascending: false }).limit(30)
                 : Promise.resolve({ data: [] }),
         ]);
         if (!ok()) return;

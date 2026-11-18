@@ -35,6 +35,9 @@ export function useAccessTemplates() {
 const APP_LABEL = { crm: 'CRM', montazh: 'Лише «Монтаж»' };
 
 /** Скільки розділів у людини не так, як у шаблоні */
+// Права, які діють і в «Монтажі» (напр. «Витрати на авто» — Василю Гонті)
+const MONTAZH_SECTIONS = SECTIONS.filter(s => s.montazh);
+
 export const overridesCount = (emp, tpl) => SECTIONS
     .filter(s => Object.prototype.hasOwnProperty.call(emp.access_overrides || {}, s.key)
         && !sameSection(emp.access_overrides[s.key], tpl?.perms?.[s.key], s)).length;
@@ -106,8 +109,12 @@ export function PersonAccess({ emp, templates, onSaved, onClose }) {
                     Усі розділи відкриті повністю, включно з грошима всієї компанії, аналітикою й доступами. Вимкніть, щоб діяли права нижче.
                 </div>
             ) : tpl?.app === 'montazh' ? (
-                <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 text-[13px] text-slate-600">
-                    Працює лише в «Монтажі»: сьогодні, графік, задачі, звіти. CRM закрита.
+                <div className="space-y-2">
+                    <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 text-[13px] text-slate-600">
+                        Працює лише в «Монтажі»: сьогодні, графік, задачі, звіти. CRM закрита.
+                    </div>
+                    <div className="text-[12px] font-bold text-slate-500 px-1">Додатково в «Монтажі» — особисто</div>
+                    <AccessMatrix value={value} base={tpl?.perms || {}} onChange={changeSection} readOnly={readOnly} sections={MONTAZH_SECTIONS} />
                 </div>
             ) : (
                 <AccessMatrix value={value} base={tpl?.perms || {}} onChange={changeSection} readOnly={readOnly} />

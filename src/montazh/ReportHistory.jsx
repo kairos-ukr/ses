@@ -15,11 +15,16 @@ import { FaChevronDown, FaChevronUp, FaArrowRight, FaCamera } from 'react-icons/
 import { supabase } from '../supabaseClient';
 import { Linkify } from '../ui';
 import { useMontazh, relDay, fmtDay, loadObjects, objectTitle } from './data';
-import { REPORT_STAGES, DAY_STATUS_LABEL, CURRENCY_SIGN, fmtAmount, fmtQty } from './report';
+import { DAY_STATUS_LABEL, CURRENCY_SIGN, fmtAmount, fmtQty, moneyLinesOf, serialsOf } from './report';
+import { getTask } from '../domain/stages';
 import { PhotoThumbs } from '../ui/MediaViewer';
 import { Card, Label, Pill, Empty, Loading } from './kit';
 
-const STAGE_SHORT = Object.fromEntries(REPORT_STAGES.map(t => [t.key, t.short]));
+const qtyText = (r, k) => {
+    const n = Number(r.done_qty?.[k]);
+    if (!(n > 0)) return '';
+    return k === 'inst_panels' ? ` · ${fmtQty(n)} шт` : ` · на ${fmtQty(n)} пан.`;
+};
 const timeOf = (ts) => new Date(ts).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
 
 export default function ReportHistory({ objId, mine, limit = 40 }) {
@@ -70,7 +75,7 @@ export default function ReportHistory({ objId, mine, limit = 40 }) {
                         <div className="text-[13px] text-slate-500">{[author?.name, `о ${timeOf(r.submitted_at)}`].filter(Boolean).join(' · ')}</div>
                         <div className="flex flex-wrap gap-1.5 mt-1.5">
                             {marked.map(([k, s]) => (
-                                <Pill key={k} tone={s === 'completed' ? 'ok' : 'warn'}>{STAGE_SHORT[k] || k}{s === 'completed' ? ' ✓' : ' · в роботі'}</Pill>
+                                <Pill key={k} tone={s === 'completed' ? 'ok' : 'warn'}>{getTask(k)?.short || k}{s === 'completed' ? ' ✓' : ' · в роботі'}{qtyText(r, k)}</Pill>
                             ))}
                             {r.day_status && r.day_status !== 'ok' && <Pill tone="bad">{DAY_STATUS_LABEL[r.day_status]}</Pill>}
                             {photoN > 0 && <Pill><FaCamera size={10} /> {photoN}</Pill>}
@@ -93,6 +98,20 @@ function Details({ r, showMoney, byId, mine }) {
         <div className="px-3.5 pb-3.5 pt-1 border-t border-slate-100 flex flex-col gap-3">
             {r.comment && <p className="text-[15px] text-slate-800 whitespace-pre-line break-words pt-2"><Linkify>{r.comment}</Linkify></p>}
             {r.photos?.length > 0 && <Thumbs photos={r.photos} fileIds={r.photo_file_ids} />}
+            {r.client_notes && (
+                <div><Label>Зауваження клієнта</Label><p className="text-[14.5px] whitespace-pre-line break-words">{r.client_notes}</p></div>
+            )}
+            {serialsOf(r).length > 0 && (
+                <div>
+                    <Label>Серійні номери</Label>
+                    {serialsOf(r).map((s, i) => (
+                        <div key={i} className="flex justify-between gap-3 py-1 text-[14.5px]">
+                            <span className="text-slate-500">{s.kind}</span>
+                            <b className="break-all text-right">{s.value}</b>
+                        </div>
+                    ))}
+                </div>
+            )}
 
             {r.usage?.length > 0 && (
                 <div>
@@ -106,13 +125,15 @@ function Details({ r, showMoney, byId, mine }) {
                 </div>
             )}
 
-            {showMoney && r.money_amount != null && (
+            {showMoney && moneyLinesOf(r).length > 0 && (
                 <div>
                     <Label>Гроші від клієнта</Label>
-                    <div className="flex items-center justify-between gap-2">
-                        <b className="text-[18px] tabular-nums">{fmtAmount(r.money_amount)} {CURRENCY_SIGN[r.money_currency] || ''}</b>
-                        <Pill tone={r.money_payment_id ? 'ok' : 'warn'}>{r.money_payment_id ? 'офіс вніс у платежі' : 'чекає офісу'}</Pill>
-                    </div>
+                    {moneyLinesOf(r).map((l, i) => (
+                        <div key={i} className={`flex items-center justify-between gap-2 ${i ? 'mt-1.5' : ''}`}>
+                            <b className="text-[18px] tabular-nums">{fmtAmount(l.amount)} {CURRENCY_SIGN[l.currency] || ''}</b>
+                            <Pill tone={l.payment_id ? 'ok' : 'warn'}>{l.payment_id ? 'офіс вніс у платежі' : 'чекає офісу'}</Pill>
+                        </div>
+                    ))}
                 </div>
             )}
 

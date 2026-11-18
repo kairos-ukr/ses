@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useToast } from "./ui";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -309,11 +309,15 @@ export default function TimeOffManager() {
         }
 
         setIsSaving(true);
+        // Офіс вносить комусь (людина написала, попросила) — бот окремо не пише, вихідний буде в графіку дня.
+        // Людина ставить собі сама — бот повідомить у гілку графіка
+        const self = String(formData.employeeId) === String(myCustomId);
         const records = finalDates.map(dateStr => ({
             work_date: dateStr,
             employee_custom_id: formData.employeeId,
             status: formData.type,
-            notes: formData.notes
+            notes: formData.notes,
+            source: self ? null : 'office',
         }));
 
         try {

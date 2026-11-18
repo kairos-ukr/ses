@@ -15,7 +15,7 @@ import { FaCheck, FaHardHat, FaUserTie } from 'react-icons/fa';
 
 import { supabase } from '../supabaseClient';
 import { T, Btn, Picker, Field, useToast, humanError, useAutoFocus } from '../ui';
-import { CURRENCIES, DEFAULT_CURRENCY, formatMoney, paymentInObjectCurrency } from '../domain/objects';
+import { PAYMENT_CURRENCIES, DEFAULT_CURRENCY, formatMoney, paymentInObjectCurrency } from '../domain/objects';
 import { loadUsdRate } from '../utils/settings';
 
 export const PAY_METHODS = [
@@ -53,21 +53,36 @@ export default function PaymentForm({ installation, client, objects = [], client
     const [f, setF] = useState({ amount: '', currency: installation?.currency || DEFAULT_CURRENCY, paid_at: isoDay(), rate: '', method: 'Bank Transfer', comment: '' });
     const [errors, setErrors] = useState({});
     const [saving, setSaving] = useState(false);
+    const [usdRate, setUsdRate] = useState('');   // поточний курс долара — коли повертаються з євро
     const set = (p) => { setF(x => ({ ...x, ...p })); setErrors(e => ({ ...e, ...Object.fromEntries(Object.keys(p).map(k => [k, null])) })); };
 
     // Курс угоди, якщо платіж з картки об'єкта; інакше — поточний
     useEffect(() => {
+        loadUsdRate().then(r => setUsdRate(r ? String(r) : ''));
         const own = dealRate(installation);
         if (own) { setF(x => (x.rate === '' ? { ...x, rate: own } : x)); return; }
         loadUsdRate().then(r => setF(x => (x.rate === '' ? { ...x, rate: r ? String(r) : '' } : x)));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Євро: курс — скільки валюти угоди за 1 €, його вписують щоразу.
+    // Повернулись з євро на долари чи гривні — знову курс угоди
+    const pickCurrency = (c) => {
+        if (c === f.currency) return;
+        if (c === 'EUR') set({ currency: c, rate: '' });
+        else if (f.currency === 'EUR') set({ currency: c, rate: dealRate(obj) || usdRate });
+        else set({ currency: c });
+    };
+
+    const isEur = f.currency === 'EUR';
     const needsRate = !!obj && f.currency !== dealCur;
     const counted = needsRate ? paymentInObjectCurrency(f.amount, f.currency, dealCur, f.rate) : null;
     const otherCur = f.currency === 'USD' ? 'UAH' : 'USD';
-    const inOther = Number(f.amount) > 0 && Number(f.rate) > 0
+    const inOther = !isEur && Number(f.amount) > 0 && Number(f.rate) > 0
         ? (f.currency === 'USD' ? Number(f.amount) * Number(f.rate) : Number(f.amount) / Number(f.rate)) : null;
+    const rateLabel = isEur
+        ? `Курс, ${dealCur === 'UAH' ? 'грн' : '$'} за 1 €${needsRate ? ' (для перерахунку)' : ''}`
+        : needsRate ? 'Курс, грн за 1 $ (для перерахунку)' : 'Курс, грн за 1 $';
 
     const objectOptions = useMemo(() => objects.map(o => ({
         id: o.custom_id,
@@ -142,9 +157,9 @@ export default function PaymentForm({ installation, client, objects = [], client
                     {errors.amount && <div className="mt-1 text-[12px] font-semibold text-rose-600">{errors.amount}</div>}
                 </Field>
                 <div className="flex gap-1.5">
-                    {CURRENCIES.map(c => (
-                        <button key={c.key} type="button" onClick={() => set({ currency: c.key })} className={`${chip(f.currency === c.key)} h-11 min-w-[64px]`}>
-                            {c.symbol} {c.key === 'USD' ? 'дол.' : 'грн'}
+                    {PAYMENT_CURRENCIES.map(c => (
+                        <button key={c.key} type="button" onClick={() => pickCurrency(c.key)} className={`${chip(f.currency === c.key)} h-11 min-w-[64px]`}>
+                            {c.symbol} {{ USD: 'дол.', UAH: 'грн', EUR: 'євро' }[c.key]}
                         </button>
                     ))}
                 </div>
@@ -154,11 +169,11 @@ export default function PaymentForm({ installation, client, objects = [], client
                 <Field label="Дата">
                     <input type="date" className={`${T.input} h-11`} value={f.paid_at} onChange={e => set({ paid_at: e.target.value })} />
                 </Field>
-                <Field label={needsRate ? 'Курс, грн за 1 $ (для перерахунку)' : 'Курс, грн за 1 $'} required={needsRate}>
+                <Field label={rateLabel} required={needsRate}>
                     <input type="number" inputMode="decimal" min="0" step="0.01" className={`${T.input} h-11 tabular-nums ${errors.rate ? 'border-rose-400' : ''}`}
-                        value={f.rate} onChange={e => set({ rate: e.target.value })} placeholder="Напр. 41.50" />
+                        value={f.rate} onChange={e => set({ rate: e.target.value })} placeholder={isEur ? (dealCur === 'UAH' ? 'Напр. 48.20' : 'Напр. 1.08') : 'Напр. 41.50'} />
                     {errors.rate && <div className="mt-1 text-[12px] font-semibold text-rose-600">{errors.rate}</div>}
-                    {!errors.rate && dealRate(obj) && f.rate === dealRate(obj) && (
+                    {!errors.rate && !isEur && dealRate(obj) && f.rate === dealRate(obj) && (
                         <div className="mt-1 text-[12px] text-slate-500">курс угоди</div>
                     )}
                 </Field>

@@ -19,7 +19,7 @@ import { FaMoneyBillWave, FaBoxOpen, FaShoppingCart, FaPlus, FaCheck, FaTimes, F
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
 import { T, Btn, Chip, Picker, Field, Skeleton, useToast, humanError, num } from '../ui';
-import { CURRENCIES, DEFAULT_CURRENCY, formatMoney, canSeeMoney } from '../domain/objects';
+import { PAYMENT_CURRENCIES as CURRENCIES, DEFAULT_CURRENCY, formatMoney, canSeeMoney } from '../domain/objects';
 import PaymentForm, { methodLabel } from './PaymentForm';
 import DirectSaleModal from './DirectSaleModal';
 import { loadUsdRate } from '../utils/settings';

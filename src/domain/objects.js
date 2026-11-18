@@ -160,9 +160,15 @@ export const CURRENCIES = [
     { key: 'UAH', label: 'Гривні', symbol: '₴' },
 ];
 
+/** Валюти платежу: угода — у доларах чи гривнях, а клієнт може заплатити й євро */
+export const PAYMENT_CURRENCIES = [
+    ...CURRENCIES,
+    { key: 'EUR', label: 'Євро', symbol: '€' },
+];
+
 export const DEFAULT_CURRENCY = 'USD';
 
-export const currencySymbol = (code) => CURRENCIES.find(c => c.key === code)?.symbol || '$';
+export const currencySymbol = (code) => PAYMENT_CURRENCIES.find(c => c.key === code)?.symbol || '$';
 
 /** 12 345.5 → «$12 345.50»; дробову частину показуємо лише якщо вона є. */
 export const formatMoney = (amount, currency = DEFAULT_CURRENCY) => {
@@ -177,13 +183,15 @@ export const formatMoney = (amount, currency = DEFAULT_CURRENCY) => {
 
 /**
  * Скільки платіж зараховується в валюті об'єкта.
- * rate — гривень за 1 долар. Та сама формула, що й у базі (payment_history_prepare).
+ * rate — гривень за 1 долар; для євро — скільки валюти угоди за 1 €.
+ * Та сама формула, що й у базі (payment_history_prepare).
  */
 export const paymentInObjectCurrency = (amount, paymentCurrency, objectCurrency, rate) => {
     const a = Number(amount) || 0;
     if (!paymentCurrency || paymentCurrency === objectCurrency) return a;
     const r = Number(rate) || 0;
     if (r <= 0) return null;
+    if (paymentCurrency === 'EUR') return Math.round(a * r * 100) / 100;
     if (paymentCurrency === 'UAH' && objectCurrency === 'USD') return Math.round((a / r) * 100) / 100;
     if (paymentCurrency === 'USD' && objectCurrency === 'UAH') return Math.round(a * r * 100) / 100;
     return null;

@@ -23,10 +23,16 @@ import { T, Btn, Chip, Linkify, useToast, humanError } from '../ui';
 import { getTask } from '../domain/stages';
 import { loadUsdRate } from '../utils/settings';
 import { DEFAULT_CURRENCY, canSeeMoney } from '../domain/objects';
-import { DAY_STATUS_LABEL, CURRENCY_SIGN, fmtAmount, fmtQty } from '../montazh/report';
+import { DAY_STATUS_LABEL, CURRENCY_SIGN, fmtAmount, fmtQty, moneyLinesOf, moneyText, markMoneyPaid, serialsOf } from '../montazh/report';
 import { PhotoThumbs } from '../ui/MediaViewer';
 
 const dayTitle = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString('uk-UA', { weekday: 'long', day: 'numeric', month: 'long' });
+// Скільки зроблено за день: панелі — «12 шт», конструкція — «на 12 пан.»
+const qtyText = (r, k) => {
+    const n = Number(r.done_qty?.[k]);
+    if (!(n > 0)) return '';
+    return k === 'inst_panels' ? ` · ${fmtQty(n)} шт` : k === 'inst_structure' ? ` · на ${fmtQty(n)} пан.` : ` · ${fmtQty(n)}`;
+};
 const timeOf = (ts) => new Date(ts).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
 
 export default function ObjectReports({ project }) {
@@ -35,6 +41,7 @@ export default function ObjectReports({ project }) {
     const [rows, setRows] = useState(null);
     const [people, setPeople] = useState({ byId: new Map(), byCustom: new Map() });
     const [stock, setStock] = useState(new Map());
+    const [panels, setPanels] = useState(null);   // { total, done } — панелі об'єкта за звітами
     const [open, setOpen] = useState(() => (params.get('r') ? Number(params.get('r')) : null));
     const money = canSeeMoney(auth, project);
     const objId = project.custom_id;
@@ -47,13 +54,15 @@ export default function ObjectReports({ project }) {
     }, []);
 
     const load = useCallback(async () => {
-        const [reps, emps] = await Promise.all([
+        const [reps, emps, pn] = await Promise.all([
             supabase.from('installer_reports')
                 .select('*, usage:installer_report_usage(id, name, quantity, unit), needs:installer_report_needs(id, nomenclature_id, name, quantity, unit), addons:installer_report_addons(id, author_id, text, photos, photo_file_ids, created_at)')
                 .eq('installation_custom_id', objId).not('submitted_at', 'is', null)
                 .order('work_date', { ascending: false }).order('submitted_at', { ascending: false }),
             supabase.from('employees').select('id, custom_id, name, tier'),
+            supabase.from('v_object_panels').select('total, done').eq('installation_custom_id', objId).maybeSingle(),
         ]);
+        setPanels(pn.error || !pn.data ? null : { total: Number(pn.data.total) || null, done: Number(pn.data.done) || 0 });
         const list = reps.data || [];
         const needIds = [...new Set(list.flatMap(r => (r.needs || []).map(n => n.nomenclature_id)).filter(Boolean))];
         const { data: st } = needIds.length
@@ -90,12 +99,15 @@ export default function ObjectReports({ project }) {
         );
     }
 
-    const moneyOpen = money ? rows.filter(r => r.money_amount != null && !r.money_payment_id).length : 0;
+    const moneyOpen = money ? rows.filter(r => moneyLinesOf(r).some(l => !l.payment_id)).length : 0;
 
     return (
         <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
                 <Chip>звітів: {rows.length}</Chip>
+                {panels?.total > 0 && (
+                    <Chip tone={panels.done >= panels.total ? 'ok' : 'neutral'}>панелі: змонтовано {fmtQty(panels.done)} з {fmtQty(panels.total)}</Chip>
+                )}
                 {moneyOpen > 0 && <Chip tone="accent" icon={FaMoneyBillWave}>гроші не внесено: {moneyOpen}</Chip>}
             </div>
             <div className={`${T.card} divide-y divide-slate-100 overflow-hidden`}>
@@ -104,6 +116,8 @@ export default function ObjectReports({ project }) {
                     const author = people.byId.get(r.author_id);
                     const marked = Object.entries(r.done_stages || {}).filter(([, s]) => s);
                     const photoN = (r.photos || []).length + (r.addons || []).reduce((n, a) => n + (a.photos || []).length, 0);
+                    const lines = moneyLinesOf(r);
+                    const paidAll = lines.every(l => l.payment_id);
                     return (
                         <div key={r.id}>
                             <button type="button" onClick={() => setOpen(isOpen ? null : r.id)} aria-expanded={isOpen}
@@ -112,12 +126,13 @@ export default function ObjectReports({ project }) {
                                     <div className="text-[14px] font-bold text-slate-900 first-letter:uppercase">{dayTitle(r.work_date)}</div>
                                     <div className="text-[12.5px] text-slate-500">{[author?.name, `надіслано о ${timeOf(r.submitted_at)}`].filter(Boolean).join(' · ')}</div>
                                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                                        {marked.map(([k, s]) => <Chip key={k} tone={s === 'completed' ? 'ok' : 'warn'}>{getTask(k)?.short || k}{s === 'completed' ? ' ✓' : ' · в роботі'}</Chip>)}
+                                        {marked.map(([k, s]) => <Chip key={k} tone={s === 'completed' ? 'ok' : 'warn'}>{getTask(k)?.short || k}{s === 'completed' ? ' ✓' : ' · в роботі'}{qtyText(r, k)}</Chip>)}
                                         {photoN > 0 && <Chip icon={FaCamera}>{photoN}</Chip>}
                                         {r.day_status && r.day_status !== 'ok' && <Chip tone="danger" icon={FaExclamationTriangle}>{DAY_STATUS_LABEL[r.day_status]}</Chip>}
-                                        {money && r.money_amount != null && (
-                                            <Chip tone={r.money_payment_id ? 'ok' : 'accent'} icon={FaMoneyBillWave}>
-                                                {fmtAmount(r.money_amount)} {CURRENCY_SIGN[r.money_currency]}{r.money_payment_id ? ' · внесено' : ''}
+                                        {r.client_notes && <Chip tone="warn">зауваження клієнта</Chip>}
+                                        {money && lines.length > 0 && (
+                                            <Chip tone={paidAll ? 'ok' : 'accent'} icon={FaMoneyBillWave}>
+                                                {moneyText(lines)}{paidAll ? ' · внесено' : ''}
                                             </Chip>
                                         )}
                                         {r.needs?.length > 0 && <Chip tone="warn">на завтра: {r.needs.length} поз.</Chip>}
@@ -158,11 +173,24 @@ function ReportDetails({ r, project, people, stock, money, me, onChanged }) {
             {marked.length > 0 && (
                 <Block title="Що зроблено">
                     <div className="flex flex-wrap gap-1.5">
-                        {marked.map(([k, s]) => <Chip key={k} tone={s === 'completed' ? 'ok' : 'warn'}>{getTask(k)?.title || k}{s === 'completed' ? ' — готово' : ' — в роботі'}</Chip>)}
+                        {marked.map(([k, s]) => <Chip key={k} tone={s === 'completed' ? 'ok' : 'warn'}>{getTask(k)?.title || k}{s === 'completed' ? ' — готово' : ' — в роботі'}{qtyText(r, k)}</Chip>)}
                     </div>
                 </Block>
             )}
             {r.comment && <Block title="Коментар"><p className="text-[13.5px] text-slate-800 whitespace-pre-line break-words"><Linkify>{r.comment}</Linkify></p></Block>}
+            {r.client_notes && <Block title="Зауваження клієнта"><p className="text-[13.5px] text-slate-800 whitespace-pre-line break-words"><Linkify>{r.client_notes}</Linkify></p></Block>}
+            {serialsOf(r).length > 0 && (
+                <Block title="Серійні номери">
+                    <ul className="text-[13px] text-slate-700 divide-y divide-slate-100 bg-white rounded-lg border border-slate-200">
+                        {serialsOf(r).map((s, i) => (
+                            <li key={i} className="px-3 py-1.5 flex justify-between gap-3">
+                                <span className="text-slate-500">{s.kind}</span>
+                                <b className="font-mono break-all text-right select-all">{s.value}</b>
+                            </li>
+                        ))}
+                    </ul>
+                </Block>
+            )}
             {r.photos?.length > 0 && <Block title={`Фото · ${r.photos.length}`}><Photos photos={r.photos} fileIds={r.photo_file_ids} /></Block>}
 
             {r.usage?.length > 0 && (
@@ -178,7 +206,13 @@ function ReportDetails({ r, project, people, stock, money, me, onChanged }) {
                 </Block>
             )}
 
-            {money && r.money_amount != null && <MoneyBlock report={r} project={project} me={me} onChanged={onChanged} />}
+            {money && moneyLinesOf(r).length > 0 && (
+                <Block title="Гроші від клієнта">
+                    <div className="space-y-2">
+                        {moneyLinesOf(r).map((l, i) => <MoneyLine key={i} report={r} line={l} project={project} me={me} onChanged={onChanged} />)}
+                    </div>
+                </Block>
+            )}
 
             {(r.plan_tomorrow || r.need_tomorrow || r.needs?.length > 0) && (
                 <div className="grid sm:grid-cols-2 gap-3">
@@ -227,30 +261,39 @@ function ReportDetails({ r, project, people, stock, money, me, onChanged }) {
     );
 }
 
-/* Гроші від клієнта → у платежі об'єкта */
-function MoneyBlock({ report: r, project, me, onChanged }) {
+/*
+ * Одна сума від клієнта → у платежі об'єкта. Сум у звіті може бути кілька
+ * (різні валюти) — кожну вносять окремо. Курс: долари/гривні — курс угоди
+ * (без нього поточний); євро — скільки валюти угоди за 1 €, вписують щоразу.
+ */
+function MoneyLine({ report: r, line, project, me, onChanged }) {
     const toast = useToast();
     const objCurrency = project?.currency || DEFAULT_CURRENCY;
-    const needsRate = r.money_currency !== objCurrency;
+    const needsRate = line.currency !== objCurrency;
+    const isEur = line.currency === 'EUR';
     const [rate, setRate] = useState('');
     const [busy, setBusy] = useState(false);
 
-    // Курс угоди об'єкта; угода без курсу — поточний
     useEffect(() => {
-        if (!needsRate) return;
+        if (!needsRate || isEur) return;
         if (Number(project?.exchange_rate) > 0) { setRate(String(Number(project.exchange_rate))); return; }
-        loadUsdRate().then(r => setRate(r ? String(r) : ''));
-    }, [needsRate, project?.exchange_rate]);
+        loadUsdRate().then(v => setRate(v ? String(v) : ''));
+    }, [needsRate, isEur, project?.exchange_rate]);
+
+    const rateUnit = isEur ? `${CURRENCY_SIGN[objCurrency] || '$'} за €` : '₴ за $';
 
     const confirm = async () => {
         const rt = parseFloat(String(rate).replace(',', '.'));
-        if (needsRate && !(rt > 0)) { toast('Вкажіть курс: скільки гривень за 1 долар', 'error'); return; }
+        if (needsRate && !(rt > 0)) {
+            toast(isEur ? `Вкажіть курс: скільки ${objCurrency === 'UAH' ? 'гривень' : 'доларів'} за 1 €` : 'Вкажіть курс: скільки гривень за 1 долар', 'error');
+            return;
+        }
         setBusy(true);
         try {
             const { data: pay, error } = await supabase.from('payment_history').insert({
                 installation_custom_id: r.installation_custom_id,
-                amount: Number(r.money_amount),
-                currency: r.money_currency,
+                amount: Number(line.amount),
+                currency: line.currency,
                 exchange_rate: needsRate ? rt : null,
                 paid_at: r.work_date,
                 payment_method: 'Готівка через бригаду',
@@ -258,7 +301,7 @@ function MoneyBlock({ report: r, project, me, onChanged }) {
                 created_by: me?.id || null,
             }).select('id').single();
             if (error) throw error;
-            const { error: e2 } = await supabase.from('installer_reports').update({ money_payment_id: pay.id }).eq('id', r.id);
+            const { error: e2 } = await supabase.from('installer_reports').update(markMoneyPaid(r, line.idx, pay.id)).eq('id', r.id);
             if (e2) throw e2;
             toast('Платіж внесено — «Оплачено» по об\'єкту перераховано', 'success');
             onChanged();
@@ -270,24 +313,22 @@ function MoneyBlock({ report: r, project, me, onChanged }) {
     };
 
     return (
-        <Block title="Гроші від клієнта">
-            <div className="bg-white rounded-lg border border-slate-200 p-3 flex flex-wrap items-center gap-3">
-                <div className="text-[20px] font-bold tabular-nums text-slate-900 leading-tight">{fmtAmount(r.money_amount)} {CURRENCY_SIGN[r.money_currency]}</div>
-                <div className="sm:ml-auto flex flex-wrap items-center gap-2">
-                    {r.money_payment_id ? (
-                        <Chip tone="ok" icon={FaCheck}>внесено в платежі</Chip>
-                    ) : (<>
-                        {needsRate && (
-                            <label className="flex items-center gap-1.5 text-[12.5px] text-slate-600">
-                                курс
-                                <input value={rate} onChange={e => setRate(e.target.value)} inputMode="decimal" className={`${T.input} w-20`} />
-                                ₴ за $
-                            </label>
-                        )}
-                        <Btn variant="accent" icon={FaMoneyBillWave} onClick={confirm} disabled={busy}>{busy ? 'Вношу…' : 'Внести в платежі'}</Btn>
-                    </>)}
-                </div>
+        <div className="bg-white rounded-lg border border-slate-200 p-3 flex flex-wrap items-center gap-3">
+            <div className="text-[20px] font-bold tabular-nums text-slate-900 leading-tight">{fmtAmount(line.amount)} {CURRENCY_SIGN[line.currency]}</div>
+            <div className="sm:ml-auto flex flex-wrap items-center gap-2">
+                {line.payment_id ? (
+                    <Chip tone="ok" icon={FaCheck}>внесено в платежі</Chip>
+                ) : (<>
+                    {needsRate && (
+                        <label className="flex items-center gap-1.5 text-[12.5px] text-slate-600">
+                            курс
+                            <input value={rate} onChange={e => setRate(e.target.value)} inputMode="decimal" placeholder={isEur ? (objCurrency === 'UAH' ? '48.2' : '1.08') : ''} className={`${T.input} w-20`} />
+                            {rateUnit}
+                        </label>
+                    )}
+                    <Btn variant="accent" icon={FaMoneyBillWave} onClick={confirm} disabled={busy}>{busy ? 'Вношу…' : 'Внести в платежі'}</Btn>
+                </>)}
             </div>
-        </Block>
+        </div>
     );
 }

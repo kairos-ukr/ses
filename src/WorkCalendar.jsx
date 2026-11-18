@@ -6,18 +6,21 @@
 //  графік уже надіслано. Під нею — складання обраного дня прямо на
 //  сторінці (DayPlanner): об'єкти, люди, транспорт, відсутні,
 //  «Зберегти й надіслати».
-//  «По людях» — тиждень таблицею: хто де працює і хто вільний.
+//  «По людях» — тиждень таблицею: хто де працює і хто вільний. «Монтаж» —
+//  лише ті, хто в графіку монтажу; монтажник не в графіку минулого чи вже
+//  надісланого дня — «вихідний» сам собою; відрядження — позначені.
 //  Наживо: зміни інших за секунду; видно, хто зараз складає який день.
 // =====================================================================
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { FaArrowLeft, FaArrowRight, FaSearch, FaPaperPlane, FaPen } from 'react-icons/fa';
+import { FaArrowLeft, FaArrowRight, FaSearch, FaPaperPlane, FaPen, FaSuitcase } from 'react-icons/fa';
 
 import { supabase } from './supabaseClient';
 import { useAuth } from './AuthProvider';
 import { Segmented, Chip } from './ui';
 import DayPlanner from './pages/DayPlanner';
+import { inSchedule } from './domain/access';
 
 const isoDay = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const parseDay = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d, 12); };
@@ -64,7 +67,7 @@ export default function WorkCalendar() {
     const loadWeek = useCallback(async () => {
         const end = shiftDay(weekStart, 6);
         const [w, a, p, d] = await Promise.all([
-            supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes').gte('work_date', weekStart).lte('work_date', end),
+            supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes, business_trip').gte('work_date', weekStart).lte('work_date', end),
             supabase.from('attendance').select('employee_custom_id, work_date, status').gte('work_date', weekStart).lte('work_date', end).in('status', Object.keys(ABSENCE_LABEL)),
             supabase.from('schedule_publications').select('*').gte('work_date', weekStart).lte('work_date', end),
             supabase.from('schedule_day_drafts').select('work_date, updated_at, updated_by_email').gte('work_date', weekStart).lte('work_date', end),
@@ -75,7 +78,7 @@ export default function WorkCalendar() {
     useEffect(() => { loadWeek(); }, [loadWeek]);
     useEffect(() => {
         Promise.all([
-            supabase.from('employees').select('id, custom_id, name, email, department, position, hidden_from_list').order('name'),
+            supabase.from('employees').select('id, custom_id, name, email, department, position, role, in_schedule, hidden_from_list, access_blocked_at').order('name'),
             supabase.from('installations').select('custom_id, name'),
         ]).then(([e, i]) => { setEmployees(e.data || []); setInstallations(i.data || []); });
     }, []);
@@ -149,12 +152,12 @@ export default function WorkCalendar() {
         return map;
     }, [week]);
     const instName = (id) => installations.find(i => String(i.custom_id) === String(id))?.name || `Об'єкт #${id}`;
+    // «Монтаж» — лише ті, хто в графіку монтажу (монтажники й бригадири); офіс — решта
     const peopleRows = useMemo(() => employees
-        .filter(e => !e.hidden_from_list)
+        .filter(e => !e.hidden_from_list && !e.access_blocked_at)
         .filter(e => {
-            const dep = Array.isArray(e.department) ? e.department : [e.department].filter(Boolean);
-            if (peopleFilter === 'install') return dep.includes('Монтаж') || dep.includes('Склад');
-            if (peopleFilter === 'office') return dep.includes('Офіс') || dep.includes('Проектування');
+            if (peopleFilter === 'install') return inSchedule(e);
+            if (peopleFilter === 'office') return !inSchedule(e);
             return true;
         })
         .filter(e => !peopleSearch.trim() || (e.name || '').toLowerCase().includes(peopleSearch.trim().toLowerCase())),
@@ -267,14 +270,20 @@ export default function WorkCalendar() {
                                         {days.map(ds => {
                                             const off = (offDay[ds] || {})[emp.custom_id];
                                             const task = workerDay[ds]?.[emp.custom_id];
+                                            // Монтажник не в графіку минулого дня чи вже надісланого — вихідний сам собою
+                                            const autoOff = !off && !task && inSchedule(emp)
+                                                && (ds < today || !!week?.pubs.find(p => p.work_date === ds)?.published_at);
                                             return (
                                                 <td key={ds} className="px-1.5 py-1.5 align-top cursor-pointer" onClick={() => { setSelected(ds); setViewMode('days'); }}>
                                                     {off ? (
                                                         <span className="block rounded-md px-2 py-1 text-[11.5px] font-semibold bg-rose-50 text-rose-700">{ABSENCE_LABEL[off] || off}</span>
                                                     ) : task ? (
-                                                        <span className={`block rounded-md px-2 py-1 text-[11.5px] font-semibold leading-snug break-words ${task.installation_custom_id ? 'bg-indigo-50 text-indigo-800' : 'bg-amber-50 text-amber-800'}`}>
+                                                        <span className={`block rounded-md px-2 py-1 text-[11.5px] font-semibold leading-snug break-words ${task.business_trip ? 'bg-amber-100 text-amber-900' : task.installation_custom_id ? 'bg-indigo-50 text-indigo-800' : 'bg-amber-50 text-amber-800'}`}>
+                                                            {task.business_trip && <FaSuitcase size={9} className="inline mr-1 -mt-0.5" />}
                                                             {task.installation_custom_id ? instName(task.installation_custom_id) : (task.notes || 'Завдання')}
                                                         </span>
+                                                    ) : autoOff ? (
+                                                        <span className="block rounded-md px-2 py-1 text-[11.5px] text-slate-400 bg-slate-50">вихідний</span>
                                                     ) : (
                                                         <span className="block rounded-md px-2 py-1 text-[11.5px] text-slate-300">—</span>
                                                     )}

@@ -29,6 +29,7 @@ export default function MileagePanel() {
         const { data } = await supabase.from('car_mileage')
             .select('id, employee_id, vehicle_id, log_date, work_km, note, employee:employees(name), vehicle:vehicles(name, plate)')
             .gte('log_date', monthStart(ym)).lte('log_date', monthEnd(ym))
+            .not('work_km', 'is', null)   // авто компанії — одометр, він у «Витратах на авто»
             .order('log_date', { ascending: false });
         setRows(data || []);
     }, [ym]);
@@ -71,7 +72,7 @@ export default function MileagePanel() {
     return (
         <div className={`${T.card} overflow-hidden lg:col-span-2`}>
             <div className="px-3.5 py-2.5 border-b border-slate-100 flex flex-wrap items-center gap-2">
-                <h3 className="text-[15px] font-bold text-slate-900 inline-flex items-center gap-2 mr-auto"><FaRoad size={13} className="text-indigo-500" /> Пробіг</h3>
+                <h3 className="text-[15px] font-bold text-slate-900 inline-flex items-center gap-2 mr-auto"><FaRoad size={13} className="text-indigo-500" /> Пробіг по роботі</h3>
                 <IconBtn variant="outline" icon={FaChevronLeft} label="Попередній місяць" onClick={() => setYm(m => shiftMonth(m, -1))} />
                 <span className="text-[13px] font-semibold text-slate-700 first-letter:uppercase min-w-[120px] text-center">{monthTitle(ym)}</span>
                 <IconBtn variant="outline" icon={FaChevronRight} label="Наступний місяць" disabled={ym >= current} onClick={() => setYm(m => shiftMonth(m, 1))} />

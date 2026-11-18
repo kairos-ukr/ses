@@ -88,11 +88,15 @@ export async function loadObjects(ids) {
 
 export const placeOf = (o) => [o?.client?.populated_place, o?.client?.oblast].filter(Boolean).join(', ');
 
-/** «Нетішин, Коваль Ірина» — як об'єкт називають на виїзді */
+/**
+ * Головне — назва об'єкта (як у CRM), а не клієнт (власник 18.11).
+ * Без назви — «Нетішин, Коваль Ірина». Клієнт, місто й решта — у картці об'єкта.
+ */
 export const objectTitle = (o) => {
     if (!o) return "Об'єкт";
-    const parts = [o.client?.populated_place, o.client?.name || o.name].filter(Boolean);
-    return parts.length ? parts.join(', ') : (o.name || `Об'єкт ${o.custom_id}`);
+    if (o.name && o.name.trim()) return o.name.trim();
+    const parts = [o.client?.populated_place, o.client?.name].filter(Boolean);
+    return parts.length ? parts.join(', ') : `Об'єкт ${o.custom_id}`;
 };
 
 export const kwText = (v) => (v ? `${String(Math.round(Number(v) * 10) / 10).replace('.', ',')} кВт` : '');
@@ -120,9 +124,10 @@ export function groupVisits(rows) {
     (rows || []).forEach(r => {
         const obj = r.installation_custom_id || null;
         const key = `${r.work_date}|${obj || `custom:${(r.notes || '').trim()}`}`;
-        if (!map.has(key)) map.set(key, { key, date: r.work_date, installationId: obj, notes: (r.notes || '').trim(), workerIds: [] });
+        if (!map.has(key)) map.set(key, { key, date: r.work_date, installationId: obj, notes: (r.notes || '').trim(), workerIds: [], trip: false });
         const v = map.get(key);
         if (!v.notes && r.notes) v.notes = r.notes.trim();
+        if (r.business_trip) v.trip = true;   // відрядження (добові)
         if (r.employee_custom_id && !v.workerIds.includes(r.employee_custom_id)) v.workerIds.push(r.employee_custom_id);
     });
     return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -136,7 +141,7 @@ export const isBrigadier = (p) => Number(p?.tier) === 1;
 
 export async function loadPeople() {
     const { data } = await supabase.from('employees')
-        .select('id, custom_id, name, phone, email, role, tier, position, hidden_from_list, access_blocked_at')
+        .select('id, custom_id, name, phone, email, role, tier, position, hidden_from_list, access_blocked_at, in_schedule, km_rate')
         .order('name');
     return new Map((data || []).map(p => [p.custom_id, p]));
 }
@@ -150,4 +155,6 @@ export const officePeople = (people) => [...people.values()]
 
 export const TASK_FIELDS = 'custom_id, task_text, status, due_date, created_at, data_complete, creator_email, assigned_to, installation:installations(id, custom_id, name)';
 export const OPEN_TASK = ['нове', 'в процесі'];
+/** Монтажникам — лише задачі за останній місяць (і відкриті, і виконані): старі не тягнемо з бази (власник 18.11) */
+export const tasksSince = () => new Date(Date.now() - 30 * 864e5).toISOString();
 export const plainText = (html) => String(html || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();

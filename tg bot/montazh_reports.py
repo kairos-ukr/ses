@@ -228,7 +228,18 @@ async def post_reports_to_threads(bot: Bot):
                 lines = [f"🧾 <b>Звіт монтажу · {fmt_day(r['work_date'])}</b>"]
                 if people:
                     lines.append("👷 " + esc(", ".join(p["name"] for p in people if p.get("name"))))
-                done = [f"{INSTALL_STAGES.get(k, k)}{' ✓' if s == 'completed' else ' — в роботі'}"
+                qty = r.get("done_qty") or {}
+
+                def _qty(k):
+                    try:
+                        n = float(qty.get(k) or 0)
+                    except (TypeError, ValueError):
+                        return ""
+                    if n <= 0:
+                        return ""
+                    return f" ({fmt_qty(n)} шт)" if k == "inst_panels" else f" (на {fmt_qty(n)} пан.)"
+
+                done = [f"{INSTALL_STAGES.get(k, k)}{' ✓' if s == 'completed' else ' — в роботі'}{_qty(k)}"
                         for k, s in (r.get("done_stages") or {}).items() if s]
                 if done:
                     lines.append("✅ " + esc(", ".join(done)))
@@ -236,6 +247,12 @@ async def post_reports_to_threads(bot: Bot):
                     lines.append("⚠️ " + esc(DAY_STATUS.get(r["day_status"], r["day_status"])))
                 if r.get("comment"):
                     lines.append(f"\n{esc(r['comment'])}")
+                if r.get("client_notes"):
+                    lines.append(f"💬 <b>Клієнт:</b> {esc(r['client_notes'])}")
+                serials = [s for s in (r.get("serials") or []) if str(s.get("value") or "").strip()]
+                if serials:
+                    lines.append("🔢 <b>Серійні номери:</b> " + esc("; ".join(
+                        f"{s.get('kind') or 'Інше'} — {str(s['value']).strip()}" for s in serials)))
                 if usage:
                     lines.append("\n🔌 <b>Кабель:</b> " + esc("; ".join(
                         f"{u['name']} — {fmt_qty(u['quantity'])}{(' ' + u['unit']) if u.get('unit') else ''}" for u in usage)))
@@ -452,7 +469,7 @@ async def send_report_digest(bot: Bot):
     if extra:
         head = (f"📋 <b>Звіти за сьогодні: немає {len(missing)} з {len(crews)}</b>" if missing
                 else f"✅ <b>Усі {len(crews)} звітів за сьогодні надіслано</b>")
-        text = "\n".join([head, *[line(o) for o in missing], f'<a href="{SITE_URL}/admin?tab=reports">Звіти бригад</a>'])
+        text = "\n".join([head, *[line(o) for o in missing], f'<a href="{SITE_URL}/analytics?tab=reports">Звіти бригад</a>'])
         for person in extra:
             await send_personal(bot, tg.get(person["id"]), text, kind="report_digest",
                                 ref_key=f"{today}:all", employee=person)

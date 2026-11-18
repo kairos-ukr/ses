@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { supabase } from './supabaseClient';
 import SettingsPanel from './pages/SettingsPanel';
-import ReportsAnalytics from './pages/ReportsAnalytics';
 import Layout from './Layout';
 import RegistrationsPanel from './RegistrationsPanel';
 import { useAuth } from './AuthProvider';
@@ -30,6 +29,7 @@ const TIERS = [
 ];
 
 export default function AdminPanel() {
+  const navigate = useNavigate();
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -38,16 +38,19 @@ export default function AdminPanel() {
   // Стан для відкриття детальної картки (Modal)
   const [selectedEmp, setSelectedEmp] = useState(null);
 
-  // Вкладки: люди / шаблони доступу / звіти бригад / налаштування (курс, автоматика, сповіщення)
+  // Вкладки: люди / шаблони доступу / налаштування (курс, автоматика, сповіщення).
+  // Звіти бригад тепер в «Аналітиці» (власник 18.11): старе посилання ?tab=reports веде туди
   const auth = useAuth();
   const canAccess = auth.can('access');
   const canSettings = auth.can('settings');
   const TABS = [
     ...(canAccess ? [{ value: 'people', label: 'Люди' }, { value: 'templates', label: 'Шаблони' }] : []),
-    ...(canAccess || canSettings ? [{ value: 'reports', label: 'Звіти' }] : []),
     ...(canSettings ? [{ value: 'settings', label: 'Налаштування' }] : []),
   ];
   const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    if (params.get('tab') === 'reports') navigate('/analytics?tab=reports', { replace: true });
+  }, [params, navigate]);
   const tab = TABS.some(t => t.value === params.get('tab')) ? params.get('tab') : (TABS[0]?.value || 'settings');
   const setTab = (t) => setParams(t === 'people' ? {} : { tab: t }, { replace: true });
   const [templates, reloadTemplates] = useAccessTemplates();
@@ -181,7 +184,7 @@ export default function AdminPanel() {
           </div>
         </div>
 
-        {tab === 'settings' ? <SettingsPanel /> : tab === 'reports' ? <ReportsAnalytics /> : tab === 'templates' ? (
+        {tab === 'settings' ? <SettingsPanel /> : tab === 'templates' ? (
           <AccessTemplates templates={templates} employees={employees} onChanged={reloadTemplates} />
         ) : <>
         {/* Акаунти, які ще чекають на підтвердження */}

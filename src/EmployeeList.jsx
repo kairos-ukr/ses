@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useAuth } from "./AuthProvider";
-import { useToast } from "./ui";
+import { useToast, Tip } from "./ui";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaSearch, FaPlus, FaPhone, FaBirthdayCake, FaUserTie, FaHardHat, FaUser, FaTimes,
@@ -137,6 +137,7 @@ const EmployeeModal = ({ isOpen, onClose, employee, onSave, telegramReady = fals
                 notes: employee.notes || "",
                 employment_type: employee.employment_type || "staff",
                 hidden_from_list: !!employee.hidden_from_list,
+                in_schedule: employee.in_schedule ?? null,
                 telegram_user_id: employee.telegram_user_id ? String(employee.telegram_user_id) : "",
                 subscriptions: [...subscriptions]
             });
@@ -378,6 +379,20 @@ const EmployeeModal = ({ isOpen, onClose, employee, onSave, telegramReady = fals
                             <p className="text-[11px] text-gray-400 pl-6 -mt-1">
                                 Не впливає на графік і виїзди — там працівник лишається доступним
                             </p>
+                            {employee && 'in_schedule' in employee && (
+                                <label className="flex items-center gap-2.5 pt-1 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={formData.in_schedule ?? employee.role === 'installer'}
+                                        onChange={e => setFormData(prev => ({ ...prev, in_schedule: e.target.checked }))}
+                                        className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                    />
+                                    <span className="text-xs text-gray-600 inline-flex items-center gap-1.5">
+                                        <FaHardHat className="text-gray-400" /> У графіку монтажу
+                                        <Tip width={260} text="Монтажники — у графіку завжди. Офіс, склад, директор — ні: у бригаду їх додають точково, набравши ім'я. Увімкніть, якщо людина постійно їздить на об'єкти." />
+                                    </span>
+                                </label>
+                            )}
                         </div>
 
                         {/* Навички */}
@@ -539,6 +554,8 @@ export default function EmployeeList() {
                 employment_type: data.employment_type || "staff",
                 hidden_from_list: !!data.hidden_from_list
             };
+            // «У графіку монтажу»: лише якщо його змінювали вручну (порожньо — за роллю)
+            if (typeof data.in_schedule === 'boolean') payload.in_schedule = data.in_schedule;
             // Поле надсилаємо лише після міграції — інакше «column does not exist»
             if (telegramReady) {
                 const tg = (data.telegram_user_id || "").trim();

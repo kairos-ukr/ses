@@ -162,7 +162,6 @@ export const TASKS = [
     { key: 'inst_structure', group: 'installation', title: 'Монтаж конструкції', short: 'Конструкція', kind: 'installation' },
     { key: 'inst_panels', group: 'installation', title: 'Встановлення панелей', short: 'Панелі', kind: 'installation' },
     { key: 'inst_cabling', group: 'installation', title: 'Прокладання траси DC', short: 'Траса DC', kind: 'installation' },
-    { key: 'inst_grounding', group: 'installation', title: 'Заземлення', short: 'Заземлення', kind: 'installation' },
     { key: 'inst_inverter', group: 'installation', title: 'Підключення інвертора', short: 'Інвертор', kind: 'installation' },
 
     { key: 'monitoring_setup', group: 'monitoring_setup', title: 'Запуск станції', short: 'Запуск', kind: 'withWaiting' },
@@ -173,6 +172,8 @@ export const TASKS = [
     { key: 'installation', group: 'installation', title: 'Монтаж', short: 'Монтаж', kind: 'installation', legacy: true },
     { key: 'proposal', group: 'proposal', title: 'КП', short: 'КП', kind: 'proposal', legacy: true },
     { key: 'project', group: 'project', title: 'Проект', short: 'Проект', kind: 'project', legacy: true },
+    // Заземлення — не окремий підетап монтажу (власник 18.11); старі записи лишаються історією
+    { key: 'inst_grounding', group: 'installation', title: 'Заземлення', short: 'Заземлення', kind: 'installation', legacy: true },
 ];
 
 const TASK_BY_KEY = Object.fromEntries(TASKS.map(t => [t.key, t]));

@@ -1,9 +1,13 @@
 // =====================================================================
 //  K-CORE · Монтаж · «Я» → Пробіг
 //
-//  Працівник, який їздить своїм авто або авто компанії, вносить за день
-//  лише одне: скільки кілометрів проїхав по роботі. Без спідометра.
-//  Офіс бачить пробіг у «Працівники → Автопарк».
+//  Працівник, який їздить своїм авто, вносить за день лише одне: скільки
+//  кілометрів проїхав по роботі. Без спідометра. Офіс бачить пробіг у
+//  «Працівники → Автопарк». Авто компанії — окремо: одометр і пальне з
+//  чеком (VehicleDayCard, «Службове авто»).
+//  Км накопичуються; коли людина сама вирішить — «Подати на оплату»
+//  (заявка з усіма ще не поданими км; подані дні змінити вже не можна).
+//  Офіс оплачує або відхиляє в «Працівники → Виплати».
 // =====================================================================
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -12,7 +16,7 @@ import { FaRoad } from 'react-icons/fa';
 import { supabase } from '../supabaseClient';
 import { useToast, humanError } from '../ui';
 import { isoDay, shiftDay, relDay } from './data';
-import { Card, Label, Big, Empty } from './kit';
+import { Card, Label, Big, Empty, Pill } from './kit';
 
 const kmText = (v) => `${Number(v).toLocaleString('uk-UA', { maximumFractionDigits: 1 })} км`;
 
@@ -26,34 +30,48 @@ export default function MileageCard({ who, canWrite }) {
     const [recent, setRecent] = useState([]);
     const [saving, setSaving] = useState(false);
 
-    // Чим людина їздить: своє авто (якщо відмічене) і авто компанії, де вона водій
+    // Лише своє авто (якщо відмічене). Авто компанії — одометр і пальне в «Службове авто» (VehicleDayCard)
     const loadCars = useCallback(async () => {
         if (!who?.id) return;
-        const [own, fleet, trips] = await Promise.all([
-            supabase.from('employee_cars').select('status').eq('employee_id', who.id).maybeSingle(),
-            supabase.from('vehicles').select('id, name, plate').neq('status', 'inactive').eq('default_driver_custom_id', who.custom_id),
-            supabase.from('trips').select('vehicle:vehicles(id, name, plate)').eq('driver_custom_id', who.custom_id)
-                .gte('trip_date', shiftDay(today, -14)).not('vehicle_id', 'is', null),
-        ]);
+        const own = await supabase.from('employee_cars').select('status').eq('employee_id', who.id).maybeSingle();
         const list = [];
         if (own.data?.status === 'own' || own.data?.status === 'repair') list.push({ key: 'own', vehicleId: null, label: 'Своє авто' });
-        const seen = new Set();
-        [...(fleet.data || []), ...(trips.data || []).map(t => t.vehicle).filter(Boolean)].forEach(v => {
-            if (seen.has(v.id)) return;
-            seen.add(v.id);
-            list.push({ key: `v${v.id}`, vehicleId: v.id, label: [v.name, v.plate].filter(Boolean).join(' · ') });
-        });
         setCars(list);
         setCarKey(k => k || list[0]?.key || '');
-    }, [who?.id, who?.custom_id, today]);
+    }, [who?.id]);
+
+    const [requests, setRequests] = useState([]);    // мої заявки на оплату
+    const [pending, setPending] = useState({ km: 0, days: 0, from: null });  // ще не подано
+    const [rate, setRate] = useState(null);
+    const [asking, setAsking] = useState(false);
 
     const loadRecent = useCallback(async () => {
         if (!who?.id) return;
-        const { data } = await supabase.from('car_mileage')
-            .select('id, vehicle_id, log_date, work_km, vehicle:vehicles(name)')
-            .eq('employee_id', who.id).order('log_date', { ascending: false }).order('id', { ascending: false }).limit(40);
-        setRecent(data || []);
-    }, [who?.id]);
+        const [r, q, p, s] = await Promise.all([
+            supabase.from('car_mileage')
+                .select('id, vehicle_id, log_date, work_km, request_id, vehicle:vehicles(name)')
+                .eq('employee_id', who.id).is('vehicle_id', null).order('log_date', { ascending: false }).order('id', { ascending: false }).limit(40),
+            supabase.from('payout_requests').select('*').eq('employee_id', who.id).order('submitted_at', { ascending: false }).limit(5),
+            supabase.from('car_mileage').select('work_km, log_date').eq('employee_id', who.id).is('vehicle_id', null).is('request_id', null).gt('work_km', 0).lte('log_date', today),
+            supabase.from('app_settings').select('value').eq('key', 'km_rate').maybeSingle(),
+        ]);
+        setRecent(r.data || []);
+        setRequests(q.error ? [] : q.data || []);
+        const rows = p.error ? [] : p.data || [];
+        setPending({ km: rows.reduce((t, x) => t + Number(x.work_km || 0), 0), days: rows.length, from: rows.map(x => x.log_date).sort()[0] || null });
+        setRate(Number(who.km_rate) > 0 ? Number(who.km_rate) : Number(s.data?.value?.rate) > 0 ? Number(s.data.value.rate) : null);
+    }, [who?.id, who?.km_rate, today]);
+
+    // Подати на оплату все, що накопичилось (вирішує сама людина)
+    const submitRequest = async () => {
+        setSaving(true);
+        const { error } = await supabase.rpc('submit_km_request', { p_employee_id: who.id, p_note: null });
+        setSaving(false);
+        setAsking(false);
+        if (error) { toast(humanError(error), 'error'); return; }
+        toast('Подано на оплату — офіс бачить заявку', 'success');
+        loadRecent();
+    };
 
     useEffect(() => { loadCars(); loadRecent(); }, [loadCars, loadRecent]);
 
@@ -71,6 +89,7 @@ export default function MileageCard({ who, canWrite }) {
 
     const save = async () => {
         if (!car) return;
+        if (existing?.request_id) { toast('Цей день уже подано на оплату — змінити не можна', 'warning'); return; }
         if (!(Number(km) > 0)) { toast('Вкажіть, скільки кілометрів', 'error'); return; }
         setSaving(true);
         const row = { employee_id: who.id, vehicle_id: car.vehicleId, log_date: day, work_km: Number(km), updated_at: new Date().toISOString() };
@@ -112,7 +131,42 @@ export default function MileageCard({ who, canWrite }) {
                     placeholder="Напр. 85"
                     className="mt-1 w-full h-12 px-3 rounded-xl border-2 border-slate-300 bg-white text-[17px] font-bold tabular-nums focus:border-slate-900 outline-none" />
             </label>
-            {canWrite && <Big small tone="dark" className="mt-2.5" onClick={save} disabled={saving}>{saving ? 'Зберігаю…' : existing ? 'Оновити пробіг' : 'Зберегти пробіг'}</Big>}
+            {existing?.request_id
+                ? <div className="mt-2 text-[13.5px] font-semibold text-slate-600">Цей день уже подано на оплату</div>
+                : canWrite && <Big small tone="dark" className="mt-2.5" onClick={save} disabled={saving}>{saving ? 'Зберігаю…' : existing ? 'Оновити пробіг' : 'Зберегти пробіг'}</Big>}
+
+            {/* Накопичене — подає на оплату сама людина, коли вирішить */}
+            {pending.km > 0 && (
+                <div className="mt-3 rounded-xl border-2 border-slate-200 bg-slate-50 p-3">
+                    <div className="text-[14.5px] text-slate-800">
+                        Не подано: <b className="tabular-nums">{kmText(pending.km)}</b>
+                        <span className="text-slate-500"> · {pending.days} {pending.days === 1 ? 'день' : 'дн.'}{rate ? ` · ≈ ${Math.round(pending.km * rate).toLocaleString('uk-UA')} ₴` : ''}</span>
+                    </div>
+                    {canWrite && (asking ? (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                            <Big small tone="main" onClick={submitRequest} disabled={saving}>{saving ? 'Подаю…' : 'Так, подати'}</Big>
+                            <Big small tone="soft" onClick={() => setAsking(false)}>Ні</Big>
+                        </div>
+                    ) : (
+                        <Big small tone="dark" className="mt-2" onClick={() => setAsking(true)}>Подати на оплату</Big>
+                    ))}
+                </div>
+            )}
+
+            {requests.length > 0 && (
+                <ul className="mt-2.5">
+                    {requests.map((q, i) => (
+                        <li key={q.id} className={`flex items-center gap-2 py-2 text-[14px] ${i ? 'border-t border-slate-100' : ''}`}>
+                            <span className="flex-1 min-w-0 break-words text-slate-700">
+                                Заявка {relDay(String(q.submitted_at).slice(0, 10)).toLowerCase()} · {kmText(q.km)}
+                                {q.status === 'rejected' && q.decision_note ? <span className="block text-[12.5px] text-slate-500">{q.decision_note}</span> : null}
+                            </span>
+                            <b className="tabular-nums text-slate-900">{Math.round(Number(q.amount)).toLocaleString('uk-UA')} ₴</b>
+                            <Pill tone={q.status === 'paid' ? 'ok' : q.status === 'rejected' ? 'bad' : 'warn'}>{q.status === 'paid' ? 'оплачено' : q.status === 'rejected' ? 'відхилено' : 'подано'}</Pill>
+                        </li>
+                    ))}
+                </ul>
+            )}
 
             {recent.length > 0 ? (
                 <ul className="mt-2.5">
@@ -120,6 +174,7 @@ export default function MileageCard({ who, canWrite }) {
                         <li key={r.id} className={`flex items-center gap-2 py-2 text-[14px] ${i ? 'border-t border-slate-100' : ''}`}>
                             <span className="flex-1 min-w-0 break-words text-slate-700">{relDay(r.log_date)} · {r.vehicle?.name || 'своє авто'}</span>
                             {r.work_km != null && <b className="tabular-nums text-slate-900">{kmText(r.work_km)}</b>}
+                            {r.request_id && <Pill>подано</Pill>}
                         </li>
                     ))}
                 </ul>

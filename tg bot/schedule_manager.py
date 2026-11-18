@@ -33,6 +33,7 @@ async def get_schedule_for_date(work_date: date) -> Optional[Dict[str, Any]]:
             return {"objects": [], "tasks_without_object": [], "off_duty": []}
         data = response.data
         attach_transport(work_date, data)
+        # «Взяти з собою» в графіку більше не пишемо (власник 18.11) — лише перемикачем у Налаштуваннях
         attach_take(data)
         return data
     except Exception as e:
@@ -313,7 +314,8 @@ def format_schedule_message(work_date: date, data: Dict[str, Any]) -> str:
 
     # 1) Блок об'єктів (залишаємо заголовок як був, але працівників нумеруємо)
     if data.get('objects'):
-        for obj in sorted(data['objects'], key=lambda x: x.get('name', '') or ''):
+        # Відрядження — першими (рішення власника 18.11)
+        for obj in sorted(data['objects'], key=lambda x: (not x.get('business_trip'), x.get('name', '') or '')):
             message_parts.append(separator)
 
             obj_name = escape_html(obj.get('name'))
@@ -321,6 +323,8 @@ def format_schedule_message(work_date: date, data: Dict[str, Any]) -> str:
             obj_head = f"<b>📍 Об'єкт:</b> {obj_name} ({obj_id})" if obj_id else f"<b>📍 Об'єкт:</b> {obj_name}"
 
             obj_part = [obj_head]
+            if obj.get('business_trip'):
+                obj_part.append("🧳 <b>Відрядження</b> (добові)")
             if obj.get('notes'):
                 obj_part.append(escape_html(obj['notes']))
 
@@ -362,11 +366,18 @@ def format_schedule_message(work_date: date, data: Dict[str, Any]) -> str:
 
         message_parts.append("\n\n".join(tasks_block))
 
-    # 3) Блок вихідних (включаємо нумерацію)
+    # 3) Блок вихідних (включаємо нумерацію): хто не в графіку — вихідний сам собою
     if data.get('off_duty'):
         message_parts.append(separator)
         off_duty_text = numbered_workers_lines(data.get('off_duty', []))
         message_parts.append(f"<b>😴 Вихідні:</b>\n{off_duty_text}")
+
+    # 4) Відпустка й лікарняний
+    if data.get('leave'):
+        leave_label = {'VACATION': 'відпустка', 'SICK_LEAVE': 'лікарняний'}
+        lines = [f"• {escape_html(x.get('name'))} — {leave_label.get(x.get('status'), '')}" for x in data['leave']]
+        message_parts.append(separator)
+        message_parts.append("<b>🌴 Відпустка / лікарняний:</b>\n" + "\n".join(lines))
 
     return "\n\n".join(message_parts)
 
@@ -839,9 +850,11 @@ async def check_for_web_day_offs(bot: Bot):
                 dates_str = format_day_off_dates_list(dates)
                 label = "Вихідні" if len(dates) > 1 else "Вихідний"
 
+                # Сюди потрапляють лише вихідні, які людина поставила собі сама в програмі.
+                # Те, що вніс офіс (людина написала чи подзвонила), позначене source='office' —
+                # окремо не пишемо, воно й так буде в графіку дня в блоці «Вихідні».
                 message_text = (
-                    f"ℹ️ <b>Новий вихідний (з сайту)</b>\n\n"
-                    f"<b>{escape_html(emp_name)}</b> ({emp_id})\n"
+                    f"🙋 <b>{escape_html(emp_name)}</b> бере вихідний\n"
                     f"{label}: <b>{dates_str}</b>"
                 )
 

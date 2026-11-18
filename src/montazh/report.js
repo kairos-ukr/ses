@@ -25,7 +25,37 @@ export const DAY_STATUS = [
 ];
 export const DAY_STATUS_LABEL = Object.fromEntries(DAY_STATUS.map(s => [s.value, s.label]));
 
-export const CURRENCY_SIGN = { UAH: '₴', USD: '$' };
+export const CURRENCY_SIGN = { UAH: '₴', USD: '$', EUR: '€' };
+export const MONEY_CURRENCIES = [{ value: 'UAH', label: '₴' }, { value: 'USD', label: '$' }, { value: 'EUR', label: '€' }];
+
+/**
+ * Гроші від клієнта зі звіту: [{ amount, currency, payment_id, idx }] — і нові звіти (кілька сум),
+ * і старі (одна). idx — місце суми в money_lines (null — стара одна сума).
+ */
+export const moneyLinesOf = (r) => {
+    if (Array.isArray(r?.money_lines) && r.money_lines.length) {
+        const lines = r.money_lines.map((l, idx) => ({ ...l, idx })).filter(l => Number(l?.amount) > 0);
+        // Одна сума — «внесено» могли позначити й старим способом (money_payment_id)
+        return lines.map(l => ({ ...l, amount: Number(l.amount), currency: l.currency || 'UAH', payment_id: l.payment_id ?? (lines.length === 1 ? r.money_payment_id : null) ?? null }));
+    }
+    return r?.money_amount != null
+        ? [{ amount: Number(r.money_amount), currency: r.money_currency || 'UAH', payment_id: r.money_payment_id || null, idx: null }]
+        : [];
+};
+
+/** Офіс вніс суму зі звіту в платежі: позначити саме її; money_payment_id — коли внесено все */
+export const markMoneyPaid = (r, idx, paymentId) => {
+    if (idx == null || !Array.isArray(r.money_lines)) return { money_payment_id: paymentId };
+    const lines = r.money_lines.map((l, i) => (i === idx ? { ...l, payment_id: paymentId } : l));
+    const allPaid = lines.every(l => !(Number(l?.amount) > 0) || l.payment_id);
+    return { money_lines: lines, ...(allPaid ? { money_payment_id: paymentId } : {}) };
+};
+/** «12 000 ₴ + 300 €» */
+export const moneyText = (lines) => lines.map(l => `${fmtAmount(l.amount)} ${CURRENCY_SIGN[l.currency] || ''}`.trim()).join(' + ');
+
+/** Серійні номери: бажано інвертор і логер; можна й більше (АКБ тощо) */
+export const SERIAL_KINDS = ['Інвертор', 'Логер', 'АКБ', 'Інше'];
+export const serialsOf = (r) => (Array.isArray(r?.serials) ? r.serials : []).filter(s => String(s?.value || '').trim());
 
 export const fmtAmount = (n) => {
     const v = Math.round(Number(n || 0) * 100) / 100;
@@ -135,7 +165,8 @@ const dm = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString('uk-UA', { da
 /**
  * Надіслати звіт — і з кнопки, і з черги (коли з'явився інтернет).
  * payload: { objId, date, fields, photos:[{url,fid}], localPhotos:[{id,blob,name}],
- *            usage, needs, crewIds, author:{id,name,email}, stageChanges:[[ключ, статус]] }
+ *            usage, needs, crewIds, author:{id,name,email}, stageChanges:[[ключ, статус]],
+ *            panelsTotal — усього панелей, якщо специфікації немає }
  * onUploaded(photos) — фото вже на Диску: збережіть це, щоб повтор не вантажив їх удруге.
  * Фото йдуть на Диск і в гілку Telegram лише тут, тобто після «Надіслати звіт».
  */
@@ -154,6 +185,11 @@ export async function submitReport(p, { onProgress, onUploaded } = {}) {
     if (r.submitted_at) return { report: r, photos, already: true };   // бригада вже надіслала з іншого телефона
 
     await replaceLists(r.id, p.usage, p.needs);
+    // Специфікації немає — бригадир вписав, скільки всього панелей (лише раз: уже записане не чіпаємо)
+    if (p.panelsTotal > 0) {
+        await supabase.from('installations').update({ panels_total: p.panelsTotal })
+            .eq('custom_id', p.objId).is('panels_total', null);
+    }
     // Лише якщо ще ніхто не надіслав (два телефони однієї бригади одночасно)
     const { data: rows, error } = await supabase.from('installer_reports').update({
         ...p.fields,

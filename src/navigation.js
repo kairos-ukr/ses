@@ -15,7 +15,7 @@ import {
     FaUsers, FaHandshake, FaHardHat, FaTruck, FaFolderOpen,
     FaWarehouse, FaClipboardList, FaExchangeAlt, FaShoppingCart, FaToolbox, FaTags, FaSitemap,
     FaMoneyBillWave, FaUserTie, FaCalendarAlt, FaUmbrellaBeach, FaHistory, FaTasks,
-    FaUserShield, FaHome, FaSun, FaFunnelDollar, FaCoins, FaChartLine, FaShuttleVan, FaTruckLoading,
+    FaUserShield, FaHome, FaSun, FaFunnelDollar, FaCoins, FaChartLine, FaShuttleVan, FaTruckLoading, FaWallet,
 } from 'react-icons/fa';
 import { FIRST_PAGE } from './domain/access';
 
@@ -70,6 +70,7 @@ export const STAFF_SECTIONS = [
     { id: 'fleet', label: 'Автопарк', icon: FaShuttleVan, title: 'Автопарк і власні авто', section: 'fleet' },
     { id: 'timeoff', label: 'Вихідні', icon: FaUmbrellaBeach, title: 'Вихідні та відпустки', section: 'timeoff' },
     { id: 'history', label: 'Історія', icon: FaHistory, title: 'Історія виїздів', section: 'team', need: 'edit' },
+    { id: 'payroll', label: 'Виплати', icon: FaWallet, title: 'Виплати працівникам', section: 'payroll' },
 ];
 
 // Пункт видно, якщо відкритий його розділ (і CRM загалом) або так каже show()

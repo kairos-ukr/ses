@@ -437,8 +437,10 @@ export const Picker = ({
 
     // Показуємо найсхожіші зверху: спершу збіг із початку рядка, потім будь-де.
     // Так «гощ» одразу дає «Гощанська ЗОШ», а не тридцятий рядок списку.
+    // searchOnly — рядок видно лише в пошуку (напр. офіс у графіку монтажу: «точково» за ім'ям)
+    const hiddenUntilSearch = !q && options.some(o => o.searchOnly);
     const filtered = useMemo(() => {
-        if (!q) return options;
+        if (!q) return options.filter(o => !o.searchOnly);
         const starts = [], contains = [];
         options.forEach(o => {
             const label = o.label.toLowerCase();
@@ -553,8 +555,11 @@ export const Picker = ({
                                     {o.label}
                                     {o.hint && <span className="block text-[11.5px] font-semibold text-amber-700 mt-0.5">{o.hint}</span>}
                                 </button>
-                            )) : (
+                            )) : !hiddenUntilSearch && (
                                 <div className="px-3 py-4 text-[12.5px] text-slate-400 text-center">Нічого не знайдено</div>
+                            )}
+                            {hiddenUntilSearch && (
+                                <div className="px-2.5 py-1.5 text-[11.5px] text-slate-400">Інших — знайдіть за ім'ям</div>
                             )}
                         </div>
                         {!isTouch && (

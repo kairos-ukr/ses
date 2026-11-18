@@ -15,10 +15,11 @@ import { FaUndo } from 'react-icons/fa';
 import { Tip } from '../ui';
 import { ACTIONS, SECTIONS, sameSection } from '../domain/access';
 
-const GROUPS = SECTIONS.reduce((acc, s) => {
+const groupsOf = (list) => list.reduce((acc, s) => {
     (acc.find(g => g.name === s.group) || acc[acc.push({ name: s.group, items: [] }) - 1]).items.push(s);
     return acc;
 }, []);
+const GROUPS = groupsOf(SECTIONS);
 
 /** Новий стан розділу після натиску на дію */
 export const toggleAction = (sec, cur, action) => {
@@ -36,12 +37,14 @@ const chip = (on, tone = 'indigo') => `h-8 px-2.5 rounded-lg border text-[12px] 
     ${on ? (tone === 'rose' ? 'bg-rose-600 border-rose-600 text-white' : 'bg-indigo-600 border-indigo-600 text-white')
         : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`;
 
-export default function AccessMatrix({ value, base, onChange, readOnly = false }) {
+/** sections — лише ці розділи (напр. ті, що діють у «Монтажі»); типово — усі */
+export default function AccessMatrix({ value, base, onChange, readOnly = false, sections = null }) {
     const diff = useMemo(() => (base ? new Set(SECTIONS.filter(s => !sameSection(value?.[s.key], base?.[s.key], s)).map(s => s.key)) : new Set()), [value, base]);
+    const groups = useMemo(() => (sections ? groupsOf(sections) : GROUPS), [sections]);
 
     return (
         <div className="divide-y divide-slate-100">
-            {GROUPS.map(g => (
+            {groups.map(g => (
                 <div key={g.name} className="py-1.5">
                     <div className="px-1 pt-1 pb-0.5 text-[11.5px] font-bold text-slate-400">{g.name}</div>
                     {g.items.map(sec => {

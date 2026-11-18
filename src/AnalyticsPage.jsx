@@ -11,6 +11,8 @@
 //     з виручкою, собівартістю і маржею кожного → картка об'єкта.
 //  Увесь шлях — в адресі (?f=manager:17&f=oblast:Рівненська&show=profit),
 //  тож «Назад» у браузері повертає на попередній рівень.
+//  Друга вкладка — «Звіти бригад» (?tab=reports, pages/ReportsAnalytics):
+//  як бригади звітують — перенесено сюди з «Доступів» (власник 18.11).
 // =====================================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -31,6 +33,7 @@ import { DIMENSIONS, getDimension, buildRecords, stats, groupBy, applyFilters, t
 import { fetchAll } from './utils/fetchAll';
 import { hasPaymentSchedule, hasLeads } from './utils/features';
 import { useUsdRate } from './utils/settings';
+import ReportsAnalytics from './pages/ReportsAnalytics';
 
 const MONTHS_UA = ['січ', 'лют', 'бер', 'кві', 'тра', 'чер', 'лип', 'сер', 'вер', 'жов', 'лис', 'гру'];
 const monthKey = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`; };
@@ -299,6 +302,26 @@ export default function AnalyticsPage() {
         { key: 'debt', label: 'Борг зараз', value: money(view.s.debt), sub: `${view.s.debtN} об'єктів`, tone: view.s.debt > 0.5 ? 'danger' : null },
     ];
 
+    // Вкладки: угоди й гроші | звіти бригад
+    const tab = params.get('tab') === 'reports' ? 'reports' : 'sales';
+    const tabSwitch = (
+        <Segmented value={tab} onChange={(v) => setParams(v === 'reports' ? { tab: 'reports' } : {})}
+            options={[{ value: 'sales', label: 'Угоди й гроші' }, { value: 'reports', label: 'Звіти бригад' }]} />
+    );
+    if (tab === 'reports') {
+        return (
+            <Layout>
+                <div className="max-w-[1500px] mx-auto p-3 sm:p-6 space-y-4 text-slate-800">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                        <h1 className="text-2xl font-bold text-slate-900 tracking-tight mr-auto">Аналітика</h1>
+                        {tabSwitch}
+                    </div>
+                    <ReportsAnalytics />
+                </div>
+            </Layout>
+        );
+    }
+
     return (
         <Layout>
             <div ref={topRef} className="max-w-[1500px] mx-auto p-3 sm:p-6 space-y-4 text-slate-800 scroll-mt-4">
@@ -323,7 +346,10 @@ export default function AnalyticsPage() {
                                 ))}
                             </nav>
                         ) : (
-                            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Аналітика</h1>
+                            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                                <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Аналітика</h1>
+                                {tabSwitch}
+                            </div>
                         )}
                     </div>
                     <Segmented value={period} onChange={(v) => go({ period: v }, { replace: true })}

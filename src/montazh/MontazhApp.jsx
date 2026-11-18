@@ -16,7 +16,7 @@ import { FaEye, FaTimes, FaHardHat, FaArrowLeft } from 'react-icons/fa';
 
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
-import { MontazhCtx, loadPeople, OPEN_TASK, OFF_KEYS, isoDay, relDay, useNow, isReportTime } from './data';
+import { MontazhCtx, loadPeople, OPEN_TASK, tasksSince, OFF_KEYS, isoDay, relDay, useNow, isReportTime } from './data';
 import { flushQueue, REPORT_SENT_EVENT } from './report';
 import { localAll, reportKey } from './local';
 import { useToast } from '../ui';
@@ -27,6 +27,7 @@ import ReportScreen from './ReportScreen';
 import ReportHistory from './ReportHistory';
 import TasksScreen from './TasksScreen';
 import MeScreen from './MeScreen';
+import FleetScreen from './FleetScreen';
 import ObjectScreen from './ObjectScreen';
 
 /* «Мої звіти» — що я (моя бригада) надсилав, по всіх об'єктах */
@@ -73,7 +74,7 @@ export default function MontazhApp() {
         const today = isoDay();
         const [tasks, mine, off] = await Promise.all([
             supabase.from('microtasks').select('custom_id', { count: 'exact', head: true })
-                .eq('assigned_to', who.custom_id).in('status', OPEN_TASK),
+                .eq('assigned_to', who.custom_id).in('status', OPEN_TASK).gte('created_at', tasksSince()),
             supabase.from('installation_workers').select('installation_custom_id')
                 .eq('employee_custom_id', who.custom_id).eq('work_date', today).not('installation_custom_id', 'is', null),
             supabase.from('attendance').select('id').eq('employee_custom_id', who.custom_id).eq('work_date', today).in('status', OFF_KEYS),
@@ -171,6 +172,7 @@ export default function MontazhApp() {
                             <Route path="reports" element={<MyReportsScreen />} />
                             <Route path="tasks" element={<TasksScreen />} />
                             <Route path="me" element={<MeScreen />} />
+                            <Route path="fleet" element={<FleetScreen />} />
                             <Route path="object/:id" element={<ObjectScreen />} />
                             <Route path="*" element={<Navigate to="/m" replace />} />
                         </Routes>

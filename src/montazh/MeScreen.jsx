@@ -2,14 +2,16 @@
 //  K-CORE · Монтаж · «Я»
 //
 //  Мій місяць (днів у графіку — так рахуються відпрацьовані дні), мої
-//  вихідні, сповіщення (на телефоні й у Telegram), встановлення на
-//  телефон, вихід.
+//  вихідні, сповіщення (на телефоні й у Telegram), службове авто
+//  (одометр і пальне з чеком), пробіг на своєму авто, встановлення на
+//  телефон, вихід. Кому дали право «Витрати на авто» — вхід в
+//  «Автопарк» (ТО, ремонти, аналітика по авто).
 //  Офісу й керівнику тут же — «Переглянути як монтажник» і назад у CRM.
 // =====================================================================
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FaSignOutAlt, FaMobileAlt, FaEye, FaSearch, FaArrowLeft, FaHistory, FaCar } from 'react-icons/fa';
+import { FaSignOutAlt, FaMobileAlt, FaEye, FaSearch, FaArrowLeft, FaHistory, FaCar, FaTools } from 'react-icons/fa';
 
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
@@ -19,6 +21,8 @@ import {
 } from './data';
 import { Screen, Card, Label, Pill, Big, Line, Empty, Segment } from './kit';
 import MileageCard from './MileageCard';
+import VehicleDayCard from './VehicleDayCard';
+import { inSchedule } from '../domain/access';
 import NotifyCard from './NotifyCard';
 
 // Браузер пропонує «встановити програму» один раз — ловимо цю подію одразу
@@ -31,7 +35,7 @@ const isIOS = () => /iphone|ipad|ipod/i.test(window.navigator.userAgent);
 
 export default function MeScreen() {
     const { who, me, isOffice, preview, people, setPreview, canWrite } = useMontazh();
-    const { signOut } = useAuth();
+    const { signOut, can } = useAuth();
     const navigate = useNavigate();
     const today = isoDay();
     const monthStart = `${today.slice(0, 7)}-01`;
@@ -53,21 +57,35 @@ export default function MeScreen() {
             // Останній день місяця (у листопаді 31-го немає — база такої дати не прийме)
             const monthEnd = isoDay(new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0, 12));
             const [w, a, ahead] = await Promise.all([
-                supabase.from('installation_workers').select('work_date').eq('employee_custom_id', who.custom_id)
+                supabase.from('installation_workers').select('*').eq('employee_custom_id', who.custom_id)
                     .gte('work_date', monthStart).lte('work_date', monthEnd),
-                supabase.from('attendance').select('work_date').eq('employee_custom_id', who.custom_id)
+                supabase.from('attendance').select('work_date, status').eq('employee_custom_id', who.custom_id)
                     .gte('work_date', monthStart).lte('work_date', monthEnd).in('status', OFF_KEYS),
                 supabase.from('attendance').select('id, work_date, status').eq('employee_custom_id', who.custom_id)
                     .gte('work_date', today).in('status', OFF_KEYS).order('work_date').limit(20),
             ]);
             if (!alive) return;
-            const off = new Set((a.data || []).map(r => r.work_date));
-            const daysIn = [...new Set((w.data || []).map(r => r.work_date))].filter(d => !off.has(d));
-            setMonth({ worked: daysIn.filter(d => d <= today).length, planned: daysIn.filter(d => d > today).length, off: off.size });
+            const absent = new Map((a.data || []).map(r => [r.work_date, r.status]));
+            const rows = (w.data || []).filter(r => !absent.has(r.work_date));
+            const daysIn = new Set(rows.map(r => r.work_date));
+            // Вихідний — це й день без графіка (пн–сб, до сьогодні): окремо його не ставлять.
+            // Лише для тих, хто в графіку монтажу: в офісу дні без виїздів — не вихідні
+            let autoOff = 0;
+            for (let d = monthStart; inSchedule(who) && d <= today; d = isoDay(new Date(new Date(`${d}T12:00:00`).getTime() + 864e5))) {
+                if (new Date(`${d}T12:00:00`).getDay() !== 0 && !daysIn.has(d) && !absent.has(d)) autoOff += 1;
+            }
+            const leave = [...absent.values()].filter(s => s !== 'OFF').length;
+            setMonth({
+                worked: [...daysIn].filter(d => d <= today).length,
+                planned: [...daysIn].filter(d => d > today).length,
+                off: autoOff + [...absent.values()].filter(s => s === 'OFF').length,
+                leave,
+                trips: new Set(rows.filter(r => r.business_trip && r.work_date <= today).map(r => r.work_date)).size,
+            });
             setOffsAhead(ahead.data || []);
         })();
         return () => { alive = false; };
-    }, [who.custom_id, today, monthStart]);
+    }, [who.custom_id, today, monthStart]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const install = async () => {
         if (!installPrompt) return;
@@ -107,6 +125,12 @@ export default function MeScreen() {
                             <div className="text-[13.5px] text-rose-700/80 mt-1">{({ 'день': 'вихідний', 'дні': 'вихідні', 'днів': 'вихідних' })[daysWord(month.off)]}</div>
                         </div>
                     </div>
+                    {(month.trips > 0 || month.leave > 0) && (
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                            {month.trips > 0 && <Pill tone="warn">відрядження: {month.trips} {daysWord(month.trips)}</Pill>}
+                            {month.leave > 0 && <Pill>відпустка / лікарняний: {month.leave} {daysWord(month.leave)}</Pill>}
+                        </div>
+                    )}
                     {month.planned > 0 && <p className="text-[13.5px] text-slate-500 mt-2">Ще заплановано цього місяця: <b className="text-slate-900">{month.planned}</b></p>}
                 </>)}
             </Card>
@@ -123,6 +147,8 @@ export default function MeScreen() {
 
             <NotifyCard who={who} canWrite={canWrite} />
 
+            <VehicleDayCard who={who} canWrite={canWrite} />
+            {can('fleet_costs') && !preview && <Big tone="soft" icon={FaTools} onClick={() => navigate('/m/fleet')}>Автопарк: ТО, пальне, витрати</Big>}
             <MyCar who={who} canWrite={canWrite} onChanged={() => setCarRev(n => n + 1)} />
             <MileageCard key={`${who.id}-${carRev}`} who={who} canWrite={canWrite} />
 

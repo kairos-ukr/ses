@@ -15,6 +15,12 @@
 //  (той самий список бригада отримає разом зі сповіщенням про графік).
 //  Поки складаєте — чернетка зберігається сама, інші менеджери її бачать.
 //
+//  У списках людей — лише монтажники (domain/access → inSchedule); офіс,
+//  склад, директора можна додати в бригаду, набравши ім'я в пошуку.
+//  Вихідний окремо не ставимо: монтажник не в графіку = вихідний; окремо
+//  відмічаються лише відпустка й лікарняний.
+//  «Відрядження» на об'єкті — добові для бригади; такі об'єкти першими.
+//
 //  Транспорт зберігається як поїздки (trips + trip_stops): один запис на
 //  авто за день, зупинки — об'єкти бригад, екіпаж — люди цих бригад.
 //  Їх бачать водій і екіпаж у «Монтажі» на «Сьогодні».
@@ -23,19 +29,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     FaPlus, FaTrash, FaHistory, FaShuttleVan, FaCar, FaPaperPlane, FaCheck, FaSave, FaHardHat, FaUserTie,
-    FaTasks, FaRoute, FaTimes, FaExclamationTriangle, FaPen, FaUserSlash, FaStar, FaChevronDown,
+    FaTasks, FaRoute, FaTimes, FaExclamationTriangle, FaPen, FaUserSlash, FaStar, FaChevronDown, FaSuitcase,
 } from 'react-icons/fa';
 
 import { supabase } from '../supabaseClient';
 import { T, Btn, IconBtn, Chip, Picker, Segmented, Skeleton, Tip, useToast, humanError } from '../ui';
 import { normalizeGroupKey, getStageGroupLabel } from '../domain/stages';
+import { inSchedule } from '../domain/access';
 import { loadReadiness } from '../domain/pipeline';
 import { loadTakeLists } from '../domain/takeList';
 import TakeLine from './provisioning/TakeLine';
 
 const ABSENCE = { OFF: 'вихідний', VACATION: 'відпустка', SICK_LEAVE: 'лікарняний' };
 const ABSENCE_WHAT = { OFF: 'вихідний', VACATION: 'відпустку', SICK_LEAVE: 'лікарняний' };
-const INSTALL_DEPS = ['Монтаж', 'Склад', 'Водії'];
+// Вихідний окремо не ставимо: хто з монтажників не в графіку — той і вихідний (власник 18.11)
+const MARKABLE = ['VACATION', 'SICK_LEAVE'];
 const CLOSED = ['completed', 'cancelled', 'lost'];
 // Етапи, з якими об'єкт іде до монтажу; у пошуку об'єктів вони зверху
 const BUILD_STAGES = ['equipment', 'complectation', 'installation', 'monitoring_setup'];
@@ -49,13 +57,16 @@ const timeOf = (iso) => (iso ? new Date(iso).toLocaleTimeString('uk-UA', { hour:
 const dayWord = (s) => parseDay(s).toLocaleDateString('uk-UA', { weekday: 'short', day: 'numeric', month: 'short' });
 
 let seq = 0;
-const newBlock = (patch = {}) => ({ id: `b${Date.now()}${seq++}`, installationId: null, notes: '', workers: [], transport: null, driver: null, ...patch });
+const newBlock = (patch = {}) => ({ id: `b${Date.now()}${seq++}`, installationId: null, notes: '', workers: [], transport: null, driver: null, trip: false, ...patch });
+// Відрядження — першими (і в графіку, і в повідомленні бригадам)
+const tripFirst = (list) => [...list].sort((a, b) => Number(!!b.trip) - Number(!!a.trip));
 const tKey = (t) => (!t ? null : t.kind === 'vehicle' && t.id != null ? `v:${t.id}` : t.kind === 'own' && t.cid != null ? `o:${t.cid}` : null);
 const tripKey = (t) => (t.vehicle_id ? `v:${t.vehicle_id}` : t.own_car_custom_id ? `o:${t.own_car_custom_id}` : null);
 const isCustom = (b) => b.installationId === 'custom';
 const meaningful = (b) => b.installationId || b.workers.length || (b.notes || '').trim();
 const snapshot = (blocks) => JSON.stringify(blocks.filter(meaningful).map(b => ({
     i: b.installationId, n: (b.notes || '').trim(), w: [...b.workers].sort((x, y) => x - y), t: tKey(b.transport) || (b.transport?.kind || ''), d: b.driver ?? null,
+    ...(b.trip ? { r: 1 } : {}),
 })));
 
 /**
@@ -94,10 +105,11 @@ function buildBlocks(work, trips) {
                 sourceVisitPlanId: r.visit_plan_id || null,
             }));
         }
+        if (r.business_trip) map.get(key).trip = true;
         if (r.employee_custom_id != null) map.get(key).workers.push(Number(r.employee_custom_id));
     });
     const live = (trips || []).filter(t => t.status !== 'cancelled');
-    return [...map.values()].map(b => {
+    return tripFirst([...map.values()]).map(b => {
         const trip = live.find(t => (t.stops || []).some(s => (isCustom(b)
             ? s.installation_custom_id == null && (s.place || '').trim() === (b.notes || '').trim()
             : Number(s.installation_custom_id) === Number(b.installationId))));
@@ -227,6 +239,7 @@ function Block({ b, idx, ctx, readOnly, active, error, onFocus, onChange, onRemo
                 <div className="text-[14.5px] font-bold text-slate-900 break-words">
                     {isCustom(b) ? (b.notes || 'Завдання') : <><span className="font-mono text-[11.5px] text-slate-400 mr-1.5">СЕС-{b.installationId}</span>{obj?.name || `Об'єкт #${b.installationId}`}</>}
                 </div>
+                {b.trip && <Chip tone="accent" icon={FaSuitcase}>відрядження · добові</Chip>}
                 {!isCustom(b) && b.notes && <div className="text-[13px] text-slate-600 break-words">{b.notes}</div>}
                 {!isCustom(b) && <TakeLine rows={ctx.takeOf(b.installationId)} />}
                 <div className="text-[13px] text-slate-700 break-words">{b.workers.map(nameOf).join(', ') || 'без людей'}</div>
@@ -270,6 +283,13 @@ function Block({ b, idx, ctx, readOnly, active, error, onFocus, onChange, onRemo
                     {!isCustom(b) && b.installationId && !pickObj && <TakeLine rows={ctx.takeOf(b.installationId)} className="mt-1" />}
                     {!isCustom(b) && b.installationId && (
                         <input className={`${T.input} mt-2`} value={b.notes} onChange={e => set({ notes: e.target.value })} placeholder="Що робимо (необов'язково)" />
+                    )}
+                    {b.installationId && (
+                        <button type="button" onClick={() => set({ trip: !b.trip })} aria-pressed={!!b.trip}
+                            className={`mt-2 h-8 px-2.5 rounded-lg border text-[12px] font-semibold inline-flex items-center gap-1.5 transition-colors
+                                ${b.trip ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}>
+                            <FaSuitcase size={10} /> {b.trip ? 'Відрядження · добові' : 'Відрядження'}
+                        </button>
                     )}
                 </div>
                 <IconBtn icon={FaTrash} label="Прибрати з графіка" className="hover:!text-rose-600" onClick={onRemove} />
@@ -386,7 +406,7 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
     const [errors, setErrors] = useState({});
     const [busy, setBusy] = useState(false);
     const [autoSave, setAutoSave] = useState(null);
-    const [absent, setAbsent] = useState({ status: 'OFF', until: '' });
+    const [absent, setAbsent] = useState({ status: 'VACATION', until: '' });
     const [recent, setRecent] = useState([]);       // хто де працював останні два тижні
     const [readiness, setReadiness] = useState({}); // забезпечення матеріалами, %
     const [takeLists, setTakeLists] = useState(new Map()); // що взяти з собою: об'єкт → позиції
@@ -400,7 +420,7 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
     /* ---- Завантаження ---- */
     const loadBase = useCallback(async () => {
         const [e, o, v, c] = await Promise.all([
-            supabase.from('employees').select('id, custom_id, name, position, department, role, tier, email, hidden_from_list, access_blocked_at').order('name'),
+            supabase.from('employees').select('id, custom_id, name, position, department, role, tier, email, hidden_from_list, access_blocked_at, in_schedule').order('name'),
             supabase.from('installations').select('custom_id, name, status, workflow_stage, client:clients(name, populated_place)').order('custom_id', { ascending: false }),
             supabase.from('vehicles').select('*').order('name'),
             supabase.from('employee_cars').select('employee_id, status, until'),
@@ -420,7 +440,7 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
     const loadDay = useCallback(async (keepLocal = false) => {
         const req = ++reqRef.current;
         const [w, t, a, d, vp, p] = await Promise.all([
-            supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, notes, visit_plan_id').eq('work_date', date),
+            supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, notes, visit_plan_id, business_trip').eq('work_date', date),
             supabase.from('trips').select('*, stops:trip_stops(*)').eq('trip_date', date),
             supabase.from('attendance').select('employee_custom_id, status').eq('work_date', date).in('status', Object.keys(ABSENCE)),
             supabase.from('schedule_day_drafts').select('payload, updated_at, updated_by_email').eq('work_date', date).maybeSingle(),
@@ -562,7 +582,7 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
         const objByCid = new Map(base.objects.map(o => [o.custom_id, o]));
         const used = new Set(blocks.filter(b => !isCustom(b) && b.installationId).map(b => Number(b.installationId)));
         const staff = base.employees.filter(e => !e.access_blocked_at && !e.hidden_from_list);
-        const isInstall = (e) => e.role === 'installer' || (Array.isArray(e.department) ? e.department : [e.department]).some(d => INSTALL_DEPS.includes(d));
+        const isInstall = inSchedule;
         const blockTitle = (b) => (isCustom(b) ? (b.notes || 'завдання') : objByCid.get(Number(b.installationId))?.name || `СЕС-${b.installationId}`);
         const carOf = (cid) => base.cars.find(c => Number(c.cid) === Number(cid));
         const recIndex = new Map(recommend.map((r, i) => [r.o.custom_id, { ...r, i }]));
@@ -572,7 +592,7 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
             takeOf: (cid) => takeLists.get(Number(cid)),
             vehicles: base.vehicles,
             cars: base.cars,
-            people: staff.map(e => ({ id: Number(e.custom_id), label: e.name })),
+            people: staff.map(e => ({ id: Number(e.custom_id), label: e.name, searchOnly: !isInstall(e) })),
             installPeople: staff.filter(isInstall),
             // Пошук об'єкта: завершених і скасованих немає; рекомендовані — першими,
             // далі ті, що ближче до монтажу; на паузі — в кінці
@@ -593,13 +613,16 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
                     })
                     .sort((a, b) => a.rank - b.rank || b.id - a.id),
             ],
-            // Кого можна додати в бригаду: не відсутні й не зайняті в іншому місці; вільні монтажники — зверху
+            // Кого можна додати в бригаду: не відсутні й не зайняті в іншому місці. У списку — лише
+            // монтажники; офіс, склад, директор — точково, якщо набрати ім'я
             peopleFor: () => staff
                 .filter(e => !offMap.has(Number(e.custom_id)) && !busyIn.has(Number(e.custom_id)))
                 .sort((x, y) => Number(isInstall(y)) - Number(isInstall(x)) || Number(y.tier === 1) - Number(x.tier === 1) || x.name.localeCompare(y.name, 'uk'))
                 .map(e => ({
                     id: Number(e.custom_id),
+                    searchOnly: !isInstall(e),
                     label: [e.name, Number(e.tier) === 1 && e.role === 'installer' ? 'бригадир' : null,
+                        !isInstall(e) ? (e.position || 'офіс') : null,
                         carOf(e.custom_id)?.status === 'own' ? 'своє авто' : null].filter(Boolean).join(' · '),
                 })),
             sharedWith: (key, blockId) => blocks.filter(b => b.id !== blockId && tKey(b.transport) === key).map(blockTitle),
@@ -646,7 +669,7 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
         for (let i = 1; i <= 7; i++) {
             const ds = shiftDay(date, -i);
             const [{ data: w }, { data: t }] = await Promise.all([
-                supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, notes, visit_plan_id').eq('work_date', ds),
+                supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, notes, visit_plan_id, business_trip').eq('work_date', ds),
                 supabase.from('trips').select('*, stops:trip_stops(*)').eq('trip_date', ds),
             ]);
             if (w && w.length) {
@@ -689,7 +712,8 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
             const days = [date];
             for (let d = shiftDay(date, 1); until && d <= until && days.length < 60; d = shiftDay(d, 1)) days.push(d);
             ({ error } = await supabase.from('attendance').upsert(
-                days.map(d => ({ employee_custom_id: cid, work_date: d, status })), { onConflict: 'employee_custom_id, work_date' }));
+                // source 'office' — вніс офіс: бот не пише про це окремо, людина буде в графіку дня
+                days.map(d => ({ employee_custom_id: cid, work_date: d, status, source: 'office' })), { onConflict: 'employee_custom_id, work_date' }));
             if (!error) {
                 setBlocks(list => list.map(b => ({ ...b, workers: b.workers.filter(w => w !== cid), driver: b.driver === cid ? null : b.driver })));
                 toast(`${ctx.nameOf(cid)}: ${ABSENCE[status]}${days.length > 1 ? `, ${days.length} дн. (до ${parseDay(days[days.length - 1]).toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' })})` : ''}`);
@@ -727,6 +751,7 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
                 notes: (b.notes || '').trim(),
                 work_hours: 8,
                 visit_plan_id: b.sourceVisitPlanId || null,
+                business_trip: !!b.trip,
             })));
             const { error } = await supabase.rpc('save_day_schedule', { p_work_date: date, p_records: records });
             if (error) throw error;
@@ -770,7 +795,9 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
     // Кого можна відмітити: ще не відсутні; хто вже в графіку — з позначкою (з бригади приберемо)
     const absenceOptions = ctx.people
         .filter(p => !ctx.offMap.has(p.id))
-        .map(p => { const inB = ctx.busyIn.get(p.id); return { id: p.id, label: inB ? `${p.label} · у графіку: ${ctx.blockTitle(inB)}` : p.label }; });
+        .map(p => { const inB = ctx.busyIn.get(p.id); return { id: p.id, searchOnly: p.searchOnly, label: inB ? `${p.label} · у графіку: ${ctx.blockTitle(inB)}` : p.label }; });
+    // День минув або графік уже надіслано: хто з монтажників не в графіку — вихідний сам собою
+    const autoOff = date < today || sentState === 'sent';
     const draftByOther = draft && draft.updated_by_email && draft.updated_by_email !== me?.email;
 
     return (
@@ -902,7 +929,10 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
             <aside className="space-y-3">
                 <div className={`${T.card} overflow-hidden`}>
                     <div className="px-3.5 py-2.5 border-b border-slate-100 flex items-center justify-between">
-                        <h3 className="text-[14px] font-bold text-slate-900">Вільні монтажники</h3>
+                        <h3 className="text-[14px] font-bold text-slate-900 inline-flex items-center gap-1.5">
+                            {autoOff ? 'Не в графіку — вихідний' : 'Вільні монтажники'}
+                            {autoOff && <Tip width={260} text="Монтажник, якого немає в графіку цього дня, — вихідний сам собою. Окремо відмічаються лише відпустка й лікарняний." />}
+                        </h3>
                         <span className="text-[12px] text-slate-400 tabular-nums">{free.length}</span>
                     </div>
                     {free.length === 0 ? <div className="px-3.5 py-3 text-[13px] text-slate-400">Усі розподілені</div> : (
@@ -931,8 +961,8 @@ export default function DayPlanner({ date, me, canManage, canEditPast, onSaved }
                     </div>
                     {!readOnly && (
                         <div className="p-3 space-y-2.5 border-b border-slate-100 bg-slate-50/60">
-                            <div className="grid grid-cols-3 gap-1.5">
-                                {Object.entries(ABSENCE).map(([k, l]) => (
+                            <div className="grid grid-cols-2 gap-1.5">
+                                {MARKABLE.map(k => [k, ABSENCE[k]]).map(([k, l]) => (
                                     <button key={k} type="button" onClick={() => setAbsent(a => ({ ...a, status: k }))}
                                         className={`h-9 rounded-lg border text-[12.5px] font-semibold first-letter:uppercase transition-colors
                                             ${absent.status === k ? 'bg-rose-600 border-rose-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-rose-300'}`}>

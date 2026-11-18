@@ -19,6 +19,9 @@ export const TABLE_LABELS = {
     stage_norms: 'Налаштування',
     app_settings: 'Налаштування',
     installer_reports: 'Звіти бригад',
+    vehicle_expenses: 'Витрати на авто',
+    payout_requests: 'Заявки за км',
+    pay_periods: 'Оплачені дні',
 };
 
 // Звіт бригади: що зроблено й стан дня
@@ -49,17 +52,30 @@ const FIELDS = {
         done_stages: 'зроблено', day_status: 'стан дня', comment: 'коментар', plan_tomorrow: 'план на завтра',
         need_tomorrow: 'потрібно на завтра', money_amount: 'гроші від клієнта', money_currency: 'валюта',
     },
+    vehicle_expenses: {
+        vehicle_id: 'авто', kind: 'вид', expense_date: 'дата', odometer: 'одометр', title: 'що робили', amount: 'сума',
+        parts_cost: 'запчастини', labor_cost: 'робота', liters: 'літри', paid_by: 'хто платив',
+    },
+    payout_requests: { employee_id: 'працівник', km: 'км', rate: 'ставка за км', amount: 'сума', status: 'стан' },
+    pay_periods: { employee_id: 'працівник', period_from: 'з', period_to: 'по', work_days: 'днів', trip_days: 'днів відрядження', amount: 'сума' },
 };
 
-const MONEY = ['total_cost', 'amount', 'sale_price', 'cost_price', 'day_rate', 'money_amount'];
-const DATES = ['start_date', 'end_date', 'paid_at', 'due_date', 'work_date'];
+const MONEY = ['total_cost', 'amount', 'sale_price', 'cost_price', 'day_rate', 'money_amount', 'parts_cost', 'labor_cost'];
+const DATES = ['start_date', 'end_date', 'paid_at', 'due_date', 'work_date', 'expense_date', 'period_from', 'period_to'];
+const EXPENSE_KIND = { fuel: 'пальне', service: 'ТО', repair: 'ремонт', other: 'інше' };
+const PAID_BY = { company_card: 'картка компанії', company_cash: 'готівка компанії', own: 'свої гроші' };
+const REQUEST_STATUS = { submitted: 'подано', paid: 'оплачено', rejected: 'відхилено' };
 
 const fmtNum = (v) => Number(v).toLocaleString('uk-UA', { maximumFractionDigits: 2 });
 
 /** Значення поля людською мовою. ctx: { empName(customId), clientName(customId) } */
 export const formatValue = (table, field, v, ctx = {}) => {
     if (v === null || v === undefined || v === '') return '—';
+    if (field === 'status' && table === 'payout_requests') return REQUEST_STATUS[v] || v;
     if (field === 'status') return table === 'leads' ? getLeadStatus(v).label : getObjectStatus(v).label;
+    if (field === 'kind' && table === 'vehicle_expenses') return EXPENSE_KIND[v] || v;
+    if (field === 'paid_by') return PAID_BY[v] || v;
+    if (field === 'employee_id') return ctx.empNameById?.(v) || `#${v}`;
     if (field === 'workflow_stage') return getStageGroupLabel(v);
     if (field === 'responsible_emp_id') return ctx.empName?.(v) || `#${v}`;
     if (field === 'client_id') return ctx.clientName?.(v) || `#${v}`;
@@ -76,7 +92,7 @@ export const formatValue = (table, field, v, ctx = {}) => {
         return Object.entries(v).filter(([, s]) => s).map(([k, s]) => `${REPORT_STAGES[k] || k}${s === 'completed' ? ' ✓' : ' — в роботі'}`).join(', ') || '—';
     }
     if (field === 'day_status') return DAY_STATUS[v] || v;
-    if (field === 'value' && typeof v === 'object') return v.rate != null ? String(v.rate) : v.time ? String(v.time) : JSON.stringify(v);
+    if (field === 'value' && typeof v === 'object') return v.rate != null ? String(v.rate) : v.amount != null ? String(v.amount) : v.time ? String(v.time) : JSON.stringify(v);
     if (MONEY.includes(field)) return fmtNum(v);
     if (DATES.includes(field)) return new Date(v).toLocaleDateString('uk-UA');
     return String(v);
@@ -95,6 +111,9 @@ export const subjectOf = (e, ctx = {}) => {
         case 'stage_norms': return `норма етапу «${getStageGroupLabel(e.record_key)}»`;
         case 'app_settings': return SETTING_LABELS[e.record_key] || e.record_key;
         case 'installer_reports': return `звіт бригади по СЕС-${e.installation_custom_id}`;
+        case 'vehicle_expenses': return `витрату на авто #${e.record_key}`;
+        case 'payout_requests': return `заявку за км #${e.record_key}`;
+        case 'pay_periods': return `оплачені дні #${e.record_key}`;
         default: return e.table_name;
     }
 };
@@ -105,6 +124,8 @@ const SETTING_LABELS = {
     usd_uah_rate: 'курс долара для прибутку',
     supply_automation: 'автоматику забезпечення',
     take_reminders: 'нагадування «Взяти з собою»',
+    per_diem: 'добові',
+    km_rate: 'ставку за км на своєму авто',
     report_reminders: 'сповіщення про звіти бригад',
     telegram_bot: 'бота Telegram',
     day_switch: 'годину, з якої головний — завтрашній графік',

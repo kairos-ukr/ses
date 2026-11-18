@@ -12,13 +12,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     FaCalendarAlt, FaShuttleVan, FaCar, FaPaperPlane, FaArrowRight, FaMoneyBillWave,
-    FaExclamationTriangle, FaUserSlash, FaUserCheck,
+    FaExclamationTriangle, FaUserSlash, FaUserCheck, FaSuitcase,
 } from 'react-icons/fa';
 
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
 import { T, Chip, Segmented, Skeleton } from '../ui';
 import { canSeeMoney } from '../domain/objects';
+import { inSchedule } from '../domain/access';
 import { useEvening } from '../utils/settings';
 
 const isoDay = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -33,7 +34,6 @@ const trips = (n) => {
 };
 const ABSENT = ['OFF', 'VACATION', 'SICK_LEAVE'];
 const ABSENT_LABEL = { OFF: 'вихідний', VACATION: 'відпустка', SICK_LEAVE: 'лікарняний' };
-const INSTALL_DEPS = ['Монтаж', 'Склад'];
 
 export default function TodaySchedule() {
     const navigate = useNavigate();
@@ -55,7 +55,7 @@ export default function TodaySchedule() {
         const isToday = day === isoDay();
         const [w, t, p, r, a, e] = await Promise.all([
             supabase.from('installation_workers')
-                .select('installation_custom_id, employee_custom_id, notes, installation:installations(custom_id, name, responsible_emp_id, brigadier_emp_id, client:clients(name, populated_place))')
+                .select('installation_custom_id, employee_custom_id, notes, business_trip, installation:installations(custom_id, name, responsible_emp_id, brigadier_emp_id, client:clients(name, populated_place))')
                 .eq('work_date', day),
             supabase.from('trips').select('vehicle_id, own_car_custom_id, driver_custom_id, vehicle:vehicles(name, plate), stops:trip_stops(installation_custom_id, place)')
                 .eq('trip_date', day).neq('status', 'cancelled'),
@@ -64,7 +64,7 @@ export default function TodaySchedule() {
                 ? supabase.from('installer_reports').select('installation_custom_id, submitted_at, money_amount, money_payment_id, day_status').eq('work_date', day)
                 : Promise.resolve({ data: [] }),
             supabase.from('attendance').select('employee_custom_id, status').eq('work_date', day).in('status', ABSENT),
-            supabase.from('employees').select('custom_id, name, role, tier, department, hidden_from_list, access_blocked_at'),
+            supabase.from('employees').select('custom_id, name, role, tier, department, hidden_from_list, access_blocked_at, in_schedule'),
         ]);
         const emps = e.data || [];
         const nameOf = (cid) => emps.find(x => Number(x.custom_id) === Number(cid))?.name || null;
@@ -79,8 +79,10 @@ export default function TodaySchedule() {
                     place: row.installation?.client?.populated_place || null,
                     notes: row.installation_custom_id ? (row.notes || null) : null,
                     people: [],
+                    away: false,
                 });
             }
+            if (row.business_trip) groups.get(key).away = true;
             groups.get(key).people.push(Number(row.employee_custom_id));
         });
 
@@ -95,17 +97,18 @@ export default function TodaySchedule() {
                 transport: trip ? (trip.vehicle_id ? [trip.vehicle?.name, trip.vehicle?.plate].filter(Boolean).join(' · ') : `своє авто: ${nameOf(trip.own_car_custom_id) || '—'}`) : null,
                 driver: trip?.driver_custom_id != null ? nameOf(trip.driver_custom_id) : null,
             };
-        }).sort((x, y) => Number(y.mine) - Number(x.mine) || x.title.localeCompare(y.title, 'uk'));
+        }).sort((x, y) => Number(y.away) - Number(x.away) || Number(y.mine) - Number(x.mine) || x.title.localeCompare(y.title, 'uk'));
 
         const busy = new Set(list.flatMap(g => g.people));
         const off = (a.data || []).map(x => ({ cid: Number(x.employee_custom_id), status: x.status }));
         const offSet = new Set(off.map(x => x.cid));
-        const installers = emps.filter(x => !x.hidden_from_list && !x.access_blocked_at
-            && (x.role === 'installer' || (Array.isArray(x.department) ? x.department : [x.department]).some(d => INSTALL_DEPS.includes(d))));
+        const installers = emps.filter(x => !x.hidden_from_list && !x.access_blocked_at && inSchedule(x));
         const free = installers.filter(x => !busy.has(Number(x.custom_id)) && !offSet.has(Number(x.custom_id))).map(x => x.name);
 
         setData({
             list, pub: p.data || null, free,
+            // Сьогодні або графік уже надіслано: хто не в графіку — вихідний
+            autoOff: isToday || !!p.data?.published_at,
             off: off.map(x => ({ name: nameOf(x.cid), status: x.status })).filter(x => x.name),
             people: busy.size,
             cars: new Set((t.data || []).map(x => (x.vehicle_id ? `v${x.vehicle_id}` : `o${x.own_car_custom_id}`))).size,
@@ -184,6 +187,7 @@ export default function TodaySchedule() {
                                     )}
                                 </div>
                                 <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                                    {g.away && <Chip tone="warn" icon={FaSuitcase}>відрядження</Chip>}
                                     {g.mine && <Chip tone="accent">мій</Chip>}
                                     {isToday && reportChip(g)}
                                 </div>
@@ -215,7 +219,7 @@ export default function TodaySchedule() {
                     <div className="flex items-start gap-2 min-w-0">
                         <FaUserCheck size={11} className="mt-1 text-emerald-600 flex-shrink-0" />
                         <span className="min-w-0 break-words text-slate-600">
-                            <b className="text-slate-800">Вільні монтажники: {data.free.length}</b>
+                            <b className="text-slate-800">{data.autoOff ? 'Не в графіку — вихідний' : 'Вільні монтажники'}: {data.free.length}</b>
                             {data.free.length > 0 && ` — ${data.free.join(', ')}`}
                         </span>
                     </div>

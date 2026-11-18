@@ -21,7 +21,7 @@ import { Linkify, useToast, humanError } from '../ui';
 import { getStageGroupLabel } from '../domain/stages';
 import {
     useMontazh, useFresh, useNow, isReportTime, isoDay, shiftDay, fmtDay, relDay, OFF_KEYS, OFF_LABEL, loadObjects, groupVisits, visitTitle,
-    placeOf, kwText, routeLink, telLink, isBrigadier, TASK_FIELDS, OPEN_TASK, plainText,
+    placeOf, kwText, routeLink, telLink, isBrigadier, TASK_FIELDS, OPEN_TASK, tasksSince, plainText,
 } from './data';
 import { loadTakeLists } from '../domain/takeList';
 import { useDaySwitch, isEvening } from '../utils/settings';
@@ -67,12 +67,12 @@ export default function TodayScreen() {
         try {
             const until = shiftDay(today, 13);
             const [mine, off, task] = await Promise.all([
-                supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes')
+                supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes, business_trip')
                     .eq('employee_custom_id', who.custom_id).gte('work_date', today).lte('work_date', until),
                 supabase.from('attendance').select('work_date, status')
                     .eq('employee_custom_id', who.custom_id).gte('work_date', today).lte('work_date', until).in('status', OFF_KEYS),
                 supabase.from('microtasks').select(TASK_FIELDS)
-                    .eq('assigned_to', who.custom_id).in('status', OPEN_TASK)
+                    .eq('assigned_to', who.custom_id).in('status', OPEN_TASK).gte('created_at', tasksSince())
                     .order('due_date', { ascending: true, nullsFirst: false }).limit(20),
             ]);
             if (mine.error) throw mine.error;
@@ -84,7 +84,7 @@ export default function TodayScreen() {
             const takeIds = [...nearIds, my.find(v => v.date > today && v.installationId)?.installationId];
 
             const [crewRes, objMap, issueRes, repRes, takeMap] = await Promise.all([
-                supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes').in('work_date', near),
+                supabase.from('installation_workers').select('installation_custom_id, employee_custom_id, work_date, notes, business_trip').in('work_date', near),
                 loadObjects(my.map(v => v.installationId)),
                 nearIds.length
                     ? supabase.from('issue_orders')
@@ -195,6 +195,7 @@ export default function TodayScreen() {
                                 {i === 0 ? (evening ? 'Завтра їдемо' : 'Їдемо') : 'Далі'}
                             </Label>
                             <div className="text-[19px] font-bold leading-snug break-words">{visitTitle(v, objects)}</div>
+                            {v.trip && <Pill tone="warn" className="mt-1">відрядження · добові</Pill>}
                             {o && (
                                 <div className="text-[14px] text-slate-600 mt-0.5 break-words">
                                     {[placeOf(o), kwText(o.capacity_kw), o.station_type].filter(Boolean).join(' · ')}

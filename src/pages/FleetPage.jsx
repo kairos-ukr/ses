@@ -7,6 +7,9 @@
 //    самі в «Монтажі» (Я → Моє авто), тут видно й можна поправити.
 //  Хто чим їде в конкретний день — вирішують у «Календарі», коли
 //  складають графік: там для кожного об'єкта обирають авто.
+//  • «Витрати на авто» (лише з окремим правом): ТО, ремонти, пальне з
+//    чеками від водіїв, аналітика по кожному авто за місяць.
+//  • Пробіг на своїх авто (км по роботі).
 // =====================================================================
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -16,6 +19,7 @@ import { supabase } from '../supabaseClient';
 import { useAuth } from '../AuthProvider';
 import { T, Btn, IconBtn, Chip, Picker, Skeleton, Tip, useToast, humanError } from '../ui';
 import MileagePanel from './MileagePanel';
+import VehicleCosts from './fleet/VehicleCosts';
 
 export const VEHICLE_KINDS = [
     { v: 'bus', l: 'Бус' }, { v: 'van', l: 'Фургон' }, { v: 'car', l: 'Легкове' },
@@ -92,7 +96,7 @@ function VehicleForm({ vehicle, peopleOptions, onSave, onCancel }) {
 }
 
 export default function FleetPage() {
-    const { can } = useAuth();
+    const { can, employee } = useAuth();
     const canManage = can('fleet', 'edit');   // Доступи → «Автопарк і пробіг»
     const toast = useToast();
     const [data, setData] = useState(null);
@@ -230,7 +234,13 @@ export default function FleetPage() {
                 )}
             </div>
 
-            {/* Пробіг, що люди вносять у «Монтажі» */}
+            {/* ТО, ремонти, пальне й аналітика по авто — лише з правом «Витрати на авто» */}
+            {can('fleet_costs') && (
+                <VehicleCosts className="lg:col-span-2" me={employee}
+                    can={{ add: can('fleet_costs', 'add'), edit: can('fleet_costs', 'edit'), delete: can('fleet_costs', 'delete') }} />
+            )}
+
+            {/* Пробіг на своїх авто, що люди вносять у «Монтажі» */}
             <MileagePanel />
         </div>
     );

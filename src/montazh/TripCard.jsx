@@ -5,16 +5,19 @@
 //  «Працівники → Транспорт»): яке авто, хто за кермом, зупинки по черзі
 //  й маршрут одним посиланням. Водій відмічає зупинку на місці — офіс
 //  бачить це одразу, а пов'язане доручення закривається само.
+//  Водій авто компанії тут же вносить одометр і заправку з чеком
+//  («Одометр і пальне», VehicleDayCard).
 // =====================================================================
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FaRoute, FaShuttleVan, FaCar } from 'react-icons/fa';
+import { FaRoute, FaShuttleVan, FaCar, FaGasPump } from 'react-icons/fa';
 
 import { supabase } from '../supabaseClient';
 import { useToast, humanError } from '../ui';
 import { useFresh, isoDay, loadObjects, objectTitle, placeOf } from './data';
 import { Card, Label, Pill, Big, Check } from './kit';
+import VehicleDayCard from './VehicleDayCard';
 
 const PURPOSE = { delivery: 'доставка', pickup: 'забрати', install: 'монтаж', service: 'сервіс', other: 'інше' };
 
@@ -40,6 +43,7 @@ export default function TripCard({ who, people, canWrite, date }) {
     const onDay = today === isoDay();
     const [trips, setTrips] = useState([]);
     const [objects, setObjects] = useState(new Map());
+    const [openFuel, setOpenFuel] = useState(null);   // розгорнута «Одометр і пальне» — поїздка
     const fresh = useFresh();
 
     const load = useCallback(async () => {
@@ -137,7 +141,13 @@ export default function TripCard({ who, people, canWrite, date }) {
                     </ol>
                 )}
                 {route && left > 0 && <Big small icon={FaRoute} href={route} className="mt-2">Маршрут · {left} зуп.</Big>}
-                {isDriver && canWrite && onDay && <Big small tone="soft" className="mt-2" onClick={() => navigate('/m/me')}>Внести пробіг</Big>}
+                {/* Авто компанії: водій тут же вносить одометр і заправку; своє авто — пробіг у «Я» */}
+                {isDriver && onDay && trip.vehicle_id && (
+                    openFuel === trip.id
+                        ? <VehicleDayCard who={who} canWrite={canWrite} vehicleId={trip.vehicle_id} embedded />
+                        : <Big small tone="soft" icon={FaGasPump} className="mt-2" onClick={() => setOpenFuel(trip.id)}>Одометр і пальне</Big>
+                )}
+                {isDriver && canWrite && onDay && !trip.vehicle_id && <Big small tone="soft" className="mt-2" onClick={() => navigate('/m/me')}>Внести пробіг</Big>}
             </Card>
         );
     });

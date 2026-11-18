@@ -17,7 +17,7 @@ import { supabase } from './supabaseClient';
 import Layout from './Layout';
 import { useAuth } from './AuthProvider';
 import { T, Btn, SearchInput, Skeleton, Pagination, Linkify, useToast, humanError } from './ui';
-import { CURRENCIES, DEFAULT_CURRENCY, formatMoney } from './domain/objects';
+import { PAYMENT_CURRENCIES as CURRENCIES, DEFAULT_CURRENCY, formatMoney } from './domain/objects';
 import { hasPaymentSchedule } from './utils/features';
 import ReceivablesPanel from './pages/ReceivablesPanel';
 import PaymentForm, { methodLabel } from './pages/PaymentForm';
